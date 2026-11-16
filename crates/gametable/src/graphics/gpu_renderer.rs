@@ -2,8 +2,8 @@
 //! alpha blending as LÖVE's default `"alpha"` mode, 4× MSAA (the original asked LÖVE for
 //! `msaa = 4`) resolved into the swapchain, and a stencil buffer for `stencil(...)` clipping.
 //!
-//! Shaders are HLSL compiled to DXIL (`tools/compile_shaders.sh`), so this runs on Direct3D 12;
-//! other platforms need SPIR-V/MSL builds of the same shaders (see PORT_PLAN.md).
+//! Shaders are HLSL compiled by `tools/compile_shaders.sh` to DXIL (Direct3D 12), SPIR-V (Vulkan)
+//! and MSL (Metal); all three are embedded and the device's own format is used.
 
 use std::collections::HashMap;
 
@@ -24,11 +24,76 @@ use super::draw_list::{
     Vertex,
 };
 
-const VERTEX_SHADER: &[u8] = include_bytes!("../../../../assets/shaders/quad.vert.dxil");
-const PLAIN_SHADER: &[u8] = include_bytes!("../../../../assets/shaders/plain.frag.dxil");
-const GREYSCALE_SHADER: &[u8] = include_bytes!("../../../../assets/shaders/greyscale.frag.dxil");
-const ROUNDED_IMAGE_SHADER: &[u8] = include_bytes!("../../../../assets/shaders/rounded_image.frag.dxil");
-const FELT_SHADER: &[u8] = include_bytes!("../../../../assets/shaders/felt.frag.dxil");
+/// One shader compiled for every backend.
+struct ShaderBinaries {
+    dxil: &'static [u8],
+    spirv: &'static [u8],
+    msl: &'static [u8],
+}
+
+macro_rules! shader_binaries {
+    ($name:literal) => {
+        ShaderBinaries {
+            dxil: include_bytes!(concat!("../../../../assets/shaders/", $name, ".dxil")),
+            spirv: include_bytes!(concat!("../../../../assets/shaders/", $name, ".spv")),
+            msl: include_bytes!(concat!("../../../../assets/shaders/", $name, ".msl")),
+        }
+    };
+}
+
+const VERTEX_SHADER: ShaderBinaries = shader_binaries!("quad.vert");
+const PLAIN_SHADER: ShaderBinaries = shader_binaries!("plain.frag");
+const GREYSCALE_SHADER: ShaderBinaries = shader_binaries!("greyscale.frag");
+const ROUNDED_IMAGE_SHADER: ShaderBinaries = shader_binaries!("rounded_image.frag");
+const FELT_SHADER: ShaderBinaries = shader_binaries!("felt.frag");
+
+/// The shader format the GPU device takes, preferring DXIL, then SPIR-V, then MSL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShaderBackend {
+    Dxil,
+    Spirv,
+    Msl,
+}
+
+impl ShaderBackend {
+    fn for_device(device: &Device) -> RenderResult<ShaderBackend> {
+        let supported = device.get_shader_formats();
+        let supports = |format: ShaderFormat| (supported & format) == format;
+        if supports(ShaderFormat::DXIL) {
+            Ok(ShaderBackend::Dxil)
+        } else if supports(ShaderFormat::SPIRV) {
+            Ok(ShaderBackend::Spirv)
+        } else if supports(ShaderFormat::MSL) {
+            Ok(ShaderBackend::Msl)
+        } else {
+            Err(format!("The graphics driver takes none of the app's shader formats ({supported:?})."))
+        }
+    }
+
+    fn format(self) -> ShaderFormat {
+        match self {
+            ShaderBackend::Dxil => ShaderFormat::DXIL,
+            ShaderBackend::Spirv => ShaderFormat::SPIRV,
+            ShaderBackend::Msl => ShaderFormat::MSL,
+        }
+    }
+
+    fn code(self, binaries: &ShaderBinaries) -> &'static [u8] {
+        match self {
+            ShaderBackend::Dxil => binaries.dxil,
+            ShaderBackend::Spirv => binaries.spirv,
+            ShaderBackend::Msl => binaries.msl,
+        }
+    }
+
+    /// spirv-cross renames `main` to `main0` in MSL.
+    fn entry_point(self) -> &'static std::ffi::CStr {
+        match self {
+            ShaderBackend::Msl => c"main0",
+            ShaderBackend::Dxil | ShaderBackend::Spirv => c"main",
+        }
+    }
+}
 
 /// Which fragment shader a pipeline uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -139,10 +204,21 @@ fn sdl_error(error: impl std::fmt::Display) -> String {
 
 impl GpuRenderer {
     pub fn new(window: &Window) -> RenderResult<GpuRenderer> {
-        let device = Device::new(ShaderFormat::DXIL, cfg!(debug_assertions))
+        let all_formats = ShaderFormat::DXIL | ShaderFormat::SPIRV | ShaderFormat::MSL;
+        let device = Device::new(all_formats, cfg!(debug_assertions))
             .map_err(sdl_error)?
             .with_window(window)
             .map_err(sdl_error)?;
+        let backend = ShaderBackend::for_device(&device)?;
+        // SAFETY: the device is valid; SDL returns a static string or null.
+        let driver = unsafe { sdl3::sys::gpu::SDL_GetGPUDeviceDriver(device.raw()) };
+        let driver = if driver.is_null() {
+            "unknown".into()
+        } else {
+            // SAFETY: non-null, NUL-terminated and static (checked above).
+            unsafe { std::ffi::CStr::from_ptr(driver) }.to_string_lossy()
+        };
+        eprintln!("graphics: SDL GPU driver {driver}, {backend:?} shaders");
         let swapchain_format = device.get_swapchain_texture_format(window);
         let sample_count = if texture_supports_sample_count(&device, swapchain_format, SampleCount::MSAA4x) {
             SampleCount::MSAA4x
@@ -157,22 +233,22 @@ impl GpuRenderer {
             };
         let vertex_shader = device
             .create_shader()
-            .with_code(ShaderFormat::DXIL, VERTEX_SHADER, ShaderStage::Vertex)
-            .with_entrypoint(c"main")
+            .with_code(backend.format(), backend.code(&VERTEX_SHADER), ShaderStage::Vertex)
+            .with_entrypoint(backend.entry_point())
             .with_uniform_buffers(1)
             .build()
             .map_err(sdl_error)?;
         let mut fragment_shaders = HashMap::new();
         for (kind, code, uniform_buffers) in [
-            (ProgramKind::Plain, PLAIN_SHADER, 0),
-            (ProgramKind::Greyscale, GREYSCALE_SHADER, 0),
-            (ProgramKind::RoundedImage, ROUNDED_IMAGE_SHADER, 1),
-            (ProgramKind::Felt, FELT_SHADER, 1),
+            (ProgramKind::Plain, &PLAIN_SHADER, 0),
+            (ProgramKind::Greyscale, &GREYSCALE_SHADER, 0),
+            (ProgramKind::RoundedImage, &ROUNDED_IMAGE_SHADER, 1),
+            (ProgramKind::Felt, &FELT_SHADER, 1),
         ] {
             let shader = device
                 .create_shader()
-                .with_code(ShaderFormat::DXIL, code, ShaderStage::Fragment)
-                .with_entrypoint(c"main")
+                .with_code(backend.format(), backend.code(code), ShaderStage::Fragment)
+                .with_entrypoint(backend.entry_point())
                 .with_samplers(1)
                 .with_uniform_buffers(uniform_buffers)
                 .build()

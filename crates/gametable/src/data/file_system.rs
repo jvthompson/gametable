@@ -71,9 +71,11 @@ pub fn base_name(path: &str) -> &str {
 /// The platform's path separator as text (`fs.sep`).
 pub const SEPARATOR: &str = if cfg!(windows) { "\\" } else { "/" };
 
-/// `fs.normalize`: on Windows every `/` becomes `\`; elsewhere the path is unchanged.
+/// `fs.normalize`: on Windows every `/` becomes `\`. Elsewhere every `\` becomes `/`, so image
+/// paths written on Windows (`set1\card.png`) still resolve in games shared to macOS or Linux
+/// (the original only ran on Windows).
 pub fn normalize_separators(path: &str) -> String {
-    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
+    if cfg!(windows) { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }
 
 /// `fs.join(...)`: joins non-empty parts with one separator between them (trailing separators
@@ -212,6 +214,19 @@ mod tests {
         assert_eq!(parent_folder("name"), ".");
         assert!(is_same_path("C:/Games/", "c:\\games"));
         assert!(!is_same_path("C:\\games\\a", "C:\\games\\b"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn joining_on_unix() {
+        assert_eq!(join_path(&["/games/", "/lorcana", "set1\\card.png"]), "/games/lorcana/set1/card.png");
+        assert_eq!(join_path(&["", "a", "", "b"]), "a/b");
+        assert_eq!(parent_folder("/games/lorcana"), "/games");
+        assert_eq!(parent_folder("/games"), "/");
+        assert_eq!(parent_folder("/"), "/");
+        assert_eq!(parent_folder("name"), ".");
+        assert!(is_same_path("/games/", "/games"));
+        assert!(!is_same_path("/Games", "/games"), "case matters off Windows");
     }
 
     #[test]

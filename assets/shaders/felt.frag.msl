@@ -1,0 +1,50 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_FeltUniforms
+{
+    float zoom;
+    packed_float2 world_offset;
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+    float4 in_var_TEXCOORD1 [[user(locn1)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_FeltUniforms& FeltUniforms [[buffer(0)]], texture2d<float> source_texture [[texture(0)]], sampler source_textureSmplr [[sampler(0)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    float2 _64 = (gl_FragCoord.xy / float2(FeltUniforms.zoom)) + float2(FeltUniforms.world_offset);
+    float2 _67;
+    float _72;
+    _67 = _64 * 0.4000000059604644775390625;
+    _72 = 0.0;
+    float _70 = 0.5;
+    int _74 = 0;
+    for (; _74 < 4; )
+    {
+        float2 _78 = floor(_67);
+        float2 _79 = fract(_67);
+        float2 _83 = (_79 * _79) * (float2(3.0) - (_79 * 2.0));
+        float _103 = _83.x;
+        float _108 = _70 * mix(mix(fract(sin(dot(_78, float2(127.09999847412109375, 311.70001220703125))) * 43758.546875), fract(sin(dot(_78 + float2(1.0, 0.0), float2(127.09999847412109375, 311.70001220703125))) * 43758.546875), _103), mix(fract(sin(dot(_78 + float2(0.0, 1.0), float2(127.09999847412109375, 311.70001220703125))) * 43758.546875), fract(sin(dot(_78 + float2(1.0), float2(127.09999847412109375, 311.70001220703125))) * 43758.546875), _103), _83.y);
+        _67 *= 2.0299999713897705078125;
+        _70 *= 0.5;
+        _72 += _108;
+        _74++;
+        continue;
+    }
+    float _109 = _72 - 0.5;
+    out.out_var_SV_Target = float4(in.in_var_TEXCOORD1.xyz * (1.0 + fast::clamp(((float(int(sign(_109))) * powr(abs(_109) * 2.0, 0.75)) * 0.0599999986588954925537109375) + ((fract(sin(dot(floor(_64 * 2.2000000476837158203125), float2(127.09999847412109375, 311.70001220703125))) * 43758.546875) - 0.5) * 0.0500000007450580596923828125), -0.1500000059604644775390625, 0.1500000059604644775390625)), in.in_var_TEXCOORD1.w) * source_texture.sample(source_textureSmplr, in.in_var_TEXCOORD0);
+    return out;
+}
+

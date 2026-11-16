@@ -40,12 +40,19 @@ impl AppPaths {
         &self.save_folder
     }
 
+    /// Where the libraries default to: next to the executable on Windows (the original's portable
+    /// folder install). On macOS (inside a signed, read-only `.app`) and Linux (a system or
+    /// AppImage install) the app's folder isn't writable, so the save folder is used instead.
+    fn default_library_parent(&self) -> PathBuf {
+        if cfg!(windows) { self.app_folder.clone() } else { self.save_folder.clone() }
+    }
+
     pub fn default_games_folder(&self) -> PathBuf {
-        self.app_folder.join("game_library")
+        self.default_library_parent().join("game_library")
     }
 
     pub fn default_decks_folder(&self) -> PathBuf {
-        self.app_folder.join("deck_library")
+        self.default_library_parent().join("deck_library")
     }
 
     /// The games library: the saved folder when it is absolute, else the default.
@@ -142,15 +149,16 @@ mod tests {
     #[test]
     fn library_folders_fall_back_to_defaults() {
         let (paths, root) = test_paths();
+        let default_parent = if cfg!(windows) { root.join("app") } else { paths.save_folder.clone() };
         let mut settings = Settings::in_memory();
-        assert_eq!(paths.games_folder(&settings), root.join("app").join("game_library"));
+        assert_eq!(paths.games_folder(&settings), default_parent.join("game_library"));
         settings.set(keys::GAMES_DIRECTORY_PATH, "relative_name");
-        assert_eq!(paths.games_folder(&settings), root.join("app").join("game_library"));
+        assert_eq!(paths.games_folder(&settings), default_parent.join("game_library"));
         let absolute = if cfg!(windows) { "D:\\Games" } else { "/games" };
         set_games_folder(&mut settings, absolute).unwrap();
         assert_eq!(paths.games_folder(&settings), PathBuf::from(absolute));
         assert!(set_decks_folder(&mut settings, "nope").is_err());
-        assert_eq!(paths.decks_folder(&settings), root.join("app").join("deck_library"));
+        assert_eq!(paths.decks_folder(&settings), default_parent.join("deck_library"));
     }
 
     #[test]

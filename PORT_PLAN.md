@@ -62,7 +62,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `sha2` | all | asset hashes, password hash | yes (2026-11-15), in use (client: password hash, asset manifests) |
 | `base64` | all | avatars, asset chunks | yes (2026-11-15), in use (server) |
 | `rand` | all | shuffling, UUID v4 | yes (2026-11-15) |
-| `sdl3` (gpu, ttf, image, build-from-source) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use |
+| `sdl3` (gpu, ttf, image, build-from-source-static) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use (static since Phase 10b) |
 | `pdfium-render` | client | PDF rulebooks | yes (2026-11-15), not used: `pdfium.dll` is bound directly with `libloading` (14 functions, as the original's FFI) |
 | `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15) |
 | `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server and client admin zip check, `deflate` only) |
@@ -285,10 +285,50 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] Admin screen (users, settings, shutdown, games upload/rescan/remove, rooms, files) (`screens/server/admin.rs`)
 - [x] Interop: against the Go server and the Rust server (`examples/server_interop.rs`)
 
+### Phase 10b — Cross-platform foundation (Windows, macOS, Linux)
+Added 2026-11-16 at the user's request, before Phase 11, so the app builds for most platforms. The Rust code is
+mostly portable already; these are the parts that only work on Windows today.
+- [x] Shaders: `tools/compile_shaders.sh` compiles `shaders/*.hlsl` to DXIL (Windows SDK dxc, unchanged bytes),
+  SPIR-V (Vulkan SDK dxc, `-fvk-use-dx-layout` so uniform layouts match) and MSL (spirv-cross, entry `main0`); all
+  three are committed and embedded, and `graphics/gpu_renderer.rs` uses the device's format (logged at startup as
+  `graphics: SDL GPU driver …`). The HLSL carries `[[vk::…]]` attributes for SDL's Vulkan bindings. Checked on
+  Windows with `SDL_GPU_DRIVER=vulkan`: a practice table with felt, rounded cards and the PDF viewer is identical
+  to Direct3D 12. Metal is untested (generated from the same verified SPIR-V).
+- [x] Native libraries: `native_libraries.rs` finds pdfium, libwebp/libsharpyuv (and later the Discord SDK) under
+  every platform's naming (`pdfium.dll`, `libpdfium.so`, `libpdfium.dylib`, `libwebp-7.dll`, `libwebp.so.7`,
+  `libwebp.7.dylib`), beside the executable, in a macOS bundle's `Contents/Frameworks` and `Contents/Resources`, in
+  `runtime/<windows|macos|linux>/` for development builds, then the system search. Missing-library messages name the
+  platform's file (Windows keeps the original's). Prebuilt sources: pdfium from bblanchon/pdfium-binaries
+  (`pdfium-win-x64`, `pdfium-linux-x64`, `pdfium-mac-univ`); libwebp from the distribution on Linux, Homebrew or a
+  bundled copy on macOS.
+- [x] Platform details: `version.rs` has each platform's release asset and executable name. The default library
+  folders are next to the executable on Windows only; on macOS and Linux the app's folder isn't writable, so they
+  default to the save folder (SDL pref path: `~/Library/Application Support/cardtable`, `~/.local/share/cardtable`).
+  Off Windows, joined paths turn `\` into `/` so Windows-authored image paths resolve (no game in the real library
+  uses them today). The file picker and path helpers already work from `/`; the borderless title bar uses SDL
+  hit-testing, which SDL supports on macOS, X11 and Wayland (checked on Linux below).
+- [x] Static SDL: the `sdl3` crate now uses `build-from-source-static`, so SDL3, SDL_image and SDL_ttf (with its own
+  FreeType and HarfBuzz) are inside the executable on every platform; no SDL libraries ship beside it. The three
+  `-sys` crates build at `opt-level = 2` in dev builds (unoptimized, CMake used MSVC's debug C runtime, which
+  doesn't link with Rust's). `.cargo/config.toml`'s Windows `CMAKE` path only applies when `CMAKE` isn't set, so
+  other platforms and CI set `CMAKE=cmake`.
+- [x] Linux build and run in WSL (Arch Linux, WSLg): client and server build, and the whole test suite passes,
+  including the LÖVE font metrics (only after the switch to static SDL; the system FreeType was a pixel off for one
+  Material Icons glyph). The app runs on WSLg's Vulkan (`dzn`) with SPIR-V shaders: Home and a Lorcana practice
+  table with full decks and the PDF rulebook (`runtime/linux/libpdfium.so`, PDFium 8165 from
+  bblanchon/pdfium-binaries, with its license) render correctly. libwebp comes from the distribution
+  (`/usr/lib/libwebp.so`). Not tried by hand: dragging/resizing the borderless window on Linux.
+- [ ] macOS: can't be tested on this machine; covered by the Phase 11 CI build matrix.
+
 ### Phase 11 — Integrations + packaging
-- [ ] Discord (presence, OAuth, friends, invites, join prompt)
-- [ ] Self-updater (release repo to confirm with the user)
-- [ ] Icon/version resource, build script, CI
+Every item gets Windows, macOS and Linux code paths (see Phase 10b).
+- [ ] Discord (presence, OAuth, friends, invites, join prompt); the Social SDK library per platform
+- [ ] Self-updater (release repo to confirm with the user). Check and download are portable; replacing the
+  install is per platform (a small Rust helper instead of the original's PowerShell + `robocopy`): Windows swaps the
+  folder after the app exits, macOS replaces the `.app` (signing/notarization), Linux AppImage replaces itself and
+  package installs only get a "new version available" link
+- [ ] Icon/version resource (Windows resource, macOS `Info.plist` + `.icns`, Linux `.desktop` + icon), build script,
+  CI matrix for Windows, macOS and Linux
 
 ### Phase 12 — Parity audit
 - [ ] Walk `CONTROLS.md` and `docs/*.html` feature-by-feature against the Rust build; fix gaps
@@ -378,7 +418,14 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 
 - SDL3, SDL3_image and SDL3_ttf are built from source by the `sdl3` crate (`build-from-source`). CMake is not on PATH, so
   `.cargo/config.toml` sets `CMAKE` to the copy inside Visual Studio 18 Insiders. The first build takes about 2 minutes.
-- `sdl3` crate version 0.22.1 (SDL 3.4.20, SDL_image 3.4.8, SDL_ttf 3.2.2).
+- `sdl3` crate version 0.22.1 (SDL 3.4.20, SDL_image 3.4.8, SDL_ttf 3.2.2), linked statically.
+- Linux builds (WSL Arch, default user root): packages `base-devel git cmake ninja pkgconf clang rustup libx11 libxext
+  libxrandr libxcursor libxi libxss libxtst libxkbcommon wayland wayland-protocols libdecor mesa vulkan-icd-loader
+  vulkan-swrast vulkan-dzn libpulse alsa-lib freetype2 harfbuzz libwebp`. Build from the Windows checkout with
+  `CMAKE=cmake CARGO_TARGET_DIR=$HOME/gametable-target cargo build` (a Linux-disk target folder is much faster than
+  `/mnt/f`); the app runs on WSLg's display.
+- Shaders: `VULKAN_SDK='F:\Tools\VulcanSDK\1.4.363.1' bash tools/compile_shaders.sh` (the variable is set machine-wide,
+  but shells started before the SDK install don't see it).
 - LÖVE 11.5 is installed at `C:\Program Files\LOVE`. `tools/lua_golden/run.sh <generator>` runs the original Lua code
   (copied from `cardflux-love/lib`, `src/core`, `src/game`) over `crates/gametable-core/tests/fixtures/<generator>/inputs`
   and writes `expected/`. Generators are `tools/lua_golden/<generator>_golden.lua` (so far: `models`, `table_actions`,
@@ -397,6 +444,10 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   SPIR-V/MSL versions of `shaders/*.hlsl` (e.g. via SDL_shadercross or a SPIR-V-enabled dxc).
 
 - Release repository for the Rust build's self-updater (Phase 11).
+
+- Shader toolchain for Phase 10b: **decided 2026-11-16, the LunarG Vulkan SDK on Windows** (its `dxc.exe` emits
+  SPIR-V, and `spirv-cross.exe` turns SPIR-V into MSL). The user installs it; `tools/compile_shaders.sh` will find
+  it through `VULKAN_SDK`. Compiled shaders are committed, so building the app never needs the SDK.
 
 ## Session log
 
@@ -492,3 +543,13 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   the original (both resumed into the Go server's lobby): sign-in and lobby match. Not yet exercised in the GUI by
   hand: the Create Game dialog through to the table, the profile dialog, trade dragging, admin dialogs. Next: Phase 11
   (integrations and packaging).
+- 2026-11-16: The user wants the app buildable for most platforms, so Phase 10b (cross-platform foundation) was added
+  before Phase 11, and Phase 11's items now call for Windows/macOS/Linux code paths. Survey: the Windows-only parts
+  are the DXIL-only shaders, the bundled DLLs' names and search paths, and (Phase 11) the original's PowerShell
+  updater. WSL with Arch Linux is available for real Linux builds. Next: agree the shader toolchain, then Phase 10b.
+- 2026-11-16: **Phase 10b complete (macOS untested).** Shaders in DXIL/SPIR-V/MSL with runtime selection (Vulkan on
+  Windows via `SDL_GPU_DRIVER=vulkan` is pixel-identical to Direct3D 12), `native_libraries.rs` for per-platform
+  library names and search folders, per-platform release/executable names, writable default library folders off
+  Windows, and statically linked SDL. Linux (WSL Arch) builds, passes every test and renders Home, the table and a
+  PDF rulebook. Linux builds use `CMAKE=cmake` and a target folder on the Linux disk. Next: Phase 11, with
+  Windows/macOS/Linux code paths and a CI matrix (the first macOS build).

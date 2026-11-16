@@ -1,14 +1,14 @@
 //! PDFium bindings for rendering a PDF document page to RGBA pixels. Port of
-//! `src/data/pdf_render.lua`: `pdfium.dll` (the prebuilt "pdfium-win-x64" release from
-//! bblanchon/pdfium-binaries, the same file the original ships) is loaded at runtime, and its
-//! absence is a soft failure with the original's message.
+//! `src/data/pdf_render.lua`: PDFium is loaded at runtime, and its absence is a soft failure with
+//! the original's message. The prebuilt releases from bblanchon/pdfium-binaries are used:
+//! `pdfium-win-x64` (`pdfium.dll`, the same file the original ships), `pdfium-linux-x64`
+//! (`libpdfium.so`) and `pdfium-mac-univ` (`libpdfium.dylib`).
 //!
 //! PDFium isn't safe to call from several threads at once, so every call goes through one lock
 //! (the original kept each document on its own thread and never had two open at once in
 //! practice).
 
 use std::ffi::{c_int, c_ulong, c_void};
-use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use crate::graphics::image_data::RgbaImage;
@@ -43,19 +43,6 @@ unsafe impl Sync for PdfiumLibrary {}
 
 static PDFIUM_LOCK: Mutex<()> = Mutex::new(());
 
-/// Folders searched for `pdfium.dll`: the executable's folder, and in development the
-/// workspace's `runtime/windows` (as for libwebp).
-fn search_folders() -> Vec<PathBuf> {
-    let mut folders = Vec::new();
-    if let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
-        folders.push(folder);
-    }
-    if cfg!(debug_assertions) {
-        folders.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../runtime/windows"));
-    }
-    folders
-}
-
 fn bind(library: libloading::Library) -> Option<PdfiumLibrary> {
     unsafe {
         let pdfium = PdfiumLibrary {
@@ -81,17 +68,10 @@ fn bind(library: libloading::Library) -> Option<PdfiumLibrary> {
 }
 
 fn load_library() -> Option<PdfiumLibrary> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for folder in search_folders() {
-        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
-        for entry in entries.filter_map(Result::ok) {
-            if entry.file_name().to_string_lossy().eq_ignore_ascii_case("pdfium.dll") {
-                candidates.push(entry.path());
-            }
-        }
-    }
-    candidates.push(PathBuf::from(libloading::library_filename("pdfium")));
-    candidates.into_iter().find_map(|candidate| unsafe { libloading::Library::new(&candidate) }.ok().and_then(bind))
+    // pdfium.dll, libpdfium.so, libpdfium.dylib (see `native_libraries` for where).
+    crate::native_libraries::candidates("pdfium")
+        .into_iter()
+        .find_map(|candidate| unsafe { libloading::Library::new(&candidate) }.ok().and_then(bind))
 }
 
 fn library() -> Option<&'static PdfiumLibrary> {
@@ -102,6 +82,16 @@ fn library() -> Option<&'static PdfiumLibrary> {
             load_library()
         })
         .as_ref()
+}
+
+/// The original's message on Windows; elsewhere it names the platform's library file.
+fn missing_library_message() -> String {
+    let file_name = if cfg!(target_os = "windows") {
+        "pdfium.dll".to_string()
+    } else {
+        crate::native_libraries::display_file_name("pdfium")
+    };
+    format!("PDF rulebooks need {file_name} next to the app")
 }
 
 /// `P.available()`.
@@ -122,7 +112,7 @@ unsafe impl Send for PdfDocument {}
 impl PdfDocument {
     /// `P.openDocument(bytes)`.
     pub fn open(bytes: Vec<u8>) -> Result<PdfDocument, String> {
-        let library = library().ok_or("PDF rulebooks need pdfium.dll next to the app")?;
+        let library = library().ok_or_else(missing_library_message)?;
         let length = c_int::try_from(bytes.len()).map_err(|_| "invalid or unsupported PDF".to_string())?;
         let _guard = PDFIUM_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let document = unsafe { (library.load_memory_document)(bytes.as_ptr().cast(), length, std::ptr::null()) };

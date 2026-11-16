@@ -8,16 +8,16 @@ cbuffer ScreenUniforms : register(b0, space1)
 
 struct VertexInput
 {
-    float2 position : TEXCOORD0;
-    float2 texture_coordinate : TEXCOORD1;
-    float4 color : TEXCOORD2;
+    [[vk::location(0)]] float2 position : TEXCOORD0;
+    [[vk::location(1)]] float2 texture_coordinate : TEXCOORD1;
+    [[vk::location(2)]] float4 color : TEXCOORD2;
 };
 
 struct VertexOutput
 {
     float4 position : SV_Position;
-    float2 texture_coordinate : TEXCOORD0;
-    float4 color : TEXCOORD1;
+    [[vk::location(0)]] float2 texture_coordinate : TEXCOORD0;
+    [[vk::location(1)]] float4 color : TEXCOORD1;
 };
 
 VertexOutput main(VertexInput input)

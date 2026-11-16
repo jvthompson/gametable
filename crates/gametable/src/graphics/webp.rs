@@ -1,11 +1,13 @@
 //! WebP decoding through `libwebp`, loaded at runtime like the original (`image_utils.lua`): the
-//! app works without it and reports WebP images as needing `libwebp.dll` next to the app.
-//! SDL_image's bundled build has no WebP support.
+//! app works without it and reports WebP images as needing `libwebp.dll` (`libwebp.so`,
+//! `libwebp.dylib`) next to the app. SDL_image's bundled build has no WebP support. Where it is
+//! searched for: [`crate::native_libraries`].
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use super::image_data::RgbaImage;
+use crate::native_libraries;
 
 type DecodeRgba = unsafe extern "C" fn(*const u8, usize, *mut i32, *mut i32) -> *mut u8;
 type Free = unsafe extern "C" fn(*mut std::ffi::c_void);
@@ -17,47 +19,21 @@ struct WebpLibrary {
     _libraries: Vec<libloading::Library>,
 }
 
-/// Folders searched for the DLLs: the executable's folder, and in development the workspace's
-/// `runtime/windows`.
-fn search_folders() -> Vec<PathBuf> {
-    let mut folders = Vec::new();
-    if let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
-        folders.push(folder);
-    }
-    if cfg!(debug_assertions) {
-        folders.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../runtime/windows"));
-    }
-    folders
-}
-
-fn is_library_named(file_name: &str, prefix: &str) -> bool {
-    let lowercase = file_name.to_lowercase();
-    let Some(rest) = lowercase.strip_prefix(prefix) else { return false };
-    let rest = rest.strip_prefix('-').unwrap_or(rest);
-    let digits_end = rest.find(|character: char| !character.is_ascii_digit()).unwrap_or(rest.len());
-    matches!(&rest[digits_end..], ".dll" | ".so" | ".dylib")
-}
-
 fn load_library() -> Option<WebpLibrary> {
     let mut libraries = Vec::new();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for folder in search_folders() {
-        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
-        for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            // libwebp imports libsharpyuv; loading it first by full path lets the import resolve
-            // even though the app folder isn't on the DLL search path.
-            if name.to_lowercase().starts_with("libsharpyuv") && is_library_named(&name, "libsharpyuv") {
-                if let Ok(library) = unsafe { libloading::Library::new(entry.path()) } {
-                    libraries.push(library);
-                }
-            } else if is_library_named(&name, "libwebp") {
-                candidates.push(entry.path());
-            }
+    // libwebp imports libsharpyuv; loading a bundled copy first by full path lets the import
+    // resolve even though the app folder isn't on the loader's search path.
+    for path in native_libraries::candidates("sharpyuv").into_iter().filter(|path| path.is_absolute()) {
+        if let Ok(library) = unsafe { libloading::Library::new(&path) } {
+            libraries.push(library);
+            break;
         }
     }
-    candidates.push(PathBuf::from(libloading::library_filename("libwebp")));
-    candidates.push(PathBuf::from(libloading::library_filename("webp")));
+    let mut candidates = native_libraries::candidates("webp");
+    // A Linux distribution's runtime package only installs the versioned name.
+    if cfg!(target_os = "linux") {
+        candidates.push(PathBuf::from("libwebp.so.7"));
+    }
     for candidate in candidates {
         let Ok(library) = (unsafe { libloading::Library::new(&candidate) }) else { continue };
         let functions = unsafe {
@@ -87,9 +63,19 @@ pub fn is_webp(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
 }
 
+/// The original's message on Windows; elsewhere it names the platform's library file.
+fn missing_library_message() -> String {
+    let file_name = if cfg!(target_os = "windows") {
+        "libwebp.dll".to_string()
+    } else {
+        native_libraries::display_file_name("webp")
+    };
+    format!("WebP images need {file_name} next to the app")
+}
+
 /// Decodes WebP bytes to RGBA, with the original's error messages.
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
-    let library = library().ok_or("WebP images need libwebp.dll next to the app")?;
+    let library = library().ok_or_else(missing_library_message)?;
     let (mut width, mut height) = (0i32, 0i32);
     let pixels = unsafe { (library.decode_rgba)(bytes.as_ptr(), bytes.len(), &mut width, &mut height) };
     if pixels.is_null() {
@@ -106,12 +92,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn library_names() {
-        assert!(is_library_named("libwebp-7.dll", "libwebp"));
-        assert!(is_library_named("LIBWEBP.DLL", "libwebp"));
-        assert!(is_library_named("libwebp.so", "libwebp"));
-        assert!(!is_library_named("libwebpdemux-2.dll", "libwebp"));
-        assert!(is_library_named("libsharpyuv-0.dll", "libsharpyuv"));
+    fn missing_library_message_names_this_platforms_file() {
+        if cfg!(target_os = "windows") {
+            assert_eq!(missing_library_message(), "WebP images need libwebp.dll next to the app");
+        } else {
+            assert!(missing_library_message().contains("libwebp"));
+        }
     }
 
     #[test]

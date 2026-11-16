@@ -17,3 +17,14 @@ opt-level = 3
 
 [profile.dev.package.blowfish]
 opt-level = 3
+
+# SDL is built with CMake and linked statically. Unoptimized, CMake would build it against MSVC's
+# debug C runtime, which can't link with Rust's; optimized builds use the release runtime.
+[profile.dev.package.sdl3-sys]
+opt-level = 2
+
+[profile.dev.package.sdl3-image-sys]
+opt-level = 2
+
+[profile.dev.package.sdl3-ttf-sys]
+opt-level = 2

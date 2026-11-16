@@ -1,4 +1,5 @@
 # SDL3 is built from source with CMake. CMake is not on PATH on the development machine, so point the
 # `cmake` build crate at the copy that ships with Visual Studio. Remove or change this if CMake is installed elsewhere.
+# Cargo only uses this when CMAKE isn't already set, so on macOS/Linux (and CI) set `CMAKE=cmake` in the environment.
 [env]
 CMAKE = "C:\\Program Files\\Microsoft Visual Studio\\18\\Insiders\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe"
