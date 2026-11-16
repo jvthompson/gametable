@@ -17,5 +17,6 @@ pub mod practice_game;
 pub mod practice_select;
 pub mod recent_servers;
 pub mod rulebook_viewer;
+pub mod server;
 pub mod settings_dialog;
 pub mod token_choosers;

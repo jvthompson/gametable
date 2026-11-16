@@ -226,6 +226,8 @@ dependencies = [
  "gametable-core",
  "libloading",
  "sdl3",
+ "sha2",
+ "zip",
 ]
 
 [[package]]

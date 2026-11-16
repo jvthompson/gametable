@@ -30,6 +30,124 @@ pub trait DeckStore {
     fn list(&mut self, game: &GameDefinition, done: ListCallback);
     fn write(&mut self, game: &GameDefinition, name: &str, deck: &DeckConfig, done: Option<WriteCallback>);
     fn remove(&mut self, game: &GameDefinition, name: &str, done: Option<RemoveCallback>);
+    /// Server stores: saves also write a copy to the local library (the Save Deck checkbox).
+    fn set_also_local(&mut self, _also_local: bool) {}
+}
+
+/// A CardTable server account's decks (`M.serverStore(sc)`), with the game's built-in decks.
+pub struct ServerDeckStore {
+    pub server: crate::net::server_client::SharedServer,
+    /// The local deck library, for "also save a local copy".
+    pub decks_folder: String,
+    pub also_local: bool,
+}
+
+impl ServerDeckStore {
+    pub fn new(server: crate::net::server_client::SharedServer, decks_folder: impl Into<String>) -> ServerDeckStore {
+        ServerDeckStore { server, decks_folder: decks_folder.into(), also_local: false }
+    }
+}
+
+impl DeckStore for ServerDeckStore {
+    fn kind(&self) -> DeckStoreKind {
+        DeckStoreKind::Server
+    }
+
+    fn label(&self) -> String {
+        self.server.borrow().info.name.clone().unwrap_or_else(|| "the server".to_string())
+    }
+
+    fn list(&mut self, game: &GameDefinition, done: ListCallback) {
+        use gametable_core::json::{JsonObject, JsonValue};
+        // Built-in decks ship inside the (cached) game folder.
+        let built_in = super::deck_library::load_built_in_decks_for_game(game);
+        let payload = JsonObject::new().with("gameId", game.id.as_str()).with("full", true);
+        self.server.borrow_mut().request_with(
+            "deckList",
+            payload,
+            Box::new(move |response| {
+                let mut scan = DeckScan::default();
+                let ok = crate::net::server_client::response_ok(response);
+                if ok {
+                    for deck in response.get("decks").and_then(JsonValue::as_array).cloned().unwrap_or_default() {
+                        let name = deck.get("name").and_then(JsonValue::as_str).unwrap_or("").to_string();
+                        match deck.get("deck").map(DeckConfig::from_json) {
+                            Some(Ok(config)) => scan.entries.push(super::deck_library::LibraryDeck {
+                                display_name: name,
+                                file_path: None,
+                                deck: config,
+                                is_built_in: false,
+                            }),
+                            _ => scan.incompatible.push(super::deck_library::IncompatibleDeck {
+                                display_name: name,
+                                file_path: None,
+                                is_built_in: false,
+                            }),
+                        }
+                    }
+                }
+                scan.entries.extend(built_in.entries);
+                let error =
+                    (!ok).then(|| crate::net::server_client::response_message(response, "Could not load decks."));
+                done(scan, error);
+            }),
+        );
+    }
+
+    fn write(&mut self, game: &GameDefinition, name: &str, deck: &DeckConfig, done: Option<WriteCallback>) {
+        use gametable_core::json::JsonObject;
+        let payload = JsonObject::new()
+            .with("gameId", game.id.as_str())
+            .with("name", name)
+            .with("deck", deck.to_json())
+            .with("overwrite", true);
+        let also_local =
+            self.also_local.then(|| (self.decks_folder.clone(), game.id.clone(), name.to_string(), deck.clone()));
+        let label = self.label();
+        self.server.borrow_mut().request_with(
+            "deckSave",
+            payload,
+            Box::new(move |response| {
+                let ok = crate::net::server_client::response_ok(response);
+                if ok
+                    && let Some((folder, game_id, name, deck)) = also_local
+                    && let Err(error) = write_deck(&folder, &game_id, &name, &deck)
+                {
+                    if let Some(done) = done {
+                        done(
+                            true,
+                            Some(format!("Saved on the server, but the local copy failed: {error}")),
+                            Some(label),
+                        );
+                    }
+                    return;
+                }
+                if let Some(done) = done {
+                    let message = response.get("message").and_then(|message| message.as_str()).map(str::to_string);
+                    done(ok, message, Some(label));
+                }
+            }),
+        );
+    }
+
+    fn remove(&mut self, game: &GameDefinition, name: &str, done: Option<RemoveCallback>) {
+        use gametable_core::json::JsonObject;
+        let payload = JsonObject::new().with("gameId", game.id.as_str()).with("name", name);
+        self.server.borrow_mut().request_with(
+            "deckDelete",
+            payload,
+            Box::new(move |response| {
+                if let Some(done) = done {
+                    let message = response.get("message").and_then(|message| message.as_str()).map(str::to_string);
+                    done(crate::net::server_client::response_ok(response), message);
+                }
+            }),
+        );
+    }
+
+    fn set_also_local(&mut self, also_local: bool) {
+        self.also_local = also_local;
+    }
 }
 
 /// The local deck library folder.

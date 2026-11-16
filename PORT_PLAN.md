@@ -59,13 +59,13 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | Crate | Used by | Why | Approved |
 |---|---|---|---|
 | `serde`, `serde_json` (`preserve_order`) | all | JSON parsing; output via a custom byte-exact formatter | yes (2026-11-15) |
-| `sha2` | all | asset hashes, password hash | yes (2026-11-15) |
+| `sha2` | all | asset hashes, password hash | yes (2026-11-15), in use (client: password hash, asset manifests) |
 | `base64` | all | avatars, asset chunks | yes (2026-11-15), in use (server) |
 | `rand` | all | shuffling, UUID v4 | yes (2026-11-15) |
 | `sdl3` (gpu, ttf, image, build-from-source) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use |
 | `pdfium-render` | client | PDF rulebooks | yes (2026-11-15), not used: `pdfium.dll` is bound directly with `libloading` (14 functions, as the original's FFI) |
 | `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15) |
-| `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server, `deflate` only) |
+| `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server and client admin zip check, `deflate` only) |
 | `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
 | `libloading` | client | load `discord_partner_sdk.dll` at runtime | yes (2026-11-15) |
 | `md-5` | client | avatar cache keys | yes (2026-11-15) |
@@ -278,10 +278,12 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] Tools dialogs (duplicate ids, merge duplicate images) (`screens/gamedef/dialogs.rs`)
 
 ### Phase 10 — Lobby server client
-- [ ] `server_client`, `asset_sync` + worker, server `deck_store`
-- [ ] Screens: login, lobby, room, decks, collection, shop, trade
-- [ ] Admin screens (users, settings, games upload, files)
-- [ ] Interop: against the Go server and the Rust server
+- [x] `server_client` (`net/server_client.rs`, `server_models.rs`, `game_connection.rs`), `asset_sync` + worker
+  (`net/asset_sync.rs`, `asset_channel.rs`), server `deck_store` (`data/deck_store.rs`), admin uploads
+  (`net/admin_files.rs`)
+- [x] Screens: login, lobby, room, decks (the lobby's Deck Editor step), collection, shop, trade (`screens/server/`)
+- [x] Admin screen (users, settings, shutdown, games upload/rescan/remove, rooms, files) (`screens/server/admin.rs`)
+- [x] Interop: against the Go server and the Rust server (`examples/server_interop.rs`)
 
 ### Phase 11 — Integrations + packaging
 - [ ] Discord (presence, OAuth, friends, invites, join prompt)
@@ -364,6 +366,13 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   session state each frame (the original read it live). A widget's numeric `sizeOverride` is an absolute size in
   world units (the core enum calls it `Multiplier`). Glyphs drawn under a scale (counter values, badges) come from
   SDL_ttf at the unscaled size, so they rasterize a pixel narrower than LÖVE's at some sizes.
+- Server client: request callbacks become polled request ids (`take_response`) for screens, with `request_with`
+  callbacks kept for the deck store. The lobby (bottom of the server stack) pumps the client in `background_update`
+  and drains its events; the "is a Trade screen open" stack scan is a `trade_screen_open` flag set in the Trade
+  screen's `enter`/`leave`. Both servers: resuming a token on a new connection drops the account's older connection;
+  player names are unique; `adminFileDelete` refuses a non-empty folder ("Delete the files inside it first."); a
+  waiting room closes when its owner disconnects. The Go server hashes its library before listening (several seconds
+  for a 200 MB game on first start).
 
 ## Build and tooling notes
 
@@ -471,3 +480,15 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   all match (≤2.5% differing samples, all from card-art filtering). Dev hooks: `GAMETABLE_SCREEN=gamedef|gamedef_entry`,
   `GAMETABLE_GAME=<folder>`, `GAMETABLE_GAMEDEF_TAB=<tab>[,select][,placement|deck]`. Not yet exercised in the GUI:
   saving, image/set import, the Tools dialogs, drag-reordering. Next: Phase 10 (lobby server client).
+- 2026-11-16: **Phase 10 complete.** The lobby server client: `ServerClient` (polled, fire-and-forget and callback
+  requests; events drained by the lobby), the asset-channel game download with local-copy reuse and memoized loads,
+  the server deck store, admin uploads (192 KiB chunks; game zips checked with `zip` instead of `tar.exe`), and the
+  sign-in, lobby, room, collection, shop, trade and admin screens. The app shell gained `ScreenCommand::PopTo` with
+  `Screen::marker` (the original's return-to-lobby) and app-level dialogs (`Ui::app_dialog`, for trade invites on any
+  screen); the table takes a `GameConnection` and an optional room chat. `examples/server_interop.rs <host:port>
+  <game> <file>` drives two accounts headless through sign-in/resume, chat, download, decks, a room to gameData,
+  collection mode, packs, a full trade, admin settings and a file upload/list/delete, then draws every server screen
+  on live data: all checks pass against both the Rust server and the Go server (built into scratch). Side by side with
+  the original (both resumed into the Go server's lobby): sign-in and lobby match. Not yet exercised in the GUI by
+  hand: the Create Game dialog through to the table, the profile dialog, trade dragging, admin dialogs. Next: Phase 11
+  (integrations and packaging).

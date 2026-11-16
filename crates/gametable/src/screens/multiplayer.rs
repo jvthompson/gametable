@@ -17,7 +17,7 @@ use std::rc::Rc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use gametable_core::host_engine::HostEngine;
-use gametable_core::json::JsonValue;
+use gametable_core::json::{JsonObject, JsonValue};
 use gametable_core::models::{DeckConfig, GameDefinition, PlayerInfo, PlayerRole, TableState};
 use gametable_core::protocol::{DEFAULT_GAME_PORT, WireMessage};
 use gametable_core::seat_utils::is_far_mirror_seat;
@@ -27,20 +27,26 @@ use gametable_core::uuid::new_v4_uuid;
 
 use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::deck_library::load_all_decks_for_game;
+use crate::data::deck_store::{DeckStore, ServerDeckStore};
 use crate::data::game_loader::load_games_from_folder;
 use crate::data::image_resolver::merge_local_image_paths;
 use crate::data::profile;
 use crate::graphics::tessellation::DrawMode;
 use crate::net::game_client::{ClientStatus, GameClient};
+use crate::net::game_connection::GameConnection;
 use crate::net::host_server::HostServer;
 use crate::net::netinfo::{LookupProgress, PublicAddressLookup, local_ipv4_addresses};
+use crate::net::server_client::{ServerClient, ServerGameChannel, ServerStatus, SharedServer};
+use crate::net::server_models::local_time_label;
 use crate::screens::game_picker::GamePicker;
 use crate::screens::load_saved_game::{LoadSavedGame, OnLoaded};
-use crate::screens::not_ported::NotPortedYet;
 use crate::screens::practice_game::{save_game_dialog, save_table};
 use crate::screens::recent_servers::recent_servers_dropdown;
+use crate::screens::server::SERVER_LOBBY_MARKER;
+use crate::screens::server::login::ServerLogin;
 use crate::sound::SoundEffect;
 use crate::table::network::{ClientBackend, NetworkHostBackend};
+use crate::table::{ChatLine, RoomChat};
 use crate::table::{TableEvent, TableOptions, TableScreen};
 use crate::ui::components::argb_color;
 use crate::ui::draw::TextOptions;
@@ -50,8 +56,10 @@ use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::{Weight, fixed};
 use crate::ui::widgets::{ButtonOptions, ButtonVariant, Choice};
 
-type SharedServer = Rc<RefCell<HostServer>>;
+type SharedHostServer = Rc<RefCell<HostServer>>;
 type SharedClient = Rc<RefCell<GameClient>>;
+/// What a joined player's game talks to: a peer host or a server room.
+pub type SharedConnection = Rc<RefCell<dyn GameConnection>>;
 
 fn color_dot(frame: &mut Frame, x: f32, y: f32, argb: u32) {
     frame.circle(DrawMode::Fill, x + 6.0, y + 6.0, 6.0, argb_color(argb));
@@ -107,7 +115,7 @@ enum InviteMode {
 pub struct HostSetup {
     max_players: usize,
     host_player_id: String,
-    server: Option<SharedServer>,
+    server: Option<SharedHostServer>,
     start_error: Option<String>,
     addresses: Vec<String>,
     public_lookup: Option<PublicAddressLookup>,
@@ -274,13 +282,13 @@ impl Screen for HostSetup {
 // ---------------------------------------------------------------------------
 
 pub struct AssignSeats {
-    server: SharedServer,
+    server: SharedHostServer,
     host_player_id: String,
     order: Vec<PlayerInfo>,
 }
 
 impl AssignSeats {
-    pub fn new(server: SharedServer, host_player_id: String) -> AssignSeats {
+    pub fn new(server: SharedHostServer, host_player_id: String) -> AssignSeats {
         let order = server.borrow().roster();
         AssignSeats { server, host_player_id, order }
     }
@@ -402,13 +410,13 @@ pub fn resolve_shared_deck_configs(frame: &Frame, game: &GameDefinition) -> Hash
 }
 
 pub struct HostGameSelect {
-    server: SharedServer,
+    server: SharedHostServer,
     host_player_id: String,
     picker: GamePicker,
 }
 
 impl HostGameSelect {
-    pub fn new(frame: &Frame, server: SharedServer, host_player_id: String) -> HostGameSelect {
+    pub fn new(frame: &Frame, server: SharedHostServer, host_player_id: String) -> HostGameSelect {
         HostGameSelect { server, host_player_id, picker: GamePicker::new(frame, false) }
     }
 }
@@ -458,7 +466,7 @@ impl Screen for HostGameSelect {
 
 pub struct HostGame {
     table: TableScreen,
-    server: SharedServer,
+    server: SharedHostServer,
     save_dialog: Option<SaveNameDialog>,
     avatars: AvatarRegistry,
     avatar_revision: Option<u64>,
@@ -469,7 +477,7 @@ impl HostGame {
     /// `HostGame.new(opts)`: sends everyone the game, deals (or resumes a save) and starts serving.
     pub fn new(
         frame: &Frame,
-        server: SharedServer,
+        server: SharedHostServer,
         host_player_id: String,
         game: GameDefinition,
         loaded_state: Option<TableState>,
@@ -674,12 +682,18 @@ impl Screen for Join {
         let (host, port) = self.host_and_port();
         let status = client.borrow().status;
         if status == ClientStatus::Server {
-            // A CardTable server: signing in arrives with Phase 10.
+            // A CardTable server: its sign-in screen takes over the connection.
             self.navigated = true;
             profile::add_recent_server(frame.settings, &host, f64::from(port));
-            client.borrow_mut().disconnect();
-            let screen = NotPortedYet::boxed("CardTable Server", "Signing in to a CardTable server", 10);
-            frame.commands.push(ScreenCommand::Replace(screen));
+            let (connection, info) = {
+                let mut client = client.borrow_mut();
+                (client.connection.take(), client.server_info.clone().unwrap_or(JsonValue::Null))
+            };
+            if let Some(connection) = connection {
+                let server = Rc::new(RefCell::new(ServerClient::adopt(connection, &host, port, &info)));
+                let screen = ServerLogin::new(frame, server);
+                frame.commands.push(ScreenCommand::Replace(Box::new(screen)));
+            }
             return;
         }
         let assigned = client.borrow().assigned_player_id.clone();
@@ -818,8 +832,50 @@ fn disconnect_message(reason: Option<&str>) -> &'static str {
     }
 }
 
+/// What a CardTable server game adds to [`ClientGame`] (the original's `opts` from
+/// `server/common.lua`'s `gameScreen`).
+pub struct ServerGameContext {
+    pub server: SharedServer,
+    /// The downloaded copy of the game (its image paths are used for the table).
+    pub local_game: GameDefinition,
+    pub spectator: bool,
+    /// The room's creator may load scenarios (the server is the authority, not a host).
+    pub is_room_owner: bool,
+    pub collection_mode: bool,
+}
+
+/// The server room's chat for the table's chat panel.
+struct ServerRoomChat {
+    server: SharedServer,
+}
+
+impl RoomChat for ServerRoomChat {
+    fn lines(&self) -> Vec<ChatLine> {
+        self.server
+            .borrow()
+            .room_chat
+            .iter()
+            .map(|line| ChatLine {
+                time_label: local_time_label(line.at),
+                name: line.name.clone(),
+                text: line.text.clone(),
+            })
+            .collect()
+    }
+
+    fn send(&mut self, text: &str) {
+        let mut server = self.server.borrow_mut();
+        let mut payload = JsonObject::new().with("text", text);
+        if let Some(room_id) = server.room_id.clone() {
+            payload.insert("roomId", room_id);
+        }
+        server.send("chatSend", payload.into());
+    }
+}
+
 pub struct ClientGame {
-    client: SharedClient,
+    client: SharedConnection,
+    server: Option<ServerGameContext>,
     local_player_id: String,
     roster: Vec<PlayerInfo>,
     max_players: usize,
@@ -835,9 +891,10 @@ pub struct ClientGame {
 }
 
 impl ClientGame {
-    pub fn new(_frame: &Frame, client: SharedClient, local_player_id: String) -> ClientGame {
+    pub fn new(_frame: &Frame, client: SharedConnection, local_player_id: String) -> ClientGame {
         ClientGame {
             client,
+            server: None,
             local_player_id,
             roster: Vec::new(),
             max_players: 2,
@@ -852,17 +909,49 @@ impl ClientGame {
         }
     }
 
+    /// A CardTable server game: the room's channel on an already-joined server.
+    pub fn for_server(frame: &Frame, context: ServerGameContext) -> ClientGame {
+        // Spectators watch under the id the server filters for them.
+        let local_player_id = {
+            let server = context.server.borrow();
+            if context.spectator { format!("spectator:{}", server.my_id()) } else { server.my_id().to_string() }
+        };
+        let channel: SharedConnection = Rc::new(RefCell::new(ServerGameChannel { server: context.server.clone() }));
+        ClientGame { server: Some(context), ..ClientGame::new(frame, channel, local_player_id) }
+    }
+
+    /// `ClientGame:returnHome(message)`: a server game leaves the room and returns to the lobby
+    /// (or Home when the server is gone).
     fn return_home(&mut self, frame: &mut Frame, message: &str) {
         if self.navigated_home {
             return;
         }
         self.navigated_home = true;
-        self.client.borrow_mut().disconnect();
-        frame.commands.push(ScreenCommand::PopToHome(Some(message.to_string())));
+        self.client.borrow_mut().close();
+        let Some(context) = &self.server else {
+            frame.commands.push(ScreenCommand::PopToHome(Some(message.to_string())));
+            return;
+        };
+        let mut server = context.server.borrow_mut();
+        if server.room_id.is_some() {
+            server.request_ignored("roomLeave", JsonObject::new());
+        }
+        server.room_id = None;
+        server.spectating = false;
+        server.close_channel();
+        if server.status != ServerStatus::Connected {
+            frame.commands.push(ScreenCommand::PopToHome(Some(message.to_string())));
+        } else {
+            let message = (!context.spectator).then(|| message.to_string());
+            frame.commands.push(ScreenCommand::PopTo { marker: SERVER_LOBBY_MARKER, message });
+        }
     }
 
     /// Uses this machine's own image paths for the host's game (none where a card is missing).
-    fn resolve_local_images(frame: &Frame, remote: GameDefinition) -> GameDefinition {
+    fn resolve_local_images(&self, frame: &Frame, remote: GameDefinition) -> GameDefinition {
+        if let Some(context) = &self.server {
+            return merge_local_image_paths(&remote, &context.local_game);
+        }
         let library = frame.paths.games_folder(frame.settings).to_string_lossy().into_owned();
         if !Path::new(&library).is_dir() {
             return remote;
@@ -918,7 +1007,7 @@ impl ClientGame {
             }
             "gameData" => {
                 let Ok(game) = GameDefinition::from_json(payload) else { return };
-                let game = ClientGame::resolve_local_images(frame, game);
+                let game = self.resolve_local_images(frame, game);
                 if let Some(table) = &mut self.table {
                     table.replace_game(game.clone());
                 }
@@ -975,24 +1064,40 @@ impl ClientGame {
                             false,
                             SessionEnvironment::system(),
                         );
+                        let server = self.server.as_ref();
+                        let leave_message = match server {
+                            Some(context) if context.spectator => "Stop watching this game?",
+                            Some(_) => {
+                                "Leave the game? Your seat is kept, so you can rejoin from the lobby while the game \
+                                 is running."
+                            }
+                            None => {
+                                "Leave the game? If the host is still hosting, you can rejoin in the same seat later."
+                            }
+                        };
+                        let deck_store = server.map(|context| {
+                            let folder = frame.paths.decks_folder(frame.settings).to_string_lossy().into_owned();
+                            Box::new(ServerDeckStore::new(context.server.clone(), folder)) as Box<dyn DeckStore>
+                        });
                         let options = TableOptions {
                             backend: Box::new(ClientBackend { session, client: self.client.clone() }),
                             is_mirrored: false,
                             local_avatar_path: frame.profile.avatar_path.clone(),
                             avatar_keys: self.avatar_keys.clone(),
                             leave_button_label: "Leave Game".to_string(),
-                            leave_confirmation_message:
-                                "Leave the game? If the host is still hosting, you can rejoin in \
-                                                         the same seat later."
-                                    .to_string(),
+                            leave_confirmation_message: leave_message.to_string(),
                             can_save_game: false,
                             can_kick_players: false,
-                            can_load_scenario: false,
-                            collection_mode: false,
-                            spectator: false,
-                            deck_store: None,
+                            can_load_scenario: server.is_some_and(|context| context.is_room_owner),
+                            collection_mode: server.is_some_and(|context| context.collection_mode),
+                            spectator: server.is_some_and(|context| context.spectator),
+                            deck_store,
                         };
-                        self.table = Some(TableScreen::new(options));
+                        let mut table = TableScreen::new(options);
+                        if let Some(context) = server {
+                            table.set_room_chat(Box::new(ServerRoomChat { server: context.server.clone() }));
+                        }
+                        self.table = Some(table);
                     }
                 }
             }
@@ -1015,42 +1120,46 @@ impl Screen for ClientGame {
     }
 
     fn quit(&mut self, _frame: &mut Frame) -> bool {
-        self.client.borrow_mut().disconnect();
+        self.client.borrow_mut().close();
+        if let Some(context) = &self.server {
+            context.server.borrow_mut().disconnect();
+        }
         false
     }
 
     fn background_update(&mut self, frame: &mut Frame, _dt: f32) {
         if std::mem::take(&mut self.replay_pending) {
-            let cached: Vec<WireMessage> = {
-                let client = self.client.borrow();
-                [&client.last_game_data, &client.last_lobby_roster_update, &client.last_full_state]
-                    .into_iter()
-                    .flatten()
-                    .cloned()
-                    .collect()
-            };
+            let cached = self.client.borrow().cached_messages();
             // The live inbox holds these too; replay the cached copies once and drop the rest.
             self.client.borrow_mut().take_messages();
             for message in cached {
                 self.handle_message(frame, message);
             }
         }
-        self.client.borrow_mut().update();
+        self.client.borrow_mut().pump(frame);
         let messages = self.client.borrow_mut().take_messages();
         for message in messages {
             self.handle_message(frame, message);
         }
-        let (status, reason) = {
+        let (disconnected, reason) = {
             let client = self.client.borrow();
-            (client.status, client.disconnect_reason.clone())
+            (client.is_disconnected(), client.disconnect_reason())
         };
-        if status == ClientStatus::Disconnected && !self.navigated_home {
+        if disconnected && !self.navigated_home {
             frame.sounds.play(SoundEffect::Error);
-            self.return_home(frame, disconnect_message(reason.as_deref()));
+            let message = match &self.server {
+                Some(context) => context.server.borrow().disconnect_message(),
+                None => disconnect_message(reason.as_deref()).to_string(),
+            };
+            self.return_home(frame, &message);
         }
     }
 
     fn update(&mut self, frame: &mut Frame, dt: f32) {
+        if let (Some(context), Some(table)) = (&self.server, &mut self.table) {
+            let keys = context.server.borrow_mut().avatar_keys_by_user_id();
+            table.set_avatar_keys(keys);
+        }
         let mirrored = self.is_mirrored();
         if let Some(table) = &mut self.table {
             table.set_mirrored(mirrored);
@@ -1063,7 +1172,9 @@ impl Screen for ClientGame {
             let (center_x, center_y) = (x + width / 2.0, y + height / 2.0);
             frame.spinner(center_x, center_y - 30.0, 18.0, None);
             let options = TextOptions::new().width(width).centered();
-            frame.text("Waiting for host to start the game...", x, center_y, options);
+            let waiting =
+                if self.server.is_some() { "Loading the game..." } else { "Waiting for host to start the game..." };
+            frame.text(waiting, x, center_y, options);
             if self.roster.len() > 1 {
                 let joined = format!("{}/{} players joined", self.roster.len(), self.max_players);
                 frame.text(&joined, x, center_y + 28.0, options);

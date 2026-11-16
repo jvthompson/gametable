@@ -21,4 +21,4 @@ pub mod selection;
 pub mod view;
 
 pub use actions::{PracticeBackend, TableAction, TableBackend};
-pub use screen::{TableEvent, TableOptions, TableScreen};
+pub use screen::{ChatLine, RoomChat, TableEvent, TableOptions, TableScreen};

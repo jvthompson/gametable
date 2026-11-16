@@ -466,7 +466,10 @@ impl TableScreen {
 
     /// The chat panel docked to the right edge.
     fn draw_chat(&mut self, frame: &mut Frame) {
-        let lines = self.local_chat.clone();
+        let lines = match &self.room_chat {
+            Some(chat) => chat.lines(),
+            None => self.local_chat.clone(),
+        };
         let (screen_width, screen_height) = frame.ui.screen_size();
         let top = frame.ui.content_top;
         let (x, y, width, height) =
@@ -504,7 +507,8 @@ impl TableScreen {
                 .middle_of(list_height)
                 .centered()
                 .color(Color::rgba(1.0, 1.0, 1.0, 0.54));
-            frame.text("Try /flip or /roll d6", x, list_y, options);
+            let placeholder = if self.room_chat.is_some() { "Say hello!" } else { "Try /flip or /roll d6" };
+            frame.text(placeholder, x, list_y, options);
         }
         // The field draws with the dark palette so typed text reads on this dark panel.
         frame.theme.force_dark = true;
@@ -528,8 +532,13 @@ impl TableScreen {
         let send =
             frame.icon_button("send", x + width - 12.0 - 40.0, y + height - input_height - 12.0 + 4.0, &send_options);
         if (field.submitted || send) && !blank {
-            let trimmed = trim_lua_whitespace(&text).to_string();
-            self.send_local_chat(&trimmed);
+            match &mut self.room_chat {
+                Some(chat) => chat.send(&text),
+                None => {
+                    let trimmed = trim_lua_whitespace(&text).to_string();
+                    self.send_local_chat(&trimmed);
+                }
+            }
             text.clear();
             frame.ui.focus_field("table:chatinput", false);
         }

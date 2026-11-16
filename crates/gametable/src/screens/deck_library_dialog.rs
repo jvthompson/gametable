@@ -672,7 +672,8 @@ impl SaveDeckDialog {
             SaveNameResponse::Save(name) => {
                 self.saving_name = Some(name.clone());
                 let slot = self.pending_save.clone();
-                let _ = (&self.game_id, self.also_local);
+                let _ = &self.game_id;
+                store.set_also_local(self.also_local);
                 store.write(
                     game,
                     &name,

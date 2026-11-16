@@ -165,12 +165,18 @@ pub(super) struct DiscardFlight {
     pub started_at: f64,
 }
 
-/// A line of the practice-game chat.
+/// A line of the table chat.
 #[derive(Debug, Clone)]
-pub(super) struct ChatLine {
+pub struct ChatLine {
     pub time_label: String,
     pub name: String,
     pub text: String,
+}
+
+/// A server room's chat, relayed by the table's chat panel (`T.sc`'s room chat).
+pub trait RoomChat {
+    fn lines(&self) -> Vec<ChatLine>;
+    fn send(&mut self, text: &str);
 }
 
 /// Box-selected cards (whole piles) and tokens.
@@ -251,6 +257,8 @@ pub struct TableScreen {
     pub(super) chat_text: String,
     pub(super) seen_chat: usize,
     pub(super) local_chat: Vec<ChatLine>,
+    /// Server games chat through the room instead of the practice log.
+    pub(super) room_chat: Option<Box<dyn RoomChat>>,
     pub(super) rulebook: RulebookViewer,
 
     // Selection.
@@ -345,6 +353,7 @@ impl TableScreen {
             chat_text: String::new(),
             seen_chat: 0,
             local_chat: Vec::new(),
+            room_chat: None,
             rulebook,
             selection: TableSelection::default(),
             selected_roots: HashSet::new(),
@@ -1109,10 +1118,15 @@ impl TableScreen {
             .cloned()
     }
 
-    /// Practice games get a local-only chat panel for /flip and /roll; server games (Phase 10)
-    /// chat through the server.
+    /// Server games chat through the room; practice games get a local-only panel for /flip and
+    /// /roll; peer-hosted games have neither.
     pub(super) fn is_chat_available(&self) -> bool {
-        self.is_local_practice
+        self.room_chat.is_some() || self.is_local_practice
+    }
+
+    /// Relays the chat panel through a server room.
+    pub fn set_room_chat(&mut self, chat: Box<dyn RoomChat>) {
+        self.room_chat = Some(chat);
     }
 
     /// Keys are the table's only while no dialog, menu or text field has them.
@@ -1170,7 +1184,11 @@ impl TableScreen {
             return;
         }
         if self.spectator {
-            self.toggle_view_keys(frame, key);
+            if key == "c" && self.room_chat.is_some() {
+                self.chat_open = !self.chat_open;
+            } else {
+                self.toggle_view_keys(frame, key);
+            }
             return;
         }
         let ctrl = frame.keyboard.ctrl();

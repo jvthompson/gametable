@@ -10,7 +10,7 @@ use std::rc::Rc;
 use gametable_core::host_engine::HostEngine;
 use gametable_core::session::Session;
 
-use crate::net::game_client::GameClient;
+use crate::net::game_connection::GameConnection;
 use crate::net::host_server::{HostServer, HostServerEvent};
 use crate::table::actions::{TableAction, TableBackend, apply_as_host, request_message};
 
@@ -110,7 +110,7 @@ impl TableBackend for NetworkHostBackend {
 /// A joined player's side: the session mirrors the host's state; actions become requests.
 pub struct ClientBackend {
     pub session: Session,
-    pub client: Rc<RefCell<GameClient>>,
+    pub client: Rc<RefCell<dyn GameConnection>>,
 }
 
 impl TableBackend for ClientBackend {

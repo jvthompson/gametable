@@ -51,6 +51,12 @@ pub enum ScreenCommand {
     Replace(Box<dyn Screen>),
     /// Clears everything above Home; the message shows in Home's banner.
     PopToHome(Option<String>),
+    /// Pops every screen above the one whose [`Screen::marker`] is `marker` (the server lobby),
+    /// then shows `message` as a snackbar.
+    PopTo {
+        marker: &'static str,
+        message: Option<String>,
+    },
     Quit,
 }
 
@@ -91,6 +97,10 @@ pub trait Screen {
     }
     /// Home's orange banner message (`App.popToHome(message)`).
     fn set_message(&mut self, _message: Option<String>) {}
+    /// A name [`ScreenCommand::PopTo`] can return to (the original's `isServerLobby` flag).
+    fn marker(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Everything a screen can reach while handling an event or drawing.
@@ -482,6 +492,22 @@ impl App {
                         if let Some(home) = screens.last_mut() {
                             home.set_message(message);
                             home.resume(frame);
+                        }
+                    }
+                    ScreenCommand::PopTo { marker, message } => {
+                        if screens.iter().any(|screen| screen.marker() == Some(marker)) {
+                            while screens.last().is_some_and(|screen| screen.marker() != Some(marker)) {
+                                if let Some(mut screen) = screens.pop() {
+                                    screen.leave(frame);
+                                }
+                            }
+                            frame.ui.blur();
+                            if let Some(top) = screens.last_mut() {
+                                top.resume(frame);
+                            }
+                        }
+                        if let Some(message) = message {
+                            frame.ui.toast(&message, None);
                         }
                     }
                     ScreenCommand::Quit => frame.commands.push(ScreenCommand::Quit),

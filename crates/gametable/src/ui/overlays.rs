@@ -273,6 +273,7 @@ impl Frame<'_> {
                         message: Some(&dialog.message),
                         width: 420.0,
                         actions: &actions,
+                        dismissible: dialog.dismissible,
                         ..DialogSpec::default()
                     };
                     match self.dialog(&dialog.id, &spec, |_, _, _, _| 0.0) {
@@ -283,7 +284,12 @@ impl Frame<'_> {
                             }
                             true
                         }
-                        _ => true,
+                        _ => {
+                            if let Some(on_cancel) = dialog.on_cancel.take() {
+                                on_cancel(self.commands);
+                            }
+                            true
+                        }
                     }
                 }
             };
@@ -330,6 +336,20 @@ pub(crate) struct AppDialog {
     confirm_label: Option<String>,
     cancel_label: String,
     on_confirm: Option<ConfirmAction>,
+    on_cancel: Option<ConfirmAction>,
+    dismissible: bool,
+}
+
+/// An app-level two-button dialog ([`Ui::app_dialog`]).
+pub struct AppDialogSpec {
+    pub title: String,
+    pub message: String,
+    pub confirm_label: String,
+    pub cancel_label: String,
+    /// Escape and scrim clicks count as the cancel button.
+    pub dismissible: bool,
+    pub on_confirm: ConfirmAction,
+    pub on_cancel: Option<ConfirmAction>,
 }
 
 #[derive(Debug, Clone)]
@@ -370,6 +390,28 @@ impl Ui {
         self.push_app_dialog(title, message, Some(confirm_label), cancel_label, Some(on_confirm));
     }
 
+    /// A two-button dialog above whatever screen is showing, with actions for both buttons.
+    /// Returns its id for [`Ui::close_app_dialog`].
+    pub fn app_dialog(&mut self, spec: AppDialogSpec) -> String {
+        let id = self.push_app_dialog(
+            &spec.title,
+            &spec.message,
+            Some(&spec.confirm_label),
+            &spec.cancel_label,
+            Some(spec.on_confirm),
+        );
+        if let Some(dialog) = self.app_overlays.dialogs.last_mut() {
+            dialog.on_cancel = spec.on_cancel;
+            dialog.dismissible = spec.dismissible;
+        }
+        id
+    }
+
+    /// Closes an app-level dialog without running either action (e.g. it no longer applies).
+    pub fn close_app_dialog(&mut self, id: &str) {
+        self.app_overlays.dialogs.retain(|dialog| dialog.id != id);
+    }
+
     fn push_app_dialog(
         &mut self,
         title: &str,
@@ -377,17 +419,21 @@ impl Ui {
         confirm_label: Option<&str>,
         cancel_label: &str,
         on_confirm: Option<ConfirmAction>,
-    ) {
+    ) -> String {
         let overlays = &mut self.app_overlays;
         overlays.next_id += 1;
+        let id = format!("app-dialog-{}", overlays.next_id);
         overlays.dialogs.push(AppDialog {
-            id: format!("app-dialog-{}", overlays.next_id),
+            id: id.clone(),
             title: title.to_string(),
             message: message.to_string(),
             confirm_label: confirm_label.map(str::to_string),
             cancel_label: cancel_label.to_string(),
             on_confirm,
+            on_cancel: None,
+            dismissible: true,
         });
+        id
     }
 }
 
