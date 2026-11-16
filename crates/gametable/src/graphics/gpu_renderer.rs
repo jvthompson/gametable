@@ -189,7 +189,7 @@ impl GpuRenderer {
                     .with_address_mode_v(SamplerAddressMode::ClampToEdge)
                     .with_address_mode_w(SamplerAddressMode::ClampToEdge)
                     .with_enable_anisotropy(true)
-                    .with_max_anisotropy(8.0)
+                    .with_max_anisotropy(4.0)
                     .with_max_lod(1000.0),
             )
             .map_err(sdl_error)?;

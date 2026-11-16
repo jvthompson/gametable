@@ -2,7 +2,9 @@
 
 pub mod draw_list;
 pub mod gpu_renderer;
+pub mod image_cache;
 pub mod image_data;
 pub mod tessellation;
 pub mod text;
 pub mod text_layout;
+pub mod webp;
