@@ -29,11 +29,17 @@ const GO_STANDARD_BASE64: GeneralPurpose = GeneralPurpose::new(
         .with_decode_padding_mode(DecodePaddingMode::RequireCanonical),
 );
 
-fn normalize_email(email: &str) -> String {
+/// Decodes base64 the way Go's `base64.StdEncoding.DecodeString` does (line breaks are skipped).
+pub(super) fn go_base64_decode(text: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    let without_line_breaks: String = text.chars().filter(|&character| !matches!(character, '\r' | '\n')).collect();
+    GO_STANDARD_BASE64.decode(without_line_breaks)
+}
+
+pub(super) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
 }
 
-fn is_valid_email(email: &str) -> bool {
+pub(super) fn is_valid_email(email: &str) -> bool {
     let at_position = email.find('@');
     at_position.is_some_and(|at| at > 0 && at < email.len() - 1)
         && email.len() <= 254
@@ -59,7 +65,7 @@ pub fn valid_player_name(name: &str) -> (String, Option<&'static str>) {
 }
 
 /// A client password hash: 64 hex digits.
-fn is_valid_password_hash(hash: &str) -> bool {
+pub(super) fn is_valid_password_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
@@ -82,7 +88,7 @@ fn decode_avatar(base64_text: &str) -> Result<Option<Vec<u8>>, &'static str> {
 }
 
 /// A bcrypt hash in Go's `$2a$` format.
-fn bcrypt_hash(password_hash: &str) -> Option<String> {
+pub(super) fn bcrypt_hash(password_hash: &str) -> Option<String> {
     bcrypt::hash_with_result(password_hash, BCRYPT_COST)
         .ok()
         .map(|parts| parts.format_for_version(bcrypt::Version::TwoA))

@@ -192,8 +192,9 @@ impl Request<'_> {
     pub(super) fn handle_chat(&self, user: &User) {
         let fields = self.fields;
         let room_id = fields.text("roomId");
-        if !fields.text("tradeId").is_empty() {
-            // TODO(Phase 2, trading): trade chat.
+        let trade_id = fields.text("tradeId");
+        if !trade_id.is_empty() {
+            self.handle_trade_chat(user, &fields.text("text"), &trade_id);
             return;
         }
         let mut text = fields.text("text").trim().to_string();

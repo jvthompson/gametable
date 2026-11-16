@@ -65,12 +65,12 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `sdl3` (gpu, ttf, image, build-from-source) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use |
 | `pdfium-render` | client | PDF rulebooks | yes (2026-11-15) |
 | `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15) |
-| `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15) |
+| `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server, `deflate` only) |
 | `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
 | `libloading` | client | load `discord_partner_sdk.dll` at runtime | yes (2026-11-15) |
 | `md-5` | client | avatar cache keys | yes (2026-11-15) |
 | `tokio` | server | connections, per-room tasks, timers | yes (2026-11-15), in use |
-| `rusqlite` (`bundled`) | server | same SQLite schema/file as the Go server | yes (2026-11-15) |
+| `rusqlite` (`bundled`) | server | same SQLite schema/file as the Go server | yes (2026-11-15), in use |
 | `bcrypt` | server | password hashes compatible with existing DB rows | yes (2026-11-15), in use |
 | `jiff` | server | server-local calendar days / ISO weeks for the token allowance (`store::local_calendar_date`) | yes (2026-11-15), in use |
 
@@ -130,12 +130,14 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 ### Phase 2 — `gametable-server`
 - [ ] `proto` (framing, heartbeat, send queue limits)
 - [x] `store` (schema, settings, users, sessions, decks, collections, token ledger, chat) — same schema as the Go
-      server; 6 unit tests. Not yet checked against a real Go-created `cardflux.db` (do that in the interop step).
+      server; 6 unit tests. Checked both ways: the Rust server reads a Go-written `cardflux.db` (logins, admin flag,
+      tokens, decks, collections, settings, chat) and the Go server reads a Rust-written one; it also opens a copy of
+      `cardflux-love/server/devdata/cardflux.db`.
 - [x] `games` (library scan, manifest, hash cache, built-in `standard_52`) — unit test + ignored read-only scan of
       the real library (`cargo test -p gametable-server -- --ignored real_library`, ~4.5 min) with 0 errors.
-      TODO: server card counts differ from the client's (VTES 4149 vs 8545, Lorcana 3423 vs 3433) because the server
-      keeps the first card per id and skips cards Go can't unmarshal; confirm against the real Go server
-      (manifest hashes too) during the interop step.
+      Server card counts differ from the client's (VTES 4149 vs 8545, Lorcana 3423 vs 3433) because the server keeps
+      the first card per id and skips cards Go can't unmarshal — confirmed identical to the real Go server: `gameList`
+      and every manifest (12,088 files, same hashes) match for copies of `vtes` and `lorcana`.
 - [x] `proto` → `connection.rs` (tokio; line framing, 64 MiB line cap, 4096-line send queue that drops slow peers,
       4 s ping / 12 s timeout, 200 ms close grace, `send_waiting` for bulk transfers). Crate is now lib + bin so
       integration tests can start a real server.
@@ -143,22 +145,29 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
       functions run with `block_in_place`; one state mutex like Go's `srv.mu`; clients are `ClientId`s.
 - [x] Auth (register, login, resume, logout, profile, avatars, rate limiting, allowance) — `server/auth.rs`; bcrypt
       written in Go's `$2a$` format, base64 decoded like Go's `StdEncoding`.
-- [x] Lobby (state pushes, chat, slash commands, allowance loop) — `server/lobby.rs`. Trade chat still TODO.
-- [x] Rooms (create/join/spectate/leave/seats/start/close, native engine per room, idle timeout, collection gate)
-      — `server/rooms.rs`. Each room's engine runs on its own thread (replaces gopher-lua VM + room goroutine; no VM
-      pool or call timeout needed). TODO: `requestLoadDeckIntoZone` collection check (comes with decks).
-- [ ] Decks, collection, shop (packs, starter decks)
-- [ ] Trading
-- [ ] Admin (users, settings, rescan, kick, files, game install/delete) — `adminShutdown` and `adminCloseRoom` done
-      (`server/shutdown.rs`); the other admin types already answer `notAdmin`/`notLoggedIn` correctly but do nothing.
-- [ ] Asset channel (download, admin upload)
+- [x] Lobby (state pushes, chat incl. trade chat, slash commands, allowance loop) — `server/lobby.rs`.
+- [x] Rooms (create/join/spectate/leave/seats/start/close, native engine per room, idle timeout, collection gate and
+      `requestLoadDeckIntoZone` collection check) — `server/rooms.rs`. Each room's engine runs on its own thread
+      (replaces gopher-lua VM + room goroutine; no VM pool or call timeout needed).
+- [x] Decks, collection, shop (packs via the core pack generator, starter decks) — `server/decks.rs`.
+- [x] Trading (invites with 30 s expiry, offers clamped to what the giver owns, confirm/execute, leave, disconnect)
+      — `server/trade.rs`.
+- [x] Admin (users, settings, rescan, kick, clear collection, files, game install/delete) — `server/admin.rs`,
+      `server/shutdown.rs`.
+- [x] Asset channel (chunked download with `send_waiting`, admin chunked upload incl. staging uploads) —
+      `server/assets.rs`.
 - [x] `main` (flags `--data`/`--port` in Go flag style, `server.log`, Ctrl+C) — log lines use Go's `LstdFlags` format.
-- [ ] Integration tests ported from `server_test.go` / `engine_test.go` — done so far (`tests/server_lobby.rs`,
-      harness in `tests/common`): VersionChecks, Accounts, Chat, ChatCommands, RoomLifecycle, TwoConcurrentRooms,
-      WaitingRoomOwnerLeaves, ShutdownWhenPlayersLeave, ShutdownCountdown, plus a profile/avatar test. Remaining:
-      Decks, CollectionMode, StarterDecks, BuiltInDecksPrefersUnderscoreFolder, Admin, Assets, AdminFiles,
-      AdminGames, AllowancePeriods, Trading, and the relevant `engine_test.go` cases.
-- [ ] Interop: original LÖVE client against the Rust server
+- [x] Integration tests ported from `server_test.go` / `engine_test.go`: `tests/server_lobby.rs` (10),
+      `tests/server_collection.rs` (Decks, CollectionMode, StarterDecks, BuiltInDecksPrefersUnderscoreFolder),
+      `tests/server_admin.rs` (Admin, Assets, AdminFiles, AdminGames, Trading + chunked large download),
+      `tests/server_room_engine.rs` (RoomDealDrawAndFilter, TwoRoomsShuffleDifferently, LargeGame,
+      GameDataRoundTripsSameOrientationForAll, MessageRejectsDeeplyNestedJSON, RequestLoadScenarioOwnerOnly);
+      OpenPack and AllowancePeriods are unit tests. The VM-pool/timeout engine tests have no Lua counterpart.
+      Collection deck check and trade clamp mutation-checked.
+- [x] Interop: Go server vs Rust server — the same scripted 2-player session (accounts, chat, decks, shop, admin,
+      trading, rooms + engine, files, asset channel, error paths, kick, logout) gives byte-identical transcripts
+      (210 lines) apart from random pack contents. Scripts: see session log.
+- [ ] Interop: original LÖVE client against the Rust server (manual; low risk after the Go comparison)
 
 ### Phase 3 — Client foundation
 - [ ] App shell (`src/app.lua`): screen stack, title bar, input routing, UI scale/DPI, F6 frame toggle, CLI flags
@@ -222,8 +231,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
-- `PackSetting.count` may be fractional on the client (integer part guaranteed, fraction = chance of a bonus card); the Go
-  server declares it `int`. Decide server behaviour when porting `packBuy`.
+- `PackSetting.count` may be fractional on the client (integer part guaranteed, fraction = chance of a bonus card). The Go
+  server hands the set's raw `packSettings` JSON to the Lua pack generator, so fractions work there too; the Rust
+  server does the same through the core pack generator.
 - Spectator visibility uses only `game.zones[].visibleToAll`; players use effective zones including scenario-loaded zones.
 - `chatSend` never replies, even with a `rid`.
 - Unknown authenticated message types are forwarded to the room engine rather than rejected.
@@ -251,10 +261,19 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   Real clients never send these. `requestSetCurrentPlayer` without a player id still bumps the revision, as before.
 - Host engine: `gameData` sends to newly connected players and preview clears for departed players are sent in
   sorted player-id order (the original used Lua hash order). Golden tests sort within each step.
-- Server JSON: Go's `encoding/json` escapes `<`, `>`, `&`, U+2028 and U+2029 as `<` etc.; the Rust server writes
-  them as plain characters (identical once decoded). Map payloads are still key-sorted like Go's.
+- Server JSON: Go's `encoding/json` escapes `<`, `>`, `&`, U+2028 and U+2029 as `<` etc. The Rust server does
+  the same for every message it builds (`connection::encode_message`) but not for engine output (`gameData`,
+  `fullState`, relays — `encode_engine_message`), which Go passed through as raw JSON. Map payloads are key-sorted.
+- Server JSON: Go encodes empty nil slices as `null`: a room's chat history on `roomJoin`/`roomSpectate`, a trade's
+  `chat` before anyone speaks, and `gameErrors` with no scan errors. The Rust server sends `null` in the same places.
 - Server: Go's `json.Unmarshal` into `int` refuses `3.0`; the Rust server accepts any whole number (the Lua client
-  always writes `3`).
+  always writes `3`). Same for deck `quantity` validation in `deckSave` and the collection check.
+- Server decks: Go stored the deck exactly as the client sent it and embedded the stored text verbatim; the Rust
+  server re-encodes the parsed deck compactly (identical for the Lua client's compact output; a `null` inside a
+  deck would be dropped). Purchased starter decks are re-encoded with top-level keys sorted, as Go's map did.
+- Server admin paths: `\` counts as a path separator on every OS (Go only did so on Windows), and zip entries with a
+  `..` component behind either slash, or a drive letter, are refused as unsafe (Go on Windows would follow
+  backslashes out of the folder).
 - `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
   will read local time from SDL.
 
@@ -303,3 +322,11 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   (native engine per room thread), shutdown and `main`; 17 server unit tests + 10 integration tests pass (two
   mutation-checked). Next: `decks.go` (decks, collection, packs, starters, collection deck check), then
   `trade.go`, `admin.go`, `admin_files.go`, `admin_games.go` (needs `zip`), `assets.go`, remaining Go tests, interop.
+- 2026-11-15: Added `zip`. Ported decks/collection/shop, trading (incl. trade chat), admin (users, settings, rescan,
+  files, game install/delete) and the asset channel; 16 more integration tests (36 total) and 7 more unit tests.
+  Interop with the real Go server (built from `cardflux-love/server` into a scratch folder with `go build`):
+  `tools/server_interop/compare_servers.py <go-server.exe> <rust-server.exe> <scratch dir>` runs one scripted
+  session against both and diffs normalized transcripts — byte-identical apart from random packs after matching Go's
+  HTML escaping and `null` empty slices. `swap_databases.py` (same arguments, run after) opens each server's DB with
+  the other. Real-game manifests for `vtes`/`lorcana` (copied to scratch) match the Go server exactly.
+  **Phase 2 is complete except a manual check with the original LÖVE client.** Next: Phase 3 (client foundation).

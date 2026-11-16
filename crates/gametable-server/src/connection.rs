@@ -31,13 +31,41 @@ const CLOSE_GRACE: Duration = Duration::from_millis(200);
 /// One encoded line, shared between every recipient of a broadcast.
 pub type EncodedLine = Arc<str>;
 
-/// Encodes one message line. Payloads always encode (they are built by the server), but if one
-/// somehow does not, `{}` is sent instead, as the Go server does.
+/// Encodes one message the server built, escaping the way Go's `encoding/json` does (see
+/// [`escape_html_like_go`]). Payloads always encode, but if one somehow does not, `{}` is sent
+/// instead, as the Go server does.
 pub fn encode_message(message_type: &str, payload: &JsonValue) -> EncodedLine {
-    let line = protocol::encode_line(message_type, payload)
+    Arc::from(escape_html_like_go(encode_unescaped(message_type, payload)))
+}
+
+/// Encodes one message written by the game engine. The Go server passed the engine's own JSON
+/// through untouched, so these lines are not HTML-escaped.
+pub fn encode_engine_message(message_type: &str, payload: &JsonValue) -> EncodedLine {
+    Arc::from(encode_unescaped(message_type, payload))
+}
+
+fn encode_unescaped(message_type: &str, payload: &JsonValue) -> String {
+    protocol::encode_line(message_type, payload)
         .or_else(|_| protocol::encode_line(message_type, &JsonValue::Object(JsonObject::new())))
-        .expect("an empty payload always encodes");
-    Arc::from(line)
+        .expect("an empty payload always encodes")
+}
+
+/// Go's `encoding/json` writes `<`, `>`, `&`, U+2028 and U+2029 as `\u` escapes. They can only
+/// appear inside JSON strings, so replacing them in the encoded text is exact.
+pub fn escape_html_like_go(encoded: String) -> String {
+    const ESCAPED: [char; 5] = ['<', '>', '&', '\u{2028}', '\u{2029}'];
+    if !encoded.contains(ESCAPED) {
+        return encoded;
+    }
+    let mut escaped = String::with_capacity(encoded.len() + 16);
+    for character in encoded.chars() {
+        if ESCAPED.contains(&character) {
+            escaped.push_str(&format!("\\u{:04x}", u32::from(character)));
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 struct ConnectionShared {

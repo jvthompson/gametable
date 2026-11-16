@@ -19,7 +19,7 @@ use gametable_core::session::{DealOptions, Session, SessionEnvironment};
 use gametable_core::state_filter::filter_state_for_recipient;
 
 use super::{ClientId, Request, Server};
-use crate::connection::{Connection, IncomingMessage, encode_message};
+use crate::connection::{Connection, IncomingMessage, encode_engine_message, encode_message};
 use crate::log;
 use crate::payload::sorted_object;
 use crate::store::{ChatLine, User, new_id, unix_now};
@@ -242,12 +242,12 @@ impl HostTransport for RoomTransport<'_> {
     fn send_to(&mut self, player_id: &str, message_type: &str, payload: JsonValue) {
         let member = self.live_players.get(player_id).or_else(|| self.live_spectators.get(player_id));
         if let Some(member) = member {
-            member.connection.send(message_type, payload);
+            member.connection.send_line(encode_engine_message(message_type, &payload));
         }
     }
 
     fn broadcast(&mut self, message_type: &str, payload: JsonValue, except_player_id: Option<&str>) {
-        let line = encode_message(message_type, &payload);
+        let line = encode_engine_message(message_type, &payload);
         for (id, member) in self.live_players.iter().chain(self.live_spectators.iter()) {
             if Some(id.as_str()) != except_player_id {
                 member.connection.send_line(line.clone());
@@ -366,7 +366,7 @@ impl RoomRuntime {
         let Some(game) = &mut self.game else { return };
         game.spectator_ids.insert(spectator_id.to_string());
         if let Some(member) = self.live_spectators.get(spectator_id) {
-            member.connection.send("gameData", game.host.game().to_json());
+            member.connection.send_line(encode_engine_message("gameData", &game.host.game().to_json()));
         }
         send_spectator_state(game, &self.live_spectators, spectator_id);
     }
@@ -400,7 +400,7 @@ fn send_spectator_state(game: &RoomGame, live_spectators: &HashMap<String, LiveM
     let visible_zone_ids: HashSet<String> =
         game.host.game().zones.iter().filter(|zone| zone.visible_to_all).map(|zone| zone.id.clone()).collect();
     let filtered = filter_state_for_recipient(game.host.session.state(), spectator_id, &visible_zone_ids);
-    member.connection.send("fullState", filtered.to_json());
+    member.connection.send_line(encode_engine_message("fullState", &filtered.to_json()));
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +509,7 @@ impl Server {
 
     /// Passes game traffic from a seated player to their room's engine.
     pub(crate) fn forward_to_room(self: &Arc<Self>, client_id: ClientId, message: &IncomingMessage) {
-        let (room_id, user_id, collection_mode, connection) = {
+        let (room_id, game_id, user_id, collection_mode, connection) = {
             let state = self.state();
             let Some(client) = state.clients.get(&client_id) else { return };
             let Some(room) = client.room_id.as_ref().and_then(|room_id| state.rooms.get(room_id)) else { return };
@@ -517,7 +517,7 @@ impl Server {
                 return;
             }
             let Some(user) = &client.user else { return };
-            (room.id.clone(), user.id.clone(), room.collection_mode, client.connection.clone())
+            (room.id.clone(), room.game_id.clone(), user.id.clone(), room.collection_mode, client.connection.clone())
         };
         if collection_mode {
             if is_blocked_in_collection_mode(message) {
@@ -525,7 +525,12 @@ impl Server {
                     .send("toast", sorted_object([("message", "That isn't available in collection mode.".into())]));
                 return;
             }
-            // TODO(Phase 2, decks): check requestLoadDeckIntoZone against the player's collection.
+            if message.message_type == "requestLoadDeckIntoZone"
+                && let Some(problem) = self.check_deck_against_collection(&user_id, &game_id, &message.payload)
+            {
+                connection.send("toast", sorted_object([("message", problem.into())]));
+                return;
+            }
         }
         let message = message.clone();
         let state = self.state();
@@ -541,6 +546,12 @@ impl Server {
             });
         });
     }
+}
+
+/// A room's chat history for `roomJoin`/`roomSpectate`. Go copies it into a nil slice, so an
+/// empty history is sent as `null`.
+fn chat_history_json(chat: &[ChatLine]) -> JsonValue {
+    if chat.is_empty() { JsonValue::Null } else { JsonValue::Array(chat.iter().map(ChatLine::to_json).collect()) }
 }
 
 /// Messages that collection-mode games refuse: they would conjure cards a player doesn't own.
@@ -680,7 +691,7 @@ impl Request<'_> {
             room.players.insert(user.id.clone(), self.client_id);
             let playing = room.phase == RoomPhase::Playing;
             let info = room.info();
-            let chat = JsonValue::Array(room.chat.iter().map(ChatLine::to_json).collect());
+            let chat = chat_history_json(&room.chat);
             if playing {
                 // Rejoining a running game: the engine sends gameData and fullState.
                 let member = LiveMember { client_id: self.client_id, connection: self.connection.clone() };
@@ -718,7 +729,7 @@ impl Request<'_> {
             };
             room.spectators.insert(user.id.clone(), self.client_id);
             let info = room.info();
-            let chat = JsonValue::Array(room.chat.iter().map(ChatLine::to_json).collect());
+            let chat = chat_history_json(&room.chat);
             if room.phase == RoomPhase::Playing {
                 let member = LiveMember { client_id: self.client_id, connection: self.connection.clone() };
                 let watcher_id = spectator_id(&user.id);

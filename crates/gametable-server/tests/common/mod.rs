@@ -53,6 +53,18 @@ impl Drop for TestServer {
     }
 }
 
+impl TestServer {
+    /// Adds a game folder holding just a `gamedef.json`, then rescans the library.
+    pub fn install_game(&self, game_id: &str, definition: &str) {
+        let folder = self.data_folder.join("games").join(game_id);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("gamedef.json"), definition).unwrap();
+        let mut library = self.server.library.write().unwrap();
+        library.scan().unwrap();
+        assert!(library.game(game_id).is_some(), "{game_id} did not load: {:?}", library.scan_errors());
+    }
+}
+
 pub async fn start_server() -> TestServer {
     let data_folder =
         std::env::temp_dir().join(format!("gametable-server-test-{}", gametable_core::uuid::new_v4_uuid()));
@@ -203,6 +215,13 @@ impl TestClient {
         let _ = self.writer.write_all(text.as_bytes()).await;
     }
 
+    /// Writes one line exactly as given (a newline is added).
+    pub async fn send_raw(&mut self, line: &str) {
+        let mut text = line.to_string();
+        text.push('\n');
+        let _ = self.writer.write_all(text.as_bytes()).await;
+    }
+
     /// Closes the connection.
     pub async fn disconnect(&mut self) {
         let _ = self.writer.shutdown().await;
@@ -273,6 +292,7 @@ pub struct TableView {
 }
 
 pub struct CardView {
+    pub instance_id: String,
     pub definition_id: String,
     pub zone: String,
     pub zone_id: String,
@@ -292,6 +312,7 @@ pub fn parse_full_state(message: &Message) -> TableView {
         cards: list("cards")
             .iter()
             .map(|card| CardView {
+                instance_id: text(card, "instanceId"),
                 definition_id: text(card, "definitionId"),
                 zone: text(card, "zone"),
                 zone_id: text(card, "zoneId"),

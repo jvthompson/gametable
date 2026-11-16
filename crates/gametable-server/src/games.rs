@@ -131,6 +131,17 @@ impl ServerGame {
         }
     }
 
+    /// Opens a file listed in the manifest for streaming.
+    pub fn open_file(&self, path: &str) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        if self.manifest_file(path).is_none() {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        }
+        match &self.folder {
+            None => Ok(Box::new(std::io::Cursor::new(self.definition_bytes.clone()))),
+            Some(folder) => Ok(Box::new(std::fs::File::open(folder.join(path))?)),
+        }
+    }
+
     /// A built-in deck by display name (for shared zones' `deckName`).
     pub fn built_in_deck(&self, name: &str) -> Option<Vec<u8>> {
         let folder = self.folder.as_ref()?;

@@ -6,10 +6,14 @@
 //! state lives behind one mutex, like the Go server's `srv.mu`. Each running room owns its game
 //! engine on a thread of its own (see `rooms`).
 
+mod admin;
+mod assets;
 mod auth;
+mod decks;
 mod lobby;
 mod rooms;
 mod shutdown;
+mod trade;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,6 +47,10 @@ pub(crate) struct ClientRecord {
     pub user: Option<User>,
     pub room_id: Option<String>,
     pub spectating: bool,
+    /// The running trade this client is in.
+    pub trade_id: Option<String>,
+    /// A trade invite this client sent or received that is still waiting for an answer.
+    pub pending_trade_id: Option<String>,
 }
 
 /// Everything the Go server guards with `srv.mu`.
@@ -50,6 +58,8 @@ pub(crate) struct ServerState {
     pub clients: HashMap<ClientId, ClientRecord>,
     pub client_by_user_id: HashMap<String, ClientId>,
     pub rooms: HashMap<String, RoomRecord>,
+    pub trades: HashMap<String, trade::Trade>,
+    pub pending_trades: HashMap<String, trade::PendingTrade>,
     pub settings: ServerSettings,
     /// Set once an admin starts a shutdown; new connections and sign-ins are refused from then on.
     pub shutdown_at: Option<Instant>,
@@ -87,6 +97,8 @@ impl Server {
                 clients: HashMap::new(),
                 client_by_user_id: HashMap::new(),
                 rooms: HashMap::new(),
+                trades: HashMap::new(),
+                pending_trades: HashMap::new(),
                 settings,
                 shutdown_at: None,
                 shutdown_started_by: None,
@@ -188,7 +200,14 @@ impl Server {
                     connection.send("serverInfo", self.server_info());
                     self.state().clients.insert(
                         client_id,
-                        ClientRecord { connection: connection.clone(), user: None, room_id: None, spectating: false },
+                        ClientRecord {
+                            connection: connection.clone(),
+                            user: None,
+                            room_id: None,
+                            spectating: false,
+                            trade_id: None,
+                            pending_trade_id: None,
+                        },
                     );
                     while let Some(message) = reader.read().await {
                         let server = self.clone();
@@ -201,7 +220,7 @@ impl Server {
                 }
             }
             "assetHello" => {
-                // TODO(Phase 2, assets): the asset download channel.
+                self.clone().serve_assets(connection.clone(), reader, first_message).await;
             }
             _ => {}
         }
@@ -242,7 +261,7 @@ impl Server {
         if let Some(room_id) = room_id {
             self.leave_room(client_id, &room_id, false);
         }
-        // TODO(Phase 2, trading): leave any trade.
+        self.leave_trade(client_id);
         self.state().clients.remove(&client_id);
         if was_online_as.is_some() {
             self.broadcast_users();
@@ -272,7 +291,6 @@ impl Server {
             server: self,
             client_id,
             connection,
-            message,
             fields: Fields(&message.payload),
             rid: message.field("rid").cloned(),
         };
@@ -333,7 +351,6 @@ pub(crate) struct Request<'a> {
     pub server: &'a Arc<Server>,
     pub client_id: ClientId,
     pub connection: &'a Connection,
-    pub message: &'a IncomingMessage,
     pub fields: Fields<'a>,
     /// The request id to echo; `None` when the message had none (echoed as `null`).
     pub rid: Option<JsonValue>,
@@ -365,10 +382,19 @@ impl Request<'_> {
             "roomSeats" => self.handle_room_seats(user),
             "roomStart" => self.handle_room_start(user),
             "roomClose" => self.handle_room_close(user),
-            "deckList" | "deckGet" | "deckSave" | "deckDelete" | "collectionGet" | "packBuy" | "starterBuy"
-            | "tradeRequest" | "tradeRespond" | "tradeOffer" | "tradeConfirm" | "tradeLeave" | "tradeCollectionGet" => {
-                // TODO(Phase 2): decks, shop and trading handlers.
-            }
+            "deckList" => self.handle_deck_list(user),
+            "deckGet" => self.handle_deck_get(user),
+            "deckSave" => self.handle_deck_save(user),
+            "deckDelete" => self.handle_deck_delete(user),
+            "collectionGet" => self.handle_collection_get(user),
+            "packBuy" => self.handle_pack_buy(user),
+            "starterBuy" => self.handle_starter_buy(user),
+            "tradeRequest" => self.handle_trade_request(user),
+            "tradeRespond" => self.handle_trade_respond(),
+            "tradeOffer" => self.handle_trade_offer(user),
+            "tradeConfirm" => self.handle_trade_confirm(user),
+            "tradeLeave" => self.handle_trade_leave(),
+            "tradeCollectionGet" => self.handle_trade_collection_get(user),
             _ => return false,
         }
         true
@@ -376,11 +402,21 @@ impl Request<'_> {
 
     fn handle_admin(&self, message_type: &str, user: &User) {
         match message_type {
-            "adminShutdown" => self.handle_admin_shutdown(user),
+            "adminUsers" => self.handle_admin_users(),
+            "adminUserUpdate" => self.handle_admin_user_update(user),
+            "adminUserDelete" => self.handle_admin_user_delete(user),
+            "adminKick" => self.handle_admin_kick(),
+            "adminSettingsGet" => self.handle_admin_settings_get(),
+            "adminSettingsSet" => self.handle_admin_settings_set(user),
+            "adminRescanGames" => self.handle_admin_rescan(),
             "adminCloseRoom" => self.handle_room_close(user),
-            _ => {
-                // TODO(Phase 2): the remaining admin handlers.
-            }
+            "adminClearCollection" => self.handle_admin_clear_collection(user),
+            "adminFileList" => self.handle_admin_file_list(),
+            "adminFileDelete" => self.handle_admin_file_delete(user),
+            "adminGameDelete" => self.handle_admin_game_delete(user),
+            "adminGameInstall" => self.handle_admin_game_install(user),
+            "adminShutdown" => self.handle_admin_shutdown(user),
+            _ => {}
         }
     }
 
