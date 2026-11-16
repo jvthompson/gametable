@@ -5,6 +5,7 @@ pub mod deck_library_dialog;
 pub mod edit_player_settings;
 pub mod file_picker;
 pub mod game_picker;
+pub mod gamedef;
 pub mod home;
 pub mod info_dialogs;
 pub mod kit_gallery;

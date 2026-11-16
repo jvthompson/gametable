@@ -1,8 +1,11 @@
 //! GameTable client entry point. Port of `main.lua` / `conf.lua`.
 
 use gametable::app::{App, Options};
+use gametable::data::file_system::join_path;
 use gametable::data::game_loader::{load_library, load_standard_deck};
+use gametable::data::gamedef_ops::{find_game_definition_file, load_game_definition_file};
 use gametable::screens::deck_editor::{DeckEditor, DeckEditorGameSelect};
+use gametable::screens::gamedef::{GameDefinitionEditor, GameDefinitionEntry};
 use gametable::screens::home::Home;
 use gametable::screens::kit_gallery::KitGallery;
 use gametable::screens::multiplayer::{HostSetup, Join};
@@ -69,6 +72,21 @@ fn main() {
                 }
                 Box::new(editor)
             }),
+            // `GAMETABLE_GAME=<game folder name>`, `GAMETABLE_GAMEDEF_TAB=<tab>[,select]`.
+            Ok("gamedef") => app.push_with_frame(|frame| {
+                let wanted = std::env::var("GAMETABLE_GAME").unwrap_or_default();
+                let library = frame.paths.games_folder(frame.settings).to_string_lossy().into_owned();
+                let folder = join_path(&[&library, &wanted]);
+                let game = find_game_definition_file(&folder)
+                    .and_then(|path| load_game_definition_file(&path, &folder).ok())
+                    .unwrap_or_else(load_standard_deck);
+                let mut editor = GameDefinitionEditor::new(game);
+                if let Ok(steps) = std::env::var("GAMETABLE_GAMEDEF_TAB") {
+                    editor.apply_development_setup(&steps);
+                }
+                Box::new(editor)
+            }),
+            Ok("gamedef_entry") => app.push_with_frame(|frame| Box::new(GameDefinitionEntry::new(frame))),
             Ok("deck_editor_select") => app.push_with_frame(|frame| Box::new(DeckEditorGameSelect::new(frame))),
             _ => {}
         }

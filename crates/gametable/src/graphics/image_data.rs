@@ -89,6 +89,25 @@ impl RgbaImage {
         Ok(bytes)
     }
 
+    /// Writes the image as a JPEG file (SDL3_image's `IMG_SaveJPG`, which the `sdl3` crate
+    /// doesn't wrap). `quality` is 0-100.
+    pub fn save_jpeg(&self, path: &Path, quality: i32) -> Result<(), String> {
+        unsafe extern "C" {
+            fn IMG_SaveJPG(
+                surface: *mut sdl3::sys::surface::SDL_Surface,
+                file: *const std::ffi::c_char,
+                quality: i32,
+            ) -> bool;
+        }
+        let surface = self.to_surface()?;
+        let file = std::ffi::CString::new(path.to_string_lossy().as_bytes()).map_err(|error| error.to_string())?;
+        if unsafe { IMG_SaveJPG(surface.raw(), file.as_ptr(), quality) } {
+            Ok(())
+        } else {
+            Err(sdl3::get_error().to_string())
+        }
+    }
+
     /// Rotates 90° clockwise.
     pub fn rotated_clockwise(&self) -> RgbaImage {
         let (width, height) = (self.width as usize, self.height as usize);

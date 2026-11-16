@@ -9,9 +9,9 @@ use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::profile::{self, RecentServer};
 use crate::screens::deck_editor::DeckEditorGameSelect;
 use crate::screens::edit_player_settings::EditPlayerSettings;
+use crate::screens::gamedef::GameDefinitionEntry;
 use crate::screens::info_dialogs::{show_controls_dialog, show_support_dialog};
 use crate::screens::multiplayer::Join;
-use crate::screens::not_ported::NotPortedYet;
 use crate::screens::player_count::PlayerCount;
 use crate::screens::recent_servers::recent_servers_dropdown;
 use crate::screens::settings_dialog::SettingsDialog;
@@ -319,8 +319,8 @@ impl Home {
         button_x -= 44.0;
         let editor_options = IconButtonOptions::tooltip("Game Definition Editor").id("home:gamedef");
         if frame.icon_button("build", button_x, button_y, &editor_options) {
-            let screen = NotPortedYet::boxed("Game Definition Editor", "The game definition editor", 9);
-            frame.commands.push(ScreenCommand::Push(screen));
+            let screen = GameDefinitionEntry::new(frame);
+            frame.commands.push(ScreenCommand::Push(Box::new(screen)));
         }
         button_x -= 44.0;
         let support_options = IconButtonOptions::tooltip("Support the Author").id("home:support");

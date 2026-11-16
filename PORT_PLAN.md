@@ -272,9 +272,10 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   `data/pdf_doc_cache.rs`, zoom, scroll persistence; at the table, in the deck editor; Phase 9's editor reuses it)
 
 ### Phase 9 — Game definition editor
-- [ ] `gamedef_ops`, entry screen
-- [ ] Tabs: General, Playmats, Zones, Sets (folder import, in-process JPEG rotation), Cards, Tokens, Scenarios
-- [ ] Tools dialogs (duplicate ids, merge duplicate images)
+- [x] `gamedef_ops` (`data/gamedef_ops.rs`), entry screen (`screens/gamedef/mod.rs`)
+- [x] Tabs: General, Playmats, Zones, Sets (folder import, in-process JPEG rotation via SDL3_image's
+  `IMG_SaveJPG` in `data/image_utils.rs`), Cards, Tokens, Scenarios (`screens/gamedef/*_tab.rs`)
+- [x] Tools dialogs (duplicate ids, merge duplicate images) (`screens/gamedef/dialogs.rs`)
 
 ### Phase 10 — Lobby server client
 - [ ] `server_client`, `asset_sync` + worker, server `deck_store`
@@ -459,3 +460,14 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   over. Side by side with the original (real library, read only): the Lorcana deck editor, the Lorcana PDF and the
   Spellfire Markdown rulebook match. Dev hooks: `GAMETABLE_SCREEN=deck_editor|deck_editor_select`,
   `GAMETABLE_DECK_SETUP=add,rulebook`, `GAMETABLE_TABLE_SETUP=rulebook`. Next: Phase 9 (game definition editor).
+- 2026-11-16: **Phase 9 complete.** The game definition editor: entry screen (library grid, change folder, New / Open
+  Existing), the editor shell (toolbar, tab bar with Tokens/Scenarios only while the game uses them, Ctrl+R
+  documents, Tools menu, the "Cards Without a Set" save warning) and all seven tabs. List items that the Lua keyed
+  by table identity get `StableKeys` (`screens/gamedef/common.rs`) so widget ids follow items through reorders;
+  card keys live on the shared `EditorModel` so the Sets tab, Tools dialogs and Cards tab stay in step. Landscape
+  card art turns portrait in-process (PNG and JPEG) instead of through PowerShell/System.Drawing. Side by side with
+  the original on the real library (read only, nothing saved): General, Playmats, Zones, Sets, Cards (with a
+  selection) for Lorcana, Tokens and Scenarios (Zones, Card Placement, Deck Builder) for Arkham, and the entry screen
+  all match (≤2.5% differing samples, all from card-art filtering). Dev hooks: `GAMETABLE_SCREEN=gamedef|gamedef_entry`,
+  `GAMETABLE_GAME=<folder>`, `GAMETABLE_GAMEDEF_TAB=<tab>[,select][,placement|deck]`. Not yet exercised in the GUI:
+  saving, image/set import, the Tools dialogs, drag-reordering. Next: Phase 10 (lobby server client).
