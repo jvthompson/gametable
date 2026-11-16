@@ -12,5 +12,6 @@ pub mod card_filter_bar;
 pub mod color_picker;
 pub mod components;
 pub mod filter_menu;
+pub mod markdown;
 pub mod panel;
 pub mod save_name_dialog;

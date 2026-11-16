@@ -21,6 +21,7 @@ use sdl3::event::{Event, WindowEvent};
 use sdl3::mouse::{Cursor, SystemCursor};
 use sdl3::video::Window;
 
+use crate::data::display_settings::HandSettings;
 use crate::data::paths::{AppPaths, DEFAULT_IDENTITY, LEGACY_IDENTITY};
 use crate::data::profile;
 use crate::data::settings::{Settings, keys};
@@ -105,8 +106,14 @@ pub struct Frame<'a> {
     pub theme: &'a mut Theme,
     pub clipboard: &'a mut dyn Clipboard,
     pub commands: &'a mut Vec<ScreenCommand>,
+    /// `App.profile`: the player's name, colour and avatar.
+    pub profile: &'a mut PlayerProfile,
+    /// The hand settings with their live (unsaved while a slider is held) values.
+    pub hand_settings: &'a mut HandSettings,
     /// The UI scale (logical units to physical pixels).
     pub scale: f32,
+    /// The display's own scaling (1 = 96 DPI), as Settings reports it.
+    pub dpi_scale: f32,
     /// Logical size of the whole window.
     pub width: f32,
     pub height: f32,
@@ -240,6 +247,7 @@ pub struct App {
     framed: bool,
     screens: Vec<Box<dyn Screen>>,
     pub profile: PlayerProfile,
+    hand_settings: HandSettings,
     applied_scale: f32,
     dpi_scale: f32,
     dpi_checked_at: f64,
@@ -323,6 +331,7 @@ impl App {
             framed: false,
             screens: Vec::new(),
             profile,
+            hand_settings: HandSettings::default(),
             applied_scale: 0.0,
             dpi_scale: 1.0,
             dpi_checked_at: -1.0,
@@ -424,7 +433,10 @@ impl App {
             theme: &mut self.theme,
             clipboard: &mut self.clipboard,
             commands: &mut commands,
+            profile: &mut self.profile,
+            hand_settings: &mut self.hand_settings,
             scale,
+            dpi_scale: self.dpi_scale,
             width: physical_width as f32 / scale,
             height: physical_height as f32 / scale,
             time,
@@ -709,7 +721,9 @@ impl App {
         self.fonts.flush(&mut self.renderer)?;
         let clear = self.theme.palette().surface;
         self.frame_count += 1;
-        let capture_now = self.capture_path.is_some() && self.frame_count == 30;
+        let capture_frame =
+            std::env::var("GAMETABLE_CAPTURE_FRAME").ok().and_then(|frame| frame.parse().ok()).unwrap_or(30);
+        let capture_now = self.capture_path.is_some() && self.frame_count == capture_frame;
         if let Some(captured) = self.renderer.render(&self.window, &list, clear, capture_now)?
             && let Some(path) = &self.capture_path
         {
@@ -722,6 +736,12 @@ impl App {
     /// Pushes a screen (development hooks open a screen directly at startup).
     pub fn push(&mut self, screen: Box<dyn Screen>) {
         self.run_commands(vec![ScreenCommand::Push(screen)]);
+    }
+
+    /// Pushes a screen that needs the frame context to be built.
+    pub fn push_with_frame(&mut self, build: impl FnOnce(&Frame) -> Box<dyn Screen>) {
+        let (screen, _) = self.with_frame(|frame, _| build(frame));
+        self.push(screen);
     }
 
     pub fn video(&self) -> &sdl3::VideoSubsystem {

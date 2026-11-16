@@ -68,6 +68,77 @@ pub fn base_name(path: &str) -> &str {
     }
 }
 
+/// The platform's path separator as text (`fs.sep`).
+pub const SEPARATOR: &str = if cfg!(windows) { "\\" } else { "/" };
+
+/// `fs.normalize`: on Windows every `/` becomes `\`; elsewhere the path is unchanged.
+pub fn normalize_separators(path: &str) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
+}
+
+/// `fs.join(...)`: joins non-empty parts with one separator between them (trailing separators
+/// of the left part and leading ones of the right part are dropped), then normalizes.
+pub fn join_path(parts: &[&str]) -> String {
+    let mut joined = String::new();
+    for part in parts.iter().filter(|part| !part.is_empty()) {
+        if joined.is_empty() {
+            joined.push_str(part);
+        } else {
+            let left_length = joined.trim_end_matches(['/', '\\']).len();
+            joined.truncate(left_length);
+            joined.push_str(SEPARATOR);
+            joined.push_str(part.trim_start_matches(['/', '\\']));
+        }
+    }
+    normalize_separators(&joined)
+}
+
+/// `fs.dirname`: everything before the last separator; a bare drive gets its separator back
+/// (`C:\x` -> `C:\`), a root stays the root and a plain name gives `"."`.
+pub fn parent_folder(path: &str) -> String {
+    let parent = path.rfind(['/', '\\']).map(|separator| &path[..separator]);
+    match parent {
+        None | Some("") => {
+            if path.starts_with(['/', '\\']) {
+                SEPARATOR.to_string()
+            } else {
+                ".".to_string()
+            }
+        }
+        Some(parent) => {
+            let bytes = parent.as_bytes();
+            if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+                format!("{parent}{SEPARATOR}")
+            } else {
+                parent.to_string()
+            }
+        }
+    }
+}
+
+/// `gamedef_ops.isSamePath`: equal after normalizing separators and dropping trailing ones,
+/// ignoring case on Windows.
+pub fn is_same_path(first: &str, second: &str) -> bool {
+    fn comparable(path: &str) -> String {
+        let normalized = normalize_separators(path);
+        let trimmed = normalized.trim_end_matches(SEPARATOR);
+        if cfg!(windows) { trimmed.to_lowercase() } else { trimmed.to_string() }
+    }
+    comparable(first) == comparable(second)
+}
+
+/// `gamedef_ops.directoryHasEntries`: the folder exists and is not empty.
+pub fn folder_has_entries(folder: &Path) -> bool {
+    list_folder(folder).is_some_and(|entries| !entries.is_empty())
+}
+
+/// `gamedef_ops.moveDirectoryContents`: copies everything over (overwriting), then deletes the
+/// source folder.
+pub fn move_folder_contents(from: &Path, to: &Path) -> std::io::Result<()> {
+    copy_tree(from, to)?;
+    remove_tree(from)
+}
+
 /// Removes a file, or a folder and everything in it.
 pub fn remove_tree(path: &Path) -> std::io::Result<()> {
     if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }
@@ -128,6 +199,19 @@ mod tests {
         assert_eq!(base_name("a/b\\c.txt"), "c.txt");
         assert_eq!(base_name("a/b/"), "b");
         assert_eq!(base_name("plain"), "plain");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn joining_like_the_original() {
+        assert_eq!(join_path(&["C:\\games\\", "/lorcana", "set1/card.png"]), "C:\\games\\lorcana\\set1\\card.png");
+        assert_eq!(join_path(&["", "a", "", "b"]), "a\\b");
+        assert_eq!(parent_folder("C:\\games\\lorcana"), "C:\\games");
+        assert_eq!(parent_folder("C:\\games"), "C:\\");
+        assert_eq!(parent_folder("\\top"), "\\");
+        assert_eq!(parent_folder("name"), ".");
+        assert!(is_same_path("C:/Games/", "c:\\games"));
+        assert!(!is_same_path("C:\\games\\a", "C:\\games\\b"));
     }
 
     #[test]

@@ -6,3 +6,4 @@ pub mod graphics;
 pub mod screens;
 pub mod sound;
 pub mod ui;
+pub mod version;

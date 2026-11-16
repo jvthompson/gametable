@@ -4,7 +4,8 @@
 use std::path::PathBuf;
 
 use crate::app::input::KeyboardState;
-use crate::app::{Frame, MemoryClipboard, ScreenCommand, find_assets_folder};
+use crate::app::{Frame, MemoryClipboard, PlayerProfile, ScreenCommand, find_assets_folder};
+use crate::data::display_settings::HandSettings;
 use crate::data::paths::AppPaths;
 use crate::data::settings::Settings;
 use crate::graphics::draw_list::DrawList;
@@ -25,6 +26,8 @@ pub struct UiHarness {
     pub theme: Theme,
     pub clipboard: MemoryClipboard,
     pub commands: Vec<ScreenCommand>,
+    pub profile: PlayerProfile,
+    pub hand_settings: HandSettings,
     pub width: f32,
     pub height: f32,
     pub time: f64,
@@ -48,6 +51,8 @@ impl UiHarness {
             theme: Theme::new(false),
             clipboard: MemoryClipboard::default(),
             commands: Vec::new(),
+            profile: PlayerProfile::load(&Settings::in_memory()),
+            hand_settings: HandSettings::default(),
             width: 1280.0,
             height: 720.0,
             time: 0.0,
@@ -69,7 +74,10 @@ impl UiHarness {
             theme: &mut self.theme,
             clipboard: &mut self.clipboard,
             commands: &mut self.commands,
+            profile: &mut self.profile,
+            hand_settings: &mut self.hand_settings,
             scale: 1.0,
+            dpi_scale: 1.0,
             width: self.width,
             height: self.height,
             time: self.time,

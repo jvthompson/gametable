@@ -1,9 +1,13 @@
-//! Player profile, reconnect, Discord-token and theme settings. Port of `src/data/profile.lua`
-//! (the avatar file operations come with the image utilities).
+//! Player profile, reconnect, Discord-token and theme settings, plus the avatar file. Port of
+//! `src/data/profile.lua`.
+
+use std::path::Path;
 
 use gametable_core::json::{JsonObject, JsonValue};
 
+use super::file_system::list_folder;
 use super::settings::{Settings, keys};
+use crate::graphics::image_data::RgbaImage;
 
 /// How many recently joined hosts/servers are remembered.
 const MAX_RECENT_SERVERS: usize = 5;
@@ -126,9 +130,64 @@ pub fn set_dark_mode(settings: &mut Settings, enabled: bool) {
     settings.set(keys::DARK_MODE, enabled);
 }
 
+// ---------------------------------------------------------------------------
+// Avatar files (player_avatar_file_ops.dart, avatar_image_utils.dart)
+// ---------------------------------------------------------------------------
+
+/// The longer side of a stored avatar.
+pub const AVATAR_MAX_DIMENSION: u32 = 256;
+
+/// Any image -> PNG bytes with the longer side capped at 256.
+pub fn resize_avatar_bytes(source_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    RgbaImage::decode(source_bytes)?.downscaled_to_fit(AVATAR_MAX_DIMENSION).encode_png()
+}
+
+/// Removes every `avatar.*` file in the folder.
+fn clear_existing_avatars(avatar_folder: &Path) {
+    for entry in list_folder(avatar_folder).unwrap_or_default() {
+        if !entry.is_folder && entry.name.starts_with("avatar.") {
+            let _ = std::fs::remove_file(avatar_folder.join(&entry.name));
+        }
+    }
+}
+
+/// Resizes the picked image and stores it as `<avatar folder>/avatar.png`; returns that path.
+pub fn save_avatar(source_path: &str, avatar_folder: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(source_path).map_err(|error| format!("{source_path}: {error}"))?;
+    let png = resize_avatar_bytes(&bytes)?;
+    std::fs::create_dir_all(avatar_folder).map_err(|error| error.to_string())?;
+    clear_existing_avatars(avatar_folder);
+    let destination = avatar_folder.join("avatar.png");
+    std::fs::write(&destination, png).map_err(|error| error.to_string())?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+pub fn delete_avatar(avatar_folder: &Path) {
+    clear_existing_avatars(avatar_folder);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn avatars_are_resized_and_replaced() {
+        let folder = std::env::temp_dir().join(format!("gametable-avatar-{}", gametable_core::uuid::new_v4_uuid()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let big = RgbaImage { width: 600, height: 300, pixels: vec![200; 600 * 300 * 4] };
+        let source = folder.join("source.png");
+        big.save_png(&source).unwrap();
+        std::fs::write(folder.join("avatar.jpg"), "old").unwrap();
+        let saved = save_avatar(&source.to_string_lossy(), &folder.join("avatar_dir")).unwrap();
+        let stored = RgbaImage::load(Path::new(&saved)).unwrap();
+        assert_eq!((stored.width, stored.height), (256, 128));
+        let avatar_dir = folder.join("avatar_dir");
+        std::fs::write(avatar_dir.join("avatar.jpg"), "stale").unwrap();
+        delete_avatar(&avatar_dir);
+        assert!(list_folder(&avatar_dir).unwrap().is_empty());
+        assert!(save_avatar("Z:\\missing.png", &avatar_dir).is_err());
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 
     #[test]
     fn recent_servers_keep_five_most_recent_first() {

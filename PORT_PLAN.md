@@ -209,10 +209,28 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   alerts). `screens/kit_gallery.rs` shows every widget (`GAMETABLE_SCREEN=kit_gallery`, overlays opened with
   `GAMETABLE_GALLERY_OPEN=dialog,confirm,menu,picker,save,panel`); checked by screenshot in light and dark.
 ### Phase 5 — Basic screens + data
-- [ ] `game_loader`, `deck_library`, `deck_store` (local), `save_files`, `image_resolver`, `image_utils`
-- [ ] Home (profile, join panel, recent servers, update banner)
-- [ ] Settings, Controls (Markdown renderer), Support dialogs
-- [ ] File picker, game picker, player count, practice select
+- [x] `game_loader`, `deck_library`, `deck_store` (local), `save_files`, `image_resolver`, `image_utils` — `data/`.
+      `fs.join`/`dirname`/`isSamePath` are string helpers in `data/file_system.rs` (paths in models stay text, as in
+      Lua). `deck_store.rs` has the `DeckStore` trait (callback API like the original) with the local store; the
+      server store comes with Phase 10. `image_utils` was already `graphics/image_data.rs` + `webp.rs`; only
+      `rotateLandscapeImages` (JPEG, editor import) is left for Phase 9. Local time for saves/logs comes from SDL
+      (`save_files::local_now`). The real library (11 games + Standard 52) loads with no errors
+      (`GAMETABLE_LIBRARY=<folder> cargo test -p gametable --lib real_library -- --ignored --nocapture`).
+- [x] Home (profile, join panel, recent servers popup, reconnect banner, wide/narrow layouts, corner tools, build
+      label) — `screens/home.rs`; Edit Player Settings (avatar resize to 256 px PNG) — `screens/edit_player_settings.rs`.
+      The update banner is wired but stays hidden until the updater (Phase 11). Join/Host/Deck Editor/Game
+      Definition Editor open a `NotPortedYet` stand-in naming the phase that brings them.
+- [x] Settings, Controls (Markdown renderer `ui/markdown.rs`, shared with the rulebook later), Support dialogs —
+      `screens/settings_dialog.rs`, `screens/info_dialogs.rs`. `CONTROLS.md` / `SUPPORT-ME.md` are copied into
+      `assets/` (the original packed them into game.love).
+- [x] File picker, game picker (+ "Move Existing Files?" prompt), player count, practice select —
+      `screens/file_picker.rs`, `screens/game_picker.rs`, `screens/player_count.rs`, `screens/practice_select.rs`.
+      Choosing a game / Load a Saved Game leads to the stand-in until Phase 6.
+- Checks: unit tests for every data module; screenshots of Home (light/dark, recent popup), Settings, Support,
+  Controls, Edit Player and the game grid with the real library. Dev hooks: `GAMETABLE_SCREEN=player_count|
+  practice_select|kit_gallery`, `GAMETABLE_HOME_OPEN=settings|support|controls|editplayer|recent`,
+  `GAMETABLE_CAPTURE_FRAME=<n>` (default 30). The file picker and the folder-change flow are not yet clicked
+  through by hand.
 
 ### Phase 6 — The table
 - [ ] `table_view` (camera, layout, hit-test, felt, playmats, seat mirroring)
@@ -313,7 +331,13 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   without this a field of a vanished dialog would keep swallowing keys).
 - UI kit: wheel steps are SDL3's integer deltas (`integer_y`), matching LÖVE 11's whole-number `wheelmoved`.
 - `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
-  will read local time from SDL.
+  reads local time from SDL (`save_files::local_now`).
+- `game_loader` rebuilds each loaded game from a field list that omits `currentTurnColor`, so a game's own
+  current-turn colour never takes effect (Settings and the table fall back to the player's/default colour).
+  `mergeLocalImagePaths` (client joining a host) likewise drops `tableColor`, `playmatBorderColor` and
+  `currentTurnColor`. Both kept as in the original. Check in Phase 9 whether the editor loads through
+  `game_loader` (if so, saving from the editor would drop the field).
+- Home's avatar: `widgets.avatar` draws its border unless `showBorder == false`, so callers that pass nothing get one.
 
 ## Build and tooling notes
 
@@ -380,3 +404,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   of a draw list. `data/deck_library.rs` has `validate_name` (rest in Phase 5). 10 interaction tests + unit tests.
   Next: Phase 5 (`game_loader`, `deck_library`, `deck_store`, `save_files`, `image_resolver`, `image_utils`,
   then Home, Settings, Controls, Support, file/game pickers, player count, practice select).
+- 2026-11-16: **Phase 5 complete.** Data modules, the real Home screen (replacing the placeholder), Settings,
+  Controls/Support with a Markdown renderer, Edit Player Settings, the in-app file picker, the game picker grid,
+  player count and practice select. `Frame` gained `profile`, `hand_settings` and `dpi_scale`. Unported
+  destinations open `screens/not_ported.rs`. 85 client unit tests + 10 UI tests pass. Next: Phase 6, the table
+  (`table_view`, `card_render`, `selection`, `card_pool_grid`, `table_screen`, Host `controller`, practice game,
+  save/load game + player remap).

@@ -2,7 +2,7 @@
 //! methods on [`Frame`] so widgets and screens call `frame.text(...)`, `frame.rect(...)`.
 
 use crate::app::Frame;
-use crate::graphics::draw_list::Color;
+use crate::graphics::draw_list::{Color, TextureInfo};
 use crate::graphics::tessellation::DrawMode;
 use crate::graphics::text::FontKey;
 use crate::graphics::text_layout::Align;
@@ -283,6 +283,13 @@ impl Frame<'_> {
     }
 
     /// `ui.divider`: a 1-unit horizontal line (outline variant by default).
+    /// `love.graphics.draw(image, x, y, 0, scale, scale)` tinted white at `alpha`.
+    pub fn draw_image(&mut self, texture: TextureInfo, x: f32, y: f32, scale: f32, alpha: f32) {
+        let list = self.ui.list();
+        list.set_color(Color::rgba(1.0, 1.0, 1.0, alpha));
+        list.draw_texture(texture, None, x, y, 0.0, scale, scale, 0.0, 0.0);
+    }
+
     pub fn divider(&mut self, x: f32, y: f32, width: f32, color: Option<Color>) {
         let color = color.unwrap_or(self.palette().outline_variant);
         self.fill_rect(x, y, width, 1.0, 0.0, color);

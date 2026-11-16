@@ -1,0 +1,229 @@
+//! The app Settings dialog, opened from Home and from the in-game menu. Port of
+//! `src/ui/screens/settings_dialog.lua`. New settings go here as sections: a heading, then rows.
+
+use crate::app::{Frame, UI_SCALE_OPTIONS, set_ui_scale_setting, ui_scale_setting};
+use crate::data::display_settings::{
+    HAND_SETTINGS, TableColor, felt_texture_enabled, is_selection_color_default, reset_selection_color,
+    selection_color, set_felt_texture_enabled, set_selection_color,
+};
+use crate::data::profile;
+use crate::ui::draw::TextOptions;
+use crate::ui::dropdown::DropdownOptions;
+use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
+use crate::ui::theme::Weight;
+use crate::ui::widgets::{BUTTON_HEIGHT, ButtonOptions, Choice, SliderOptions, ToggleOptions};
+
+/// `pct(v)`: a scale as a whole percentage.
+fn percent(value: f32) -> String {
+    format!("{}%", (value * 100.0 + 0.5).floor())
+}
+
+/// The current game's own colours, when opened over a game.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GameColors {
+    pub table_color: Option<String>,
+    pub playmat_border_color: Option<String>,
+    pub current_turn_color: Option<String>,
+}
+
+/// The dialog's options (`opts`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SettingsDialog {
+    /// Opened over the game table (which always draws light).
+    pub in_game: bool,
+    pub game_colors: GameColors,
+}
+
+const SUBTITLE_SIZE: f32 = 12.0;
+
+impl SettingsDialog {
+    pub fn new() -> SettingsDialog {
+        SettingsDialog::default()
+    }
+
+    fn heading(frame: &mut Frame, text: &str, x: f32, y: f32) -> f32 {
+        let color = frame.palette().primary;
+        frame.text(text, x, y, TextOptions::new().size(14.0).bold().color(color));
+        28.0
+    }
+
+    /// A text button 12 units left of the content edge; true when clicked.
+    fn reset_button(frame: &mut Frame, label: &str, id: &str, x: f32, y: f32, disabled: bool) -> bool {
+        let options = ButtonOptions::text().id(id).disabled(disabled);
+        let width = frame.button_width(label, &options);
+        frame.button(label, x - 12.0, y, Some(width), None, &options)
+    }
+
+    /// One table colour with its reset button; returns the height used.
+    #[allow(clippy::too_many_arguments)]
+    fn table_color_row(
+        frame: &mut Frame,
+        color: TableColor,
+        id: &str,
+        label: &str,
+        reset_label: &str,
+        game_hex: Option<&str>,
+        x: f32,
+        y: f32,
+        width: f32,
+    ) -> f32 {
+        let label_background = Some(frame.palette().surface_container_high);
+        let current = color.resolve(frame.settings, game_hex);
+        let (picked, field_height) = frame.color_field(id, x, y, width, current, Some(label), label_background);
+        color.set(frame.settings, picked, game_hex);
+        let mut row_y = y + field_height + 4.0;
+        let is_default = color.is_default(frame.settings);
+        if Self::reset_button(frame, reset_label, &format!("{id}:reset"), x, row_y, is_default) {
+            color.reset(frame.settings);
+        }
+        row_y += BUTTON_HEIGHT + 16.0;
+        row_y - y
+    }
+
+    /// Shows the dialog; false once it closed.
+    pub fn show(&mut self, frame: &mut Frame) -> bool {
+        let actions = [DialogAction::filled("Done")];
+        let spec = DialogSpec { title: Some("Settings"), width: 440.0, actions: &actions, ..DialogSpec::default() };
+        let response = frame.dialog("settings", &spec, |frame, x, y, width| {
+            let palette = frame.palette();
+            let label_background = Some(palette.surface_container_high);
+            let mut row_y = y;
+
+            row_y += Self::heading(frame, "Display", x, row_y);
+            let choices: Vec<Choice<f32>> = UI_SCALE_OPTIONS
+                .iter()
+                .map(|&value| {
+                    Choice::new(value, if value == 1.0 { "100% (Default)".to_string() } else { percent(value) })
+                })
+                .collect();
+            let current = ui_scale_setting(frame.settings);
+            let dropdown_options =
+                DropdownOptions { label: Some("UI scale"), label_background, ..DropdownOptions::default() };
+            let picked =
+                frame.dropdown("settings:uiScale", x, row_y + 6.0, width, &choices, current, &dropdown_options);
+            if picked != current {
+                set_ui_scale_setting(frame.settings, picked);
+            }
+            row_y += 6.0 + 48.0 + 8.0;
+            let (dpi, effective) = (frame.dpi_scale, frame.scale);
+            let mut note =
+                format!("Windows display scaling: {}. Effective scale: {}.", percent(dpi), percent(effective));
+            if effective + 0.005 < dpi * ui_scale_setting(frame.settings) {
+                note.push_str(" Limited so the app still fits on this screen.");
+            }
+            let note_options = TextOptions::new().width(width).size(12.0).color(palette.on_surface_variant);
+            frame.text(&note, x, row_y, note_options);
+            row_y += frame.text_height(&note, width, 12.0, Weight::Regular) + 24.0;
+
+            row_y += Self::heading(frame, "Appearance", x, row_y);
+            let subtitle = self.in_game.then_some("The game table always uses the light theme.");
+            let is_dark = frame.theme.is_dark;
+            let options = ToggleOptions { subtitle, ..ToggleOptions::default() };
+            if frame.switch_row("settings:dark", "Dark mode", x, row_y, width, is_dark, &options) != is_dark {
+                frame.theme.is_dark = !is_dark;
+                profile::set_dark_mode(frame.settings, frame.theme.is_dark);
+            }
+            row_y += 32.0;
+            if let Some(subtitle) = subtitle {
+                row_y += frame.text_height(subtitle, width - 64.0, SUBTITLE_SIZE, Weight::Regular) + 4.0;
+            }
+            row_y += 24.0;
+
+            row_y += Self::heading(frame, "Hand", x, row_y);
+            for definition in HAND_SETTINGS {
+                let setting = definition.setting;
+                let value = frame.hand_settings.get(frame.settings, setting) as f32;
+                let format = move |value: f32| setting.format_value(f64::from(value));
+                let slider_options = SliderOptions { step: Some(definition.step as f32), disabled: false };
+                let (new_value, held) = frame.slider_row(
+                    &format!("settings:hand:{}", definition.id),
+                    definition.label,
+                    x,
+                    row_y,
+                    width,
+                    value,
+                    definition.min as f32,
+                    definition.max as f32,
+                    &slider_options,
+                    Some(&format),
+                );
+                // Applied live while dragging; saved once the slider is released.
+                frame.hand_settings.set(frame.settings, setting, f64::from(new_value), held);
+                row_y += 64.0;
+            }
+            let hand_is_default = frame.hand_settings.is_default(frame.settings);
+            if Self::reset_button(frame, "Reset hand to defaults", "settings:hand:reset", x, row_y, hand_is_default) {
+                frame.hand_settings.reset(frame.settings);
+            }
+            row_y += BUTTON_HEIGHT + 16.0;
+
+            row_y += Self::heading(frame, "Table", x, row_y);
+            let felt_texture_on = felt_texture_enabled(frame.settings);
+            let felt_subtitle = "Adds a subtle woven-cloth texture to the table.";
+            let options = ToggleOptions { subtitle: Some(felt_subtitle), ..ToggleOptions::default() };
+            if frame.switch_row("settings:feltTexture", "Felt texture", x, row_y, width, felt_texture_on, &options)
+                != felt_texture_on
+            {
+                set_felt_texture_enabled(frame.settings, !felt_texture_on);
+            }
+            row_y += 32.0 + frame.text_height(felt_subtitle, width - 64.0, SUBTITLE_SIZE, Weight::Regular) + 4.0 + 24.0;
+
+            let current = selection_color(frame.settings);
+            let (picked, field_height) = frame.color_field(
+                "settings:selectionColor",
+                x,
+                row_y,
+                width,
+                current,
+                Some("Selection Color"),
+                label_background,
+            );
+            set_selection_color(frame.settings, picked);
+            row_y += field_height + 4.0;
+            let selection_is_default = is_selection_color_default(frame.settings);
+            let reset_id = "settings:selectionColor:reset";
+            if Self::reset_button(frame, "Reset selection color", reset_id, x, row_y, selection_is_default) {
+                reset_selection_color(frame.settings);
+            }
+            row_y += BUTTON_HEIGHT + 16.0;
+
+            let colors = &self.game_colors;
+            row_y += Self::table_color_row(
+                frame,
+                TableColor::Felt,
+                "settings:feltColor",
+                "Tabletop Color",
+                "Reset table color",
+                colors.table_color.as_deref(),
+                x,
+                row_y,
+                width,
+            );
+            row_y += Self::table_color_row(
+                frame,
+                TableColor::PlaymatBorder,
+                "settings:playmatBorderColor",
+                "Playmat Border Color",
+                "Reset playmat border color",
+                colors.playmat_border_color.as_deref(),
+                x,
+                row_y,
+                width,
+            );
+            row_y += Self::table_color_row(
+                frame,
+                TableColor::CurrentTurn,
+                "settings:currentTurnColor",
+                "Current Turn Color",
+                "Reset current turn color",
+                colors.current_turn_color.as_deref(),
+                x,
+                row_y,
+                width,
+            );
+            // The last row has no gap below it.
+            row_y - 16.0 - y
+        });
+        response == DialogResponse::Open
+    }
+}

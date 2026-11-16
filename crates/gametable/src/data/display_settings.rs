@@ -247,6 +247,14 @@ pub fn set_selection_color(settings: &mut Settings, argb: ArgbColor) {
     }
 }
 
+pub fn is_selection_color_default(settings: &Settings) -> bool {
+    selection_color(settings) == DEFAULT_SELECTION_COLOR
+}
+
+pub fn reset_selection_color(settings: &mut Settings) {
+    set_selection_color(settings, DEFAULT_SELECTION_COLOR);
+}
+
 /// Whether the felt's woven-cloth shader is on (default: yes; only `false` turns it off).
 pub fn felt_texture_enabled(settings: &Settings) -> bool {
     settings.flag(keys::FELT_TEXTURE) != Some(false)
