@@ -5,5 +5,6 @@ pub mod data;
 pub mod graphics;
 pub mod screens;
 pub mod sound;
+pub mod table;
 pub mod ui;
 pub mod version;

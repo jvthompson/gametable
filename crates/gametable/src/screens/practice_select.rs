@@ -4,14 +4,15 @@
 use gametable_core::color::BOARD_WIDGET_COLOR_PALETTE;
 use gametable_core::models::{PlayerInfo, PlayerRole};
 
+use std::collections::HashMap;
+
 use crate::app::{Frame, PlayerProfile, Screen, ScreenCommand};
 use crate::screens::game_picker::GamePicker;
-use crate::screens::not_ported::NotPortedYet;
+use crate::screens::load_saved_game::{LoadSavedGame, OnLoaded};
+use crate::screens::practice_game::PracticeGame;
 use crate::ui::widgets::{ButtonOptions, ButtonVariant};
 
 pub struct PracticeSelect {
-    /// Seats for the practice table (Phase 6).
-    #[allow(dead_code)]
     player_count: usize,
     picker: GamePicker,
 }
@@ -52,14 +53,19 @@ impl Screen for PracticeSelect {
         let options = ButtonOptions::variant(ButtonVariant::Outlined).icon("folder_open");
         let button_width = frame.button_width(label, &options);
         if frame.button(label, x + width - 16.0 - button_width, y + 16.0, Some(button_width), None, &options) {
-            let screen = NotPortedYet::boxed("Load Saved Game", "Loading a saved game", 6);
-            frame.commands.push(ScreenCommand::Push(screen));
+            let players = build_practice_players(frame.profile, self.player_count);
+            let seats = players.clone();
+            let on_loaded: OnLoaded = Box::new(move |frame, game, state| {
+                Box::new(PracticeGame::resume(frame, game, &seats, state)) as Box<dyn Screen>
+            });
+            let screen = LoadSavedGame::new(frame, players, on_loaded);
+            frame.commands.push(ScreenCommand::Push(Box::new(screen)));
         }
         if let Some(game) = self.picker.draw(frame, x, y + 56.0, width, height - 56.0) {
-            // The practice table (seats from `build_practice_players`, an empty deck map so each
-            // seat loads a deck at the table) arrives with Phase 6.
-            let screen = NotPortedYet::boxed(game.name.clone(), "The practice game table", 6);
-            frame.commands.push(ScreenCommand::Push(screen));
+            // An empty deck map: built-deck zones start empty and each seat loads a deck at the table.
+            let players = build_practice_players(frame.profile, self.player_count);
+            let screen = PracticeGame::new(frame, game, players, HashMap::new());
+            frame.commands.push(ScreenCommand::Push(Box::new(screen)));
         }
     }
 }

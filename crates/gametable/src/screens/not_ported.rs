@@ -28,7 +28,7 @@ impl Screen for NotPortedYet {
     fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {
         let palette = frame.palette();
         let center_y = y + height / 2.0;
-        frame.icon_centered("construction", x, center_y - 72.0, width, 48.0, 40.0, palette.on_surface_variant);
+        frame.icon_centered("build", x, center_y - 72.0, width, 48.0, 40.0, palette.on_surface_variant);
         let heading = TextOptions::new().size(18.0).bold().width(width).centered();
         frame.text(&self.feature, x, center_y - 12.0, heading);
         let line = format!("Not ported yet: this arrives in Phase {} of the GameTable port.", self.phase);

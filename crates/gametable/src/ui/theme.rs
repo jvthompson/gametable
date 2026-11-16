@@ -154,16 +154,19 @@ pub struct Theme {
     /// The light palette is in use regardless of `is_dark` (the original set `theme.c` to the
     /// light scheme around the game table while `theme.isDark` stayed as it was).
     pub force_light: bool,
+    /// The dark palette is in use for a moment (the table's dark panels set `theme.c` to the
+    /// dark scheme while drawing their fields); wins over `force_light`.
+    pub force_dark: bool,
 }
 
 impl Theme {
     pub fn new(is_dark: bool) -> Theme {
-        Theme { is_dark, force_light: false }
+        Theme { is_dark, force_light: false, force_dark: false }
     }
 
     /// `theme.c`.
     pub fn palette(&self) -> &'static Palette {
-        if self.is_dark && !self.force_light { &DARK } else { &LIGHT }
+        if self.force_dark || (self.is_dark && !self.force_light) { &DARK } else { &LIGHT }
     }
 }
 

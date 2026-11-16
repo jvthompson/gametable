@@ -233,12 +233,29 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   through by hand.
 
 ### Phase 6 — The table
-- [ ] `table_view` (camera, layout, hit-test, felt, playmats, seat mirroring)
-- [ ] `card_render` (faces, backs, preview), `selection`, `card_pool_grid`
-- [ ] `table_screen`: drag/drop rules, hotkeys, context menus
-- [ ] Overlays: search, card library, token picker, game log, chat, game menu
-- [ ] Animations (discard flight, shuffle wiggle), drag ghosts, arrows
-- [ ] `controller` (Host), practice game, save game, load saved game + player remap
+- [x] `table_view` (camera, layout, hit-test, felt, playmats, seat mirroring) — `table/view.rs`.
+- [x] `card_render` (faces, backs, preview), `selection`, `card_pool_grid` — `table/card_render.rs`,
+      `table/selection.rs`, `table/card_pool_grid.rs`.
+- [x] `table_screen`: drag/drop rules, hotkeys, context menus — `table/screen.rs` (state, derived data, selection,
+      playmats, hotkeys, keyboard), `table/input.rs` (drags, drops, box select, arrows, pan/zoom, clicks),
+      `table/menus.rs` (menus as a `MenuAction` enum; dialogs as `TableDialog`).
+- [x] Overlays: search, card library, token picker, game log, chat (practice: local /flip and /roll), game menu —
+      `table/panels.rs`. The rulebook (Ctrl+R) shows a "not ported yet" snackbar until Phase 8.
+- [x] Animations (discard flight, shuffle wiggle, rotation easing, hand lift, drag ghost scaling), drag ghosts, arrows.
+- [x] `controller` (Host) — `table/actions.rs`: every controller method is a `TableAction`; `apply_as_host` keeps the
+      Host controller's ownership checks; the `TableBackend` trait lets the Phase 7 client send the same actions as
+      requests. Practice game — `screens/practice_game.rs`; Save Game (save-name dialog); Load Saved Game + Match
+      Returning Players — `screens/load_saved_game.rs`. Pulled forward from Phase 8: the in-game Load Deck dialog and
+      Save Deck prompt (`screens/deck_library_dialog.rs`); from Phase 9: the token choosers/stepper
+      (`screens/token_choosers.rs`) used by Change Tokens.
+- Checks: `tests/table.rs` drives a Standard 52 practice table through real frames (draw with 1, drag hand→table,
+  F/E/Q/X, drop onto discard, zone menu → Search, box select + group move). Side-by-side captures against the
+  original LÖVE app (`love.exe . --identity <test> --eval ... --shot ... --frames N`) for Standard 52, Lorcana and
+  Middle-earth: empty tables, a dealt hand with cards played, Game Menu, Card Library, log + chat, token picker and
+  Load Deck — layout identical (pixel diffs only in glyph rasterization and shuffled card faces). Dev hooks:
+  `GAMETABLE_SCREEN=practice`, `GAMETABLE_GAME=<id>`, `GAMETABLE_PLAYERS=<n>`, `GAMETABLE_PRACTICE_DECKS=full`,
+  `GAMETABLE_TABLE_SETUP=draw,play,menu,library,log,chat,tokens,loaddeck`. Not yet exercised by hand: token bags,
+  deck widgets, pack generator, card tokens, scenarios, Load Saved Game's seat matching.
 
 ### Phase 7 — Peer multiplayer
 - [ ] Client `protocol` connection, `host_server`, `game_client`, `controller` (Client)
@@ -338,6 +355,11 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   `currentTurnColor`. Both kept as in the original. Check in Phase 9 whether the editor loads through
   `game_loader` (if so, saving from the editor would drop the field).
 - Home's avatar: `widgets.avatar` draws its border unless `showBorder == false`, so callers that pass nothing get one.
+- Table: the original's controller callbacks (`onLeaveGame`, `onSaveGame`, `onKickPlayer`) become `TableEvent`s the
+  hosting screen drains each frame; its global confirm/dialogs are table-owned `TableDialog`s. The table copies the
+  session state each frame (the original read it live). A widget's numeric `sizeOverride` is an absolute size in
+  world units (the core enum calls it `Multiplier`). Glyphs drawn under a scale (counter values, badges) come from
+  SDL_ttf at the unscaled size, so they rasterize a pixel narrower than LÖVE's at some sizes.
 
 ## Build and tooling notes
 
@@ -410,3 +432,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   destinations open `screens/not_ported.rs`. 85 client unit tests + 10 UI tests pass. Next: Phase 6, the table
   (`table_view`, `card_render`, `selection`, `card_pool_grid`, `table_screen`, Host `controller`, practice game,
   save/load game + player remap).
+- 2026-11-16: **Phase 6 complete.** The game table (`table/`), practice games, save/load game with seat matching,
+  plus the Load Deck / Save Deck dialogs and token choosers pulled forward. `Session::resume_log_clock` added to the
+  core; `Theme` gained `force_dark` for the table's dark panels. Verified side by side against the original LÖVE app
+  by driving it with `--eval`/`--shot` under a test identity. 91 client unit tests, 3 table + 10 UI kit interaction
+  tests. Next: Phase 7 (peer multiplayer: protocol connection, host server, game client, client backend for
+  `TableBackend`, the multiplayer screens).

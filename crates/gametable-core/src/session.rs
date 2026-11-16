@@ -455,6 +455,12 @@ impl Session {
         }
     }
 
+    /// Restarts the game-log clock so it reads `elapsed_milliseconds` now (the Lua `clockStart`
+    /// option, used when resuming a saved game so the log continues where it left off).
+    pub fn resume_log_clock(&mut self, elapsed_milliseconds: i64) {
+        self.clock_start_seconds = (self.environment.now_seconds)() - elapsed_milliseconds as f64 / 1000.0;
+    }
+
     pub fn elapsed_milliseconds(&self) -> i64 {
         let elapsed_seconds = (self.environment.now_seconds)() - self.clock_start_seconds;
         ((elapsed_seconds * 1000.0).floor() as i64).max(0)
