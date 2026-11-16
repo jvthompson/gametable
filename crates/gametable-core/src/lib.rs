@@ -15,6 +15,7 @@ pub mod save_remap;
 pub mod seat_utils;
 pub mod stack_utils;
 pub mod state_filter;
+pub mod table_actions;
 pub mod tag_match;
 pub mod util;
 pub mod uuid;

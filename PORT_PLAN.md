@@ -113,8 +113,10 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] `color`, `util`, `uuid`, `geometry`
 - [x] `models` + port of `tests/models_test.lua`, plus golden fixtures checked byte-for-byte against the original Lua
       (`crates/gametable-core/tests/models_golden.rs`)
-- [ ] `tag_match`, `card_filters`, `stack_utils`, `seat_utils`, `deck_widget_zones`, `state_filter`, `save_remap`, `pack_generator`
-- [ ] `table_actions` + port of `tests/table_actions_test.lua`
+- [x] `tag_match`, `card_filters`, `stack_utils`, `seat_utils`, `deck_widget_zones`, `state_filter`, `save_remap`, `pack_generator`
+      (+ ports of `tag_match_test.lua`, `stack_utils_test.lua`, `utils_test.lua` in `tests/rules_helpers.rs`)
+- [x] `table_actions` + port of `tests/table_actions_test.lua`, plus an 87-step scripted golden test covering every
+      action, matched against the original Lua state after every step (`tests/table_actions_golden.rs`)
 - [ ] `session` + port of `tests/session_test.lua`
 - [ ] `host_engine`
 - [ ] Protocol envelope, line codec, message type constants
@@ -217,6 +219,8 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   colours must be whole numbers 0..=4294967295. The Dart app that wrote these files could never produce other types.
 - `extraFields` keys come out sorted after a load/save cycle (Lua copies them into a plain table). Confirmed with
   golden output. The editor writes them in its own order.
+- `table_actions`: `moveToHand` / `drawCard` / `drawFromZone` take a required owner id (Lua accepted nil, which
+  left the owner unchanged; no caller passes nil). Shuffles take a `RandomIndexSource` instead of an optional seed.
 - `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
   will read local time from SDL.
 
@@ -227,7 +231,7 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - `sdl3` crate version 0.22.1 (SDL 3.4.20, SDL_image 3.4.8, SDL_ttf 3.2.2).
 - LÖVE 11.5 is installed at `C:\Program Files\LOVE`. `tools/lua_golden/run.sh <generator>` runs the original Lua code
   (copied from `cardflux-love/lib`, `src/core`, `src/game`) over `crates/gametable-core/tests/fixtures/<generator>/inputs`
-  and writes `expected/`. Generators are `tools/lua_golden/<generator>_golden.lua` (so far: `models`). Use this for every
+  and writes `expected/`. Generators are `tools/lua_golden/<generator>_golden.lua` (so far: `models`, `table_actions`). Use this for every
   engine module: add fixtures, regenerate, and make the Rust test compare against `expected/`.
 - `rustfmt.toml` sets `max_width = 120`; run `cargo fmt --all` before committing.
 
@@ -244,3 +248,6 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   Lua), `uuid`, `geometry` and `models` done; 40 core tests pass, including golden fixtures from the original Lua.
   Next: `tag_match`, `card_filters`, `stack_utils`, `seat_utils`, `deck_widget_zones`, `state_filter`, `save_remap`,
   `pack_generator`, then `table_actions`.
+- 2026-11-15: Rules helpers and `table_actions` done; 97 core tests pass, including the step-by-step golden replay
+  against the original Lua. Next: `session` (+ `session_test.lua`, needs a golden generator for game-log strings),
+  then `host_engine`, protocol codec, `compat-check`.
