@@ -454,9 +454,12 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - Shader builds for non-Windows platforms: this machine's `dxc` has no SPIR-V backend; Vulkan/Metal builds need
   SPIR-V/MSL versions of `shaders/*.hlsl` (e.g. via SDL_shadercross or a SPIR-V-enabled dxc).
 
-- Release repository for the Rust build's self-updater: **decided 2026-11-16, the same repo (`jvthompson/cardtable`)**.
-  Once a Rust release with a higher build number and the `cardtable-windows.zip` asset is published, existing LÖVE
-  installs update straight into it (their helper mirrors the new folder in; the settings folder is shared).
+- Release repository for the Rust build's self-updater: **decided 2026-11-16, a new public repo
+  `jvthompson/gametable`** for the code, CI and releases (`jvthompson/cardtable` keeps the LÖVE app's history and
+  releases; this repo had no remote, and the earlier "same repo" choice rested on a wrong report that it did).
+  LÖVE installs don't see Rust releases. To move them over later: publish a final LÖVE release whose updater
+  points here, or publish the Rust Windows zip (`cardtable-windows.zip`, build > 38) to `jvthompson/cardtable` too
+  (their helper mirrors it in; the settings folder is shared).
 - Phase 11 decisions (2026-11-16): the user downloads the Discord Social SDK for macOS and Linux from the developer
   portal; macOS packages are unsigned (ad-hoc) for now; GitHub Actions tests all three platforms on every push and
   builds the three release packages when a release tag is pushed.

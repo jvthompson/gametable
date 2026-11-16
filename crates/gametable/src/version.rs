@@ -4,7 +4,8 @@
 
 pub const VERSION_NAME: &str = "0.2.0";
 pub const BUILD: u32 = 38;
-pub const RELEASE_REPOSITORY: &str = "jvthompson/cardtable";
+/// The Rust build's own repository (the LÖVE app's releases are on `jvthompson/cardtable`).
+pub const RELEASE_REPOSITORY: &str = "jvthompson/gametable";
 
 /// The release download for this platform (the original only published the Windows one). All
 /// are zips; the updater extracts them with the `zip` crate, keeping Unix permissions.
