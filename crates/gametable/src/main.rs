@@ -2,6 +2,7 @@
 
 use gametable::app::{App, Options};
 use gametable::data::game_loader::{load_library, load_standard_deck};
+use gametable::screens::deck_editor::{DeckEditor, DeckEditorGameSelect};
 use gametable::screens::home::Home;
 use gametable::screens::kit_gallery::KitGallery;
 use gametable::screens::multiplayer::{HostSetup, Join};
@@ -56,6 +57,19 @@ fn main() {
                 }
                 Box::new(practice)
             }),
+            // `GAMETABLE_GAME=<game id>`, `GAMETABLE_DECK_SETUP=add,rulebook`.
+            Ok("deck_editor") => app.push_with_frame(|frame| {
+                let wanted = std::env::var("GAMETABLE_GAME").unwrap_or_default();
+                let library = frame.paths.games_folder(frame.settings).to_string_lossy().into_owned();
+                let (games, _) = load_library(&library);
+                let game = games.into_iter().find(|game| game.id == wanted).unwrap_or_else(load_standard_deck);
+                let mut editor = DeckEditor::new(game, None, None);
+                if let Ok(steps) = std::env::var("GAMETABLE_DECK_SETUP") {
+                    editor.apply_development_setup(&steps);
+                }
+                Box::new(editor)
+            }),
+            Ok("deck_editor_select") => app.push_with_frame(|frame| Box::new(DeckEditorGameSelect::new(frame))),
             _ => {}
         }
         app.run()

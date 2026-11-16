@@ -964,6 +964,13 @@ impl TableScreen {
         if self.log_animation > 0.001 {
             frame.overlay(|frame| self.draw_log(frame));
         }
+        if self.rulebook.is_open() {
+            let scenario = self.active_scenario_with_guide();
+            let close = frame.overlay(|frame| self.rulebook.draw(frame, scenario.as_ref()));
+            if close {
+                self.rulebook.toggle(frame);
+            }
+        }
         if self.game_menu_open {
             frame.overlay(|frame| self.draw_game_menu(frame));
         }

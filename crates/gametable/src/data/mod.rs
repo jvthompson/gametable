@@ -7,6 +7,8 @@ pub mod file_system;
 pub mod game_loader;
 pub mod image_resolver;
 pub mod paths;
+pub mod pdf_doc_cache;
+pub mod pdf_render;
 pub mod profile;
 pub mod save_files;
 pub mod settings;

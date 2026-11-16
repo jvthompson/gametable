@@ -10,7 +10,7 @@ use std::rc::Rc;
 use gametable_core::color::ArgbColor;
 use gametable_core::models::{
     BoardWidgetInstance, BoardWidgetKind, CardDefinition, CardInstance, CardZone, GameDefinition, PlayerInfo,
-    PlaymatType, SearchTargetType, TableState, ZoneDefinition,
+    PlaymatType, Scenario, SearchTargetType, TableState, ZoneDefinition,
 };
 use gametable_core::seat_utils::{compute_hand_row_layout, is_far_mirror_seat};
 use gametable_core::session::{ArrowDragPreview, CardDragPreview};
@@ -20,6 +20,7 @@ use crate::app::Frame;
 use crate::data::deck_store::DeckStore;
 use crate::data::display_settings::{self, TableColor, selection_color};
 use crate::graphics::draw_list::Color;
+use crate::screens::rulebook_viewer::RulebookViewer;
 use crate::sound::SoundEffect;
 use crate::table::actions::{TableAction, TableBackend};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH};
@@ -250,6 +251,7 @@ pub struct TableScreen {
     pub(super) chat_text: String,
     pub(super) seen_chat: usize,
     pub(super) local_chat: Vec<ChatLine>,
+    pub(super) rulebook: RulebookViewer,
 
     // Selection.
     pub(super) selection: TableSelection,
@@ -283,6 +285,7 @@ impl TableScreen {
     pub fn new(options: TableOptions) -> TableScreen {
         let game = Rc::new(options.backend.session().game.clone());
         let library = CardFilterState::new(&game);
+        let rulebook = RulebookViewer::new(&game);
         let mut table = TableScreen {
             backend: options.backend,
             game,
@@ -342,6 +345,7 @@ impl TableScreen {
             chat_text: String::new(),
             seen_chat: 0,
             local_chat: Vec::new(),
+            rulebook,
             selection: TableSelection::default(),
             selected_roots: HashSet::new(),
             selected_count: 0,
@@ -414,6 +418,7 @@ impl TableScreen {
                     self.log_animation = 1.0;
                 }
                 "tokens" => self.token_picker_open = true,
+                "rulebook" => self.rulebook.open_for_development(),
                 "loaddeck" => self.development_load_deck = true,
                 "chat" => {
                     self.chat_open = true;
@@ -438,6 +443,7 @@ impl TableScreen {
     /// The same game resent by the host (e.g. after a reconnect): refresh the definitions.
     pub fn replace_game(&mut self, game: GameDefinition) {
         self.backend.session_mut().game = game.clone();
+        self.rulebook.set_game(&game);
         self.game = Rc::new(game);
     }
 
@@ -1087,9 +1093,20 @@ impl TableScreen {
         }
     }
 
-    /// Ctrl+R: the rulebook viewer arrives with Phase 8 of the port.
+    /// Ctrl+R: the documents viewer.
     fn toggle_rulebook(&mut self, frame: &mut Frame) {
-        frame.ui.toast("The rulebook viewer isn't ported yet (Phase 8).", None);
+        self.rulebook.toggle(frame);
+    }
+
+    /// `T:activeScenarioWithGuide()`: the most recently loaded scenario that has a guide.
+    pub(super) fn active_scenario_with_guide(&self) -> Option<Scenario> {
+        self.state
+            .loaded_scenario_ids
+            .iter()
+            .rev()
+            .filter_map(|id| self.game.scenario_by_id(id))
+            .find(|scenario| scenario.guide_path.is_some())
+            .cloned()
     }
 
     /// Practice games get a local-only chat panel for /flip and /roll; server games (Phase 10)
@@ -1105,6 +1122,7 @@ impl TableScreen {
             && self.dialog.is_none()
             && frame.ui.focus.is_none()
             && !self.game_menu_open
+            && !self.rulebook.is_open()
     }
 
     fn toggle_view_keys(&mut self, frame: &mut Frame, key: &str) -> bool {
@@ -1139,7 +1157,16 @@ impl TableScreen {
             self.toggle_game_menu();
             return;
         }
-        if self.game_menu_open || is_repeat {
+        if self.game_menu_open {
+            return;
+        }
+        if self.rulebook.is_open() {
+            if key == "r" && frame.keyboard.ctrl() && !is_repeat {
+                self.toggle_rulebook(frame);
+            }
+            return;
+        }
+        if is_repeat {
             return;
         }
         if self.spectator {

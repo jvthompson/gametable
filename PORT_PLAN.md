@@ -63,7 +63,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `base64` | all | avatars, asset chunks | yes (2026-11-15), in use (server) |
 | `rand` | all | shuffling, UUID v4 | yes (2026-11-15) |
 | `sdl3` (gpu, ttf, image, build-from-source) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use |
-| `pdfium-render` | client | PDF rulebooks | yes (2026-11-15) |
+| `pdfium-render` | client | PDF rulebooks | yes (2026-11-15), not used: `pdfium.dll` is bound directly with `libloading` (14 functions, as the original's FFI) |
 | `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15) |
 | `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server, `deflate` only) |
 | `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
@@ -267,8 +267,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] Interop: Rust ↔ LÖVE, both host/join directions
 
 ### Phase 8 — Decks and documents
-- [ ] Deck editor, deck library dialog
-- [ ] Rulebook viewer (Markdown TOC, PDF worker/cache, zoom, scroll persistence)
+- [x] Deck editor (`screens/deck_editor.rs`: game select + editor; the deck library dialog was done in Phase 6)
+- [x] Rulebook viewer (`screens/rulebook_viewer.rs`: Markdown TOC, PDF worker/cache in `data/pdf_render.rs` +
+  `data/pdf_doc_cache.rs`, zoom, scroll persistence; at the table, in the deck editor; Phase 9's editor reuses it)
 
 ### Phase 9 — Game definition editor
 - [ ] `gamedef_ops`, entry screen
@@ -449,3 +450,12 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   requests, game log text and the `hostLeft` disconnect all interoperate; the Rust Host lobby and client table match
   the original side by side. Dev hooks: `GAMETABLE_SCREEN=host|join`, `GAMETABLE_JOIN=<host:port>`,
   `GAMETABLE_NO_UPNP`. Next: Phase 8 (deck editor, rulebook viewer).
+- 2026-11-16: **Phase 8 complete.** Deck editor (game select, pool with collection badges, deck slots, open/save
+  through the deck library dialogs, Space preview, Ctrl+R) with its deck logic in a testable `DeckBuilder`; the
+  documents viewer (Markdown with contents sidebar, PDF pages rendered on a worker thread through `pdfium.dll`, zoom,
+  remembered scroll) at the table and in the deck editor. `pdfium.dll` copied into `runtime/windows/`. Markdown images
+  load through the image cache rather than the original's synchronous decode; PDF pages upload via the new
+  `ImageCache::put_rgba` and can be evicted (they re-render on demand), and a document's worker stops when it's closed
+  over. Side by side with the original (real library, read only): the Lorcana deck editor, the Lorcana PDF and the
+  Spellfire Markdown rulebook match. Dev hooks: `GAMETABLE_SCREEN=deck_editor|deck_editor_select`,
+  `GAMETABLE_DECK_SETUP=add,rulebook`, `GAMETABLE_TABLE_SETUP=rulebook`. Next: Phase 9 (game definition editor).

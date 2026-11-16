@@ -7,6 +7,7 @@ use gametable_core::protocol::DEFAULT_GAME_PORT;
 
 use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::profile::{self, RecentServer};
+use crate::screens::deck_editor::DeckEditorGameSelect;
 use crate::screens::edit_player_settings::EditPlayerSettings;
 use crate::screens::info_dialogs::{show_controls_dialog, show_support_dialog};
 use crate::screens::multiplayer::Join;
@@ -205,7 +206,8 @@ impl Home {
     }
 
     fn push_deck_editor(frame: &mut Frame) {
-        frame.commands.push(ScreenCommand::Push(NotPortedYet::boxed("Deck Editor", "The deck editor", 8)));
+        let screen = DeckEditorGameSelect::new(frame);
+        frame.commands.push(ScreenCommand::Push(Box::new(screen)));
     }
 
     /// Two columns: profile + Host Game on the left, the Join card on the right.

@@ -192,6 +192,24 @@ impl ImageCache {
         }
     }
 
+    /// Registers an already decoded image at full size (a rendered PDF page); it uploads at the
+    /// next `update`.
+    pub fn put_rgba(&mut self, key: &str, image: RgbaImage) {
+        self.invalidate(key);
+        self.entries.insert(key.to_string(), Entry { state: EntryState::Loading, bytes: 0, last_used: self.frame });
+        self.ready_to_upload.push((key.to_string(), image));
+    }
+
+    /// The texture under `key` if it is uploaded, without starting a load for unknown keys.
+    pub fn uploaded(&mut self, key: &str) -> Option<TextureInfo> {
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used = self.frame;
+        match &entry.state {
+            EntryState::Ready(texture) => Some(*texture),
+            _ => None,
+        }
+    }
+
     /// Drops an entry so the next `get` reloads it.
     pub fn invalidate(&mut self, key: &str) {
         let Some(entry) = self.entries.remove(key) else { return };

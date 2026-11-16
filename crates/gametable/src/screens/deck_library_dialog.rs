@@ -686,6 +686,11 @@ impl SaveDeckDialog {
         }
     }
 
+    /// The deck being saved, with the Starter Deck checkbox applied.
+    pub fn deck(&self) -> &DeckConfig {
+        &self.deck
+    }
+
     /// Whether a server save should also keep a local copy (the "also local" checkbox).
     pub fn also_local(&self) -> bool {
         self.also_local
