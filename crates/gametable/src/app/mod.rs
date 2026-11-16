@@ -29,9 +29,11 @@ use crate::graphics::gpu_renderer::GpuRenderer;
 use crate::graphics::image_cache::ImageCache;
 use crate::graphics::image_data::RgbaImage;
 use crate::graphics::text::FontLibrary;
+use crate::platform::discord;
 use crate::sound::SoundPlayer;
 use crate::ui::context::Ui;
 use crate::ui::draw::TextOptions;
+use crate::ui::overlays::AppDialogSpec;
 use crate::ui::theme::{Theme, fixed};
 use crate::ui::widgets::IconButtonOptions;
 pub use clipboard::{Clipboard, MemoryClipboard, SdlClipboard};
@@ -165,6 +167,32 @@ impl Options {
 }
 
 /// The `assets` folder: next to the executable, or the workspace's during development.
+/// Pumps Discord once a frame: saves or forgets its refresh token, and asks before joining a game
+/// a friend invited us to (`App.showDiscordJoinPrompt`, which may run right after a cold launch).
+fn pump_discord(frame: &mut Frame, dt: f32) {
+    for change in discord::update(dt) {
+        match change {
+            Some(token) => profile::save_discord_refresh_token(frame.settings, &token),
+            None => profile::clear_discord_refresh_token(frame.settings),
+        }
+    }
+    for secret in discord::take_join_secrets() {
+        let Some((host, port)) = discord::parse_join_secret(&secret) else { continue };
+        frame.ui.app_dialog(AppDialogSpec {
+            title: "Discord Game Invite".to_string(),
+            message: format!("Join the CardTable game at {host}:{port}?"),
+            confirm_label: "Join".to_string(),
+            cancel_label: "Dismiss".to_string(),
+            dismissible: true,
+            on_confirm: Box::new(move |commands| {
+                let join = crate::screens::multiplayer::Join::new(Some(&host), Some(port), true);
+                commands.push(ScreenCommand::Push(Box::new(join)));
+            }),
+            on_cancel: None,
+        });
+    }
+}
+
 pub fn find_assets_folder() -> PathBuf {
     let executable_folder = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf));
     let beside_exe = executable_folder.as_ref().map(|folder| folder.join("assets"));
@@ -360,6 +388,9 @@ impl App {
             frame_count: 0,
             capture_path: std::env::var_os("GAMETABLE_CAPTURE").map(PathBuf::from),
         };
+        if !options.no_discord {
+            discord::init();
+        }
         app.apply_scale(true);
         app.window.maximize();
         let home = home();
@@ -431,6 +462,7 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        discord::dispose();
         self.images.shutdown();
     }
 
@@ -687,6 +719,7 @@ impl App {
         let framed = self.framed;
         let maximized = self.window.is_maximized();
         let ((title_bar, list), mut commands) = self.with_frame(|frame, screens| {
+            pump_discord(frame, dt);
             for screen in screens.iter_mut() {
                 screen.background_update(frame, dt);
             }

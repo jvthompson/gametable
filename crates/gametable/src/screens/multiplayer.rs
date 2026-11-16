@@ -38,6 +38,7 @@ use crate::net::host_server::HostServer;
 use crate::net::netinfo::{LookupProgress, PublicAddressLookup, local_ipv4_addresses};
 use crate::net::server_client::{ServerClient, ServerGameChannel, ServerStatus, SharedServer};
 use crate::net::server_models::local_time_label;
+use crate::platform::discord;
 use crate::screens::game_picker::GamePicker;
 use crate::screens::load_saved_game::{LoadSavedGame, OnLoaded};
 use crate::screens::practice_game::{save_game_dialog, save_table};
@@ -112,6 +113,12 @@ enum InviteMode {
     Discord,
 }
 
+/// A friend's invite: being sent, or sent.
+enum InviteState {
+    Sending(discord::Outcome),
+    Sent,
+}
+
 pub struct HostSetup {
     max_players: usize,
     host_player_id: String,
@@ -121,6 +128,11 @@ pub struct HostSetup {
     public_lookup: Option<PublicAddressLookup>,
     mode: InviteMode,
     navigated: bool,
+    /// `discordConnecting`: the sign-in and connection in progress.
+    discord_connecting: Option<discord::Outcome>,
+    discord_error: Option<String>,
+    friends: Option<Vec<discord::Friend>>,
+    invites: HashMap<u64, InviteState>,
 }
 
 impl HostSetup {
@@ -141,6 +153,10 @@ impl HostSetup {
             public_lookup: None,
             mode: InviteMode::Manual,
             navigated: false,
+            discord_connecting: None,
+            discord_error: None,
+            friends: None,
+            invites: HashMap::new(),
         };
         match HostServer::start(host, max_players, read_avatar_bytes(frame), None) {
             Ok(server) => {
@@ -153,11 +169,147 @@ impl HostSetup {
         setup
     }
 
-    fn draw_discord_panel(&self, frame: &mut Frame, x: f32, y: f32, width: f32) -> f32 {
-        let color = frame.palette().on_surface_variant;
-        let message = "Discord isn't available (the Discord SDK couldn't be loaded). Use Manual IP instead.";
-        frame.text(message, x, y, TextOptions::new().width(width).color(color));
-        y + 40.0
+    /// `HostSetup:publishHostingPresence`: Rich Presence with a party and join secret, so a
+    /// Discord invite (or "Ask to Join" on the host's profile) can connect a friend. Needs the
+    /// public address. Repeats are ignored, so this runs every frame.
+    fn publish_hosting_presence(&self) {
+        let Some(server) = &self.server else { return };
+        let server = server.borrow();
+        let Some(ip) = &server.public_ip else { return };
+        let count = server.roster().len();
+        let party = discord::Party {
+            party_id: server.party_id.clone(),
+            current_size: count as i32,
+            max_size: self.max_players as i32,
+            join_secret: format!("{ip}:{}", server.port),
+        };
+        discord::set_playing("a game", count, Some(self.max_players), Some(party));
+    }
+
+    /// `HostSetup:openInviteMode`: signs in to Discord the first time Invite mode opens.
+    fn open_invite_mode(&mut self, frame: &Frame) {
+        if self.friends.is_some() || self.discord_connecting.is_some() {
+            return;
+        }
+        self.discord_error = None;
+        let saved = profile::discord_refresh_token(frame.settings).map(str::to_string);
+        self.discord_connecting = Some(discord::ensure_authorized_and_connected(saved));
+    }
+
+    fn poll_discord(&mut self, frame: &mut Frame) {
+        if let Some(outcome) = &self.discord_connecting {
+            let result = *outcome.borrow();
+            if let Some(ok) = result {
+                self.discord_connecting = None;
+                if ok {
+                    self.friends = Some(discord::fetch_invitable_friends());
+                } else {
+                    self.discord_error = Some("Couldn't connect to Discord -- try again.".to_string());
+                }
+            }
+        }
+        let friends = self.friends.clone().unwrap_or_default();
+        self.invites.retain(|user_id, state| {
+            let InviteState::Sending(outcome) = state else { return true };
+            let result = *outcome.borrow();
+            match result {
+                None => true,
+                Some(true) => {
+                    *state = InviteState::Sent;
+                    true
+                }
+                Some(false) => {
+                    let name = friends
+                        .iter()
+                        .find(|friend| friend.user_id == *user_id)
+                        .map(|friend| friend.display_name.as_str());
+                    frame
+                        .ui
+                        .toast(&format!("Couldn't send an invite to {} -- try again.", name.unwrap_or("them")), None);
+                    false
+                }
+            }
+        });
+    }
+
+    fn draw_discord_panel(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32) -> f32 {
+        let palette = frame.palette();
+        if !discord::is_enabled() {
+            let message = "Discord isn't available (the Discord SDK couldn't be loaded). Use Manual IP instead.";
+            frame.text(message, x, y, TextOptions::new().width(width).color(palette.on_surface_variant));
+            return y + 40.0;
+        }
+        if self.discord_connecting.is_some() {
+            frame.spinner(x + width / 2.0, y + 18.0, 16.0, None);
+            frame.text("Connecting to Discord...", x, y + 48.0, TextOptions::new().width(width).centered());
+            return y + 76.0;
+        }
+        if let Some(error) = self.discord_error.clone() {
+            frame.text(&error, x, y, TextOptions::new().width(width).color(fixed::RED));
+            let options = ButtonOptions::variant(ButtonVariant::Outlined).id("hs:retry");
+            if frame.button("Retry", x, y + 28.0, Some(width), None, &options) {
+                self.open_invite_mode(frame);
+            }
+            return y + 28.0 + 52.0;
+        }
+        let Some(friends) = self.friends.clone() else { return y };
+        if friends.is_empty() {
+            frame.text("No Discord friends found to invite.", x, y, TextOptions::new().width(width));
+            return y + 28.0;
+        }
+        let mut row_y = y;
+        frame.text("Invite a friend:", x, row_y, TextOptions::new().bold());
+        row_y += 28.0;
+        let (public_ip, port) = match &self.server {
+            Some(server) => (server.borrow().public_ip.clone(), server.borrow().port),
+            None => (None, 0),
+        };
+        let ready = public_ip.is_some();
+        if !ready {
+            let message = if self.public_lookup.is_some() {
+                "Looking up public IP..."
+            } else {
+                "Couldn't determine your public IP."
+            };
+            frame.text(message, x, row_y, TextOptions::new().size(12.0));
+            row_y += 24.0;
+        }
+        for friend in &friends {
+            // An initial-letter avatar, as the original.
+            frame.circle(DrawMode::Fill, x + 20.0, row_y + 22.0, 20.0, palette.primary_container);
+            let initial = friend
+                .display_name
+                .chars()
+                .next()
+                .map_or_else(|| "?".to_string(), |letter| letter.to_uppercase().to_string());
+            frame.text(&initial, x, row_y + 2.0, TextOptions::new().width(40.0).middle_of(40.0).centered().bold());
+            frame.text(&friend.display_name, x + 52.0, row_y + 2.0, TextOptions::new().width(width - 160.0));
+            let status_options = TextOptions::new().size(12.0).color(palette.on_surface_variant);
+            frame.text(discord::status_label(friend.status), x + 52.0, row_y + 22.0, status_options);
+            match self.invites.get(&friend.user_id) {
+                Some(InviteState::Sent) => {
+                    let options =
+                        TextOptions::new().width(100.0).middle_of(44.0).right().color(palette.on_surface_variant);
+                    frame.text("Invite sent", x + width - 100.0, row_y, options);
+                }
+                state => {
+                    let id = format!("hs:invite:{}", friend.user_id);
+                    let sending = matches!(state, Some(InviteState::Sending(_)));
+                    let options = ButtonOptions::default().id(&id).disabled(!ready || sending);
+                    let button_width = frame.button_width("Invite", &options);
+                    if frame.button("Invite", x + width - button_width, row_y + 4.0, Some(button_width), None, &options)
+                        && ready
+                        && port != 0
+                    {
+                        // `HostSetup:sendInvite`.
+                        self.invites
+                            .insert(friend.user_id, InviteState::Sending(discord::send_game_invite(friend.user_id)));
+                    }
+                }
+            }
+            row_y += 52.0;
+        }
+        row_y
     }
 }
 
@@ -170,6 +322,7 @@ impl Screen for HostSetup {
         if let Some(server) = &self.server {
             server.borrow_mut().stop(None);
         }
+        discord::set_idle();
         frame.commands.push(ScreenCommand::Pop);
     }
 
@@ -185,6 +338,10 @@ impl Screen for HostSetup {
     }
 
     fn update(&mut self, frame: &mut Frame, _dt: f32) {
+        self.poll_discord(frame);
+        if !self.navigated {
+            self.publish_hosting_presence();
+        }
         let Some(server) = &self.server else { return };
         if self.navigated || server.borrow().roster().len() < self.max_players {
             return;
@@ -216,7 +373,13 @@ impl Screen for HostSetup {
             centered_column(x, y, width, height, column_width, 460.0 + roster.len() as f32 * 28.0);
         let choices =
             [Choice::new(InviteMode::Manual, "Manual IP"), Choice::new(InviteMode::Discord, "Invite via Discord")];
-        self.mode = frame.segmented("hs:mode", column_x, row_y, column_width, &choices, self.mode, None, false);
+        let mode = frame.segmented("hs:mode", column_x, row_y, column_width, &choices, self.mode, None, false);
+        if mode != self.mode {
+            self.mode = mode;
+            if mode == InviteMode::Discord {
+                self.open_invite_mode(frame);
+            }
+        }
         row_y += 56.0;
         if self.mode == InviteMode::Manual {
             frame.text("Same network (LAN):", column_x, row_y, TextOptions::new().bold());
@@ -537,6 +700,20 @@ impl HostGame {
             entered: false,
         }
     }
+
+    /// `HostGame:publishPresence`: with a join party once the public address is known, so
+    /// friends can join from Discord (repeats are ignored).
+    fn publish_presence(&self) {
+        let (connected, total) = self.table.player_counts();
+        let server = self.server.borrow();
+        let party = server.public_ip.as_ref().map(|ip| discord::Party {
+            party_id: server.party_id.clone(),
+            current_size: connected as i32,
+            max_size: total as i32,
+            join_secret: format!("{ip}:{}", server.port),
+        });
+        discord::set_playing(&self.table.game().name, connected, Some(total), party);
+    }
 }
 
 impl Screen for HostGame {
@@ -566,6 +743,11 @@ impl Screen for HostGame {
             self.table.set_avatar_keys(keys);
         }
         self.table.update(frame, dt);
+        self.publish_presence();
+    }
+
+    fn leave(&mut self, _frame: &mut Frame) {
+        discord::set_idle();
     }
 
     fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {
@@ -1164,7 +1346,14 @@ impl Screen for ClientGame {
         if let Some(table) = &mut self.table {
             table.set_mirrored(mirrored);
             table.update(frame, dt);
+            // `ClientGame`'s presence (repeats are ignored).
+            let (connected, total) = table.player_counts();
+            discord::set_playing(&table.game().name, connected, Some(total), None);
         }
+    }
+
+    fn leave(&mut self, _frame: &mut Frame) {
+        discord::set_idle();
     }
 
     fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {

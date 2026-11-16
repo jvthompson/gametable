@@ -8,6 +8,7 @@ use gametable_core::session::{DealOptions, Session, SessionEnvironment};
 
 use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::save_files::{list_save_games, local_now, save_exists, write_save_game};
+use crate::platform::discord;
 use crate::table::{PracticeBackend, TableEvent, TableOptions, TableScreen};
 use crate::ui::save_name_dialog::{ExistingName, SaveNameDialog, SaveNameResponse};
 use gametable_core::models::format_iso_local_timestamp;
@@ -143,6 +144,13 @@ impl Screen for PracticeGame {
 
     fn update(&mut self, frame: &mut Frame, dt: f32) {
         self.table.update(frame, dt);
+        // `S:publishPresence` (repeats are ignored).
+        let (connected, total) = self.table.player_counts();
+        discord::set_playing(&self.table.game().name, connected, Some(total), None);
+    }
+
+    fn leave(&mut self, _frame: &mut Frame) {
+        discord::set_idle();
     }
 
     fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {

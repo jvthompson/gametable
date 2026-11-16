@@ -64,7 +64,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `rand` | all | shuffling, UUID v4 | yes (2026-11-15) |
 | `sdl3` (gpu, ttf, image, build-from-source-static) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use (static since Phase 10b) |
 | `pdfium-render` | client | PDF rulebooks | yes (2026-11-15), not used: `pdfium.dll` is bound directly with `libloading` (14 functions, as the original's FFI) |
-| `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15) |
+| `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15), in use (updater) |
 | `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server and client admin zip check, `deflate` only) |
 | `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
 | `libloading` | client | load `discord_partner_sdk.dll` at runtime | yes (2026-11-15) |
@@ -322,13 +322,24 @@ mostly portable already; these are the parts that only work on Windows today.
 
 ### Phase 11 — Integrations + packaging
 Every item gets Windows, macOS and Linux code paths (see Phase 10b).
-- [ ] Discord (presence, OAuth, friends, invites, join prompt); the Social SDK library per platform
-- [ ] Self-updater (release repo to confirm with the user). Check and download are portable; replacing the
-  install is per platform (a small Rust helper instead of the original's PowerShell + `robocopy`): Windows swaps the
-  folder after the app exits, macOS replaces the `.app` (signing/notarization), Linux AppImage replaces itself and
-  package installs only get a "new version available" link
-- [ ] Icon/version resource (Windows resource, macOS `Info.plist` + `.icns`, Linux `.desktop` + icon), build script,
-  CI matrix for Windows, macOS and Linux
+- [x] Discord (`platform/discord.rs`): presence (menus, practice, hosting with a join party, joined games), OAuth
+  with the saved refresh token, the friends list and invites in Host Setup's "Invite via Discord", and the join
+  prompt (`App.showDiscordJoinPrompt`, in `app/mod.rs`). Bound against `cdiscord.h` from Discord Social SDK
+  1.10.19337: the strings the header passes by value are declared by value (the original's pointer declarations
+  only worked on Win64), and returned strings, spans and callback results are freed/dropped as the SDK's C++
+  wrapper does (the original leaked them). The SDK's release libraries are in `runtime/<platform>/` with Discord's
+  license notices; the Windows DLL is byte-identical to the original's. Checked: presence publishes on Windows,
+  every function binds on Windows and Linux. Not tried by hand: the OAuth consent, friends list and invites.
+- [x] Self-updater (`platform/updater.rs`, Home's banner and dialogs): the check, download and zip extraction are
+  portable; the install is done by the new executable itself (`--apply-update`) instead of PowerShell + `robocopy`:
+  it waits for the app to exit (its standard input closes), mirrors the update in keeping the libraries, and
+  relaunches. Tested end to end on Windows against a local server (`GAMETABLE_UPDATE_TEST_URL` +
+  `GAMETABLE_HOME_OPEN=update_now`). Releases are zips for every platform (no tarball crate needed).
+- [x] Icon/version resource (`crates/gametable/build.rs` runs the Windows SDK's `rc.exe`; release builds have no
+  console window), `tools/package.py` (Windows zip, Linux zip with `.desktop`, macOS `.app` with `Info.plist`, an
+  `.icns` and ad-hoc signature; `--publish` bumps, tags and pushes), and `.github/workflows/ci.yml` (tests on
+  Windows, macOS and Ubuntu 22.04; release packages for `v*` tags). The Windows and Linux packages were checked by
+  running them from a fresh unzip. Not yet run: the workflow itself (nothing pushed) and anything on macOS.
 
 ### Phase 12 — Parity audit
 - [ ] Walk `CONTROLS.md` and `docs/*.html` feature-by-feature against the Rust build; fix gaps
@@ -558,3 +569,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   Windows, and statically linked SDL. Linux (WSL Arch) builds, passes every test and renders Home, the table and a
   PDF rulebook. Linux builds use `CMAKE=cmake` and a target folder on the Linux disk. Next: Phase 11, with
   Windows/macOS/Linux code paths and a CI matrix (the first macOS build).
+- 2026-11-16: **Phase 11 complete (CI and macOS not yet run).** Self-updater with a cross-platform install helper,
+  Windows icon/version resource, packaging script, CI workflow, and Discord over the Social SDK for all three
+  platforms (see the Phase 11 list). Added `ureq` (approved). `ScreenCommand`-free Discord: the module keeps its own
+  state on the main thread; screens publish presence every frame (repeats ignored) and poll `Outcome`s. Next:
+  push to run CI (expect fixes for the first macOS build), then Phase 12 (parity audit).

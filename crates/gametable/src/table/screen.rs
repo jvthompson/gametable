@@ -379,6 +379,12 @@ impl TableScreen {
         table
     }
 
+    /// Connected players and seats, for Discord presence (`publishPresence`'s count).
+    pub fn player_counts(&self) -> (usize, usize) {
+        let players = &self.backend.session().state().players;
+        (players.iter().filter(|player| player.connected).count(), players.len())
+    }
+
     /// The session behind the table (e.g. to save the game).
     pub fn backend(&self) -> &dyn TableBackend {
         self.backend.as_ref()
