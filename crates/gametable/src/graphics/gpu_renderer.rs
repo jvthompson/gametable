@@ -126,7 +126,6 @@ pub struct GpuRenderer {
     pipelines: HashMap<PipelineKey, GraphicsPipeline>,
     sampler: Sampler,
     textures: HashMap<TextureId, Texture<'static>>,
-    next_texture_id: u32,
     targets: Option<FrameTargets>,
     vertices: Option<VertexStorage>,
 }
@@ -204,7 +203,6 @@ impl GpuRenderer {
             pipelines: HashMap::new(),
             sampler,
             textures: HashMap::new(),
-            next_texture_id: 1,
             targets: None,
             vertices: None,
         };
@@ -234,6 +232,18 @@ impl GpuRenderer {
         pixels: &[u8],
         mipmaps: bool,
     ) -> RenderResult<TextureInfo> {
+        self.create_texture_with_id(TextureId::allocate(), width, height, pixels, mipmaps)
+    }
+
+    /// Like [`GpuRenderer::create_texture_from_rgba`] for an id allocated earlier.
+    pub fn create_texture_with_id(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        mipmaps: bool,
+    ) -> RenderResult<TextureInfo> {
         let level_count = if mipmaps { 32 - width.max(height).max(1).leading_zeros() } else { 1 };
         let usage = if mipmaps { TextureUsage::SAMPLER | TextureUsage::COLOR_TARGET } else { TextureUsage::SAMPLER };
         let texture = self
@@ -249,8 +259,6 @@ impl GpuRenderer {
                     .with_num_levels(level_count),
             )
             .map_err(sdl_error)?;
-        let id = TextureId(self.next_texture_id);
-        self.next_texture_id += 1;
         self.textures.insert(id, texture);
         self.upload_texture_region(id, 0, 0, width, height, pixels)?;
         if mipmaps && level_count > 1 {
@@ -305,6 +313,10 @@ impl GpuRenderer {
         self.device.end_copy_pass(copy_pass);
         command_buffer.submit().map_err(sdl_error)?;
         Ok(())
+    }
+
+    pub fn has_texture(&self, id: TextureId) -> bool {
+        self.textures.contains_key(&id)
     }
 
     /// Frees a texture (the GPU keeps it until in-flight frames finish).

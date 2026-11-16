@@ -4,3 +4,5 @@ pub mod draw_list;
 pub mod gpu_renderer;
 pub mod image_data;
 pub mod tessellation;
+pub mod text;
+pub mod text_layout;

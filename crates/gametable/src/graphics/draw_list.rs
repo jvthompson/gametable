@@ -96,6 +96,13 @@ pub struct TextureId(pub u32);
 
 impl TextureId {
     pub const WHITE: TextureId = TextureId(0);
+
+    /// A new id, unique for the whole process. Ids are handed out before a texture exists on the
+    /// GPU so draw lists can refer to textures (such as glyph atlas pages) created at flush time.
+    pub fn allocate() -> TextureId {
+        static NEXT_TEXTURE_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        TextureId(NEXT_TEXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 /// A texture's id and size, enough to draw it.
