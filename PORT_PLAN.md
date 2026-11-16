@@ -1,0 +1,231 @@
+# GameTable port plan and progress tracker
+
+Rust port of CardTable (`F:\Projects\cardflux-love`, LÖVE 11.5 / Lua client + Go lobby server).
+**Read this file at the start of every session, and update the checkboxes and logs as work lands.**
+
+Status legend: `[ ]` not started · `[~]` in progress · `[x]` done and tested
+
+## Decisions (confirmed with the user, 2026-11-15)
+
+| Topic | Decision |
+|---|---|
+| Interop | Full protocol-v7 interop: Rust client ↔ Go server / LÖVE hosts, LÖVE clients ↔ Rust server; Rust server reads an existing `cardflux.db` |
+| Platforms | Windows first, portable code (SDL3 + portable crates instead of Win32 calls) |
+| Integrations | Include Discord, self-updater, UPnP + public IP. Drop dev automation (`--script`, `--eval`, `--shot`, `--frames`) |
+| Layout | One Cargo workspace, three crates: `gametable-core`, `gametable` (client), `gametable-server` |
+| SDL3 | Use SDL3 wherever it makes sense (window, input, GPU rendering, ttf, image, audio, clipboard, hit-test) |
+| Crates | Ask the user before adding any cargo crate |
+
+## Key facts about the original
+
+- All data files are plain JSON (plus images, Markdown, PDF). No game definition contains code; no Lua interpreter is needed.
+- The server is Go (`cardflux-love/server/`, ~5.3k LOC) and runs the client's Lua rules engine in gopher-lua. It is fully
+  authoritative. In Rust the rules engine is the shared `gametable-core` crate.
+- Wire format: newline-delimited JSON `{"type","payload"}` over plain TCP, default port 51234, protocol version 7,
+  full-state snapshots filtered per recipient (no deltas).
+- No undo/redo, touch, joystick, IME composition, localization, or card-database web APIs.
+
+## Workspace layout
+
+```
+Cargo.toml                 workspace
+.cargo/config.toml         points the cmake build crate at Visual Studio's CMake
+PORT_PLAN.md               this file
+crates/gametable-core/     rules engine, models, byte-exact JSON, protocol framing (no SDL)
+crates/gametable/          SDL3 client (binary)
+crates/gametable-server/   lobby server (binary)
+assets/                    fonts, audio, icons, standard_52.json, CONTROLS.md, SUPPORT-ME.md (copied from cardflux-love)
+shaders/                   HLSL sources + precompiled SPIR-V/DXIL/MSL
+```
+
+## Technology choices
+
+- **Platform layer:** SDL3 for window, input, audio, clipboard, open-URL, threads. Borderless chrome via `SDL_SetWindowHitTest`.
+- **Save directory:** same as the original (`%APPDATA%\cardtable` on Windows), same `settings.json` and cache layout.
+- **Rendering:** SDL3 GPU API with a small 2D batch renderer: SDF shader for rounded rects/circles/arcs, tessellated
+  lines/polygons, textured quads with rounded-corner discard, greyscale shader, procedural felt shader, stencil clipping, MSAA 4,
+  mipmaps + anisotropy 4 on card art.
+- **Text:** SDL3_ttf (Roboto, NotoSansSymbols2 fallback, Material Icons), rasterised at physical DPI.
+- **Images:** SDL3_image on a worker pool, 1024 px area-average downscale, LRU VRAM budget (~768 MB, evict to 80%, 8 uploads/frame).
+- **Audio:** SDL3 audio streams, WAV, 4 voices per effect.
+- **PDF:** pdfium (same `pdfium.dll` the original ships).
+- **Networking:** `std::net` non-blocking sockets on the client; async runtime on the server.
+- **RNG:** OS-entropy-seeded RNG for shuffles, packs, bags (the original's sequence is not part of any contract).
+
+## Crates
+
+Nothing is added to a `Cargo.toml` until the user approves it. Record approvals here.
+
+| Crate | Used by | Why | Approved |
+|---|---|---|---|
+| `serde`, `serde_json` (`preserve_order`) | all | JSON parsing; output via a custom byte-exact formatter | yes (2026-11-15) |
+| `sha2` | all | asset hashes, password hash | yes (2026-11-15) |
+| `base64` | all | avatars, asset chunks | yes (2026-11-15) |
+| `rand` | all | shuffling, UUID v4 | yes (2026-11-15) |
+| `sdl3` (gpu, ttf, image, build-from-source) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use |
+| `pdfium-render` | client | PDF rulebooks | yes (2026-11-15) |
+| `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15) |
+| `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15) |
+| `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
+| `libloading` | client | load `discord_partner_sdk.dll` at runtime | yes (2026-11-15) |
+| `md-5` | client | avatar cache keys | yes (2026-11-15) |
+| `tokio` | server | connections, per-room tasks, timers | yes (2026-11-15) |
+| `rusqlite` (`bundled`) | server | same SQLite schema/file as the Go server | yes (2026-11-15) |
+| `bcrypt` | server | password hashes compatible with existing DB rows | yes (2026-11-15) |
+
+Note: the JSON module turned out simpler to write by hand (`gametable-core::json`), so `serde`/`serde_json` are approved
+but not currently used.
+
+## Compatibility contracts (must match exactly)
+
+- **JSON writer** (`lib/json.lua`): insertion-ordered keys per model; integers as `%d` (< 2^53); other numbers as the shortest of
+  `%.15g`/`%.16g`/`%.17g` that round-trips; escapes `" \ \b \f \n \r \t`, other control chars (incl. 0x7F) as lowercase `\u00xx`,
+  `/` and non-ASCII raw; Dart-style 2-space indent (`"key": value`, empty `[]`/`{}` inline); no trailing newline; `\n` endings.
+  Decoder drops `null` object values, strips a UTF-8 BOM, max depth 64, combines surrogate pairs.
+  Indented: `gamedef.json`, saves, `settings.json` (sorted keys). Compact: decks, manifests, network lines.
+- **Models** (`src/core/models.lua`): field order, defaults omitted on write, required-field errors, enum validation,
+  legacy `cardBackImagePath`, `LegacyDeckFormatError`, sets-vs-flat cards, generated `__standard52_<suit>_<rank>` cards.
+- **Rules** (`table_actions.lua`, `session.lua`, `host_engine.lua`): every action, revision bump points, permission checks,
+  silent failures, exact English game-log strings, `state_filter` hidden-card rule (`__hidden__`), arrow 5 s expiry.
+- **Protocol v7:** framing, 4 s ping / 12 s timeout, peer `hello`/`welcome`/`lobbyRosterUpdate`, server `serverInfo` + `rid`
+  request/response, ~48 `request*` game messages, drag/arrow previews, asset channel (192 KiB base64 chunks, manifest hash).
+- **Server:** SQLite schema, bcrypt-of-client-sha256 passwords, settings row, login rate limiting, collection mode (packs,
+  starters, trades, allowance), admin handlers, room lifecycle/idle timeout, spectators (`spectator:<id>`), shutdown flow,
+  `--data` / `--port`.
+- **Disk layout:** game folder (`gamedef.json`, `<setId>/`, `_tokens`, `_playmats`, `_documents`, `_scenarios`,
+  `_decks`|`decks`, `savegames`, `gamelogs`), deck library `<decksDir>/<gameId>/<name>.json`,
+  `servers/<host_port>/games/<id>/.cardflux_manifest.json`, `settings.json` keys.
+
+## Phases
+
+Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when its tests pass and this file is updated.
+
+### Phase 0 — Scaffold
+- [x] Update `CLAUDE.md` (session-start check, crate approval rule)
+- [x] Create `PORT_PLAN.md`
+- [x] Crate approval from the user (all proposed crates approved 2026-11-15)
+- [x] Workspace + three crates building (stubs)
+- [x] Copy assets (fonts, audio, icons, `standard_52.json`, plus `CONTROLS.md` and `SUPPORT-ME.md` for the in-app dialogs)
+- [x] SDL3 spike: window + GPU + ttf + image + hit-test working on Windows (`cargo run -p gametable --example sdl3_spike`)
+
+### Phase 1 — `gametable-core`
+- [x] `json` (byte-exact encoder/decoder) + port of `tests/json_test.lua`; number golden values captured from real LuaJIT
+- [ ] `color`, `util`, `uuid`, `geometry`
+- [ ] `models` + port of `tests/models_test.lua`
+- [ ] `tag_match`, `card_filters`, `stack_utils`, `seat_utils`, `deck_widget_zones`, `state_filter`, `save_remap`, `pack_generator`
+- [ ] `table_actions` + port of `tests/table_actions_test.lua`
+- [ ] `session` + port of `tests/session_test.lua`
+- [ ] `host_engine`
+- [ ] Protocol envelope, line codec, message type constants
+- [ ] `compat-check` example (port of `tools/compat_check`): byte-identical re-save of a game library
+
+### Phase 2 — `gametable-server`
+- [ ] `proto` (framing, heartbeat, send queue limits)
+- [ ] `store` (schema, settings, users, sessions, decks, collections, token ledger, chat)
+- [ ] `games` (library scan, manifest, hash cache, built-in `standard_52`)
+- [ ] Handshake + dispatch (public / authed / admin / forward-to-room)
+- [ ] Auth (register, login, resume, logout, profile, avatars, rate limiting, allowance)
+- [ ] Lobby (state pushes, chat, slash commands)
+- [ ] Rooms (create/join/spectate/leave/seats/start/close, native engine per room, idle timeout, collection gate)
+- [ ] Decks, collection, shop (packs, starter decks)
+- [ ] Trading
+- [ ] Admin (users, settings, rescan, kick, shutdown, files, game install/delete)
+- [ ] Asset channel (download, admin upload)
+- [ ] `main` (flags, `server.log`, signals)
+- [ ] Integration tests ported from `server_test.go` / `engine_test.go`
+- [ ] Interop: original LÖVE client against the Rust server
+
+### Phase 3 — Client foundation
+- [ ] App shell (`src/app.lua`): screen stack, title bar, input routing, UI scale/DPI, F6 frame toggle, CLI flags
+- [ ] GPU 2D renderer + shaders (rounded, greyscale, felt), stencil, scissor
+- [ ] Text, fonts, icons (`theme.lua` font cache)
+- [ ] Image cache + decode workers
+- [ ] Audio (`src/game/sound.lua`)
+- [ ] `fs`, `paths`, `settings`, `profile`, `hand_settings`, `table_settings`, `playmat_settings`, `rulebook_settings`
+- [ ] Legacy `cardflux` identity migration
+
+### Phase 4 — UI kit
+- [ ] `ui.lua` core (ids, layers, capture, clip stack, scroll views, tooltips)
+- [ ] Widgets: button, iconButton, checkbox, switch, segmented, slider, spinner, progressBar, dropdown
+- [ ] textField / textArea (selection, word jumps, clipboard, Tab focus, password, filter, max length)
+- [ ] `theme` (light/dark), `overlays` (dialogs, context menus, toasts), `widgets`
+- [ ] `colorpicker`, `filter_menu`, `card_filter_bar`, `save_name_dialog`, `panel`, `list_detail`
+
+### Phase 5 — Basic screens + data
+- [ ] `game_loader`, `deck_library`, `deck_store` (local), `save_files`, `image_resolver`, `image_utils`
+- [ ] Home (profile, join panel, recent servers, update banner)
+- [ ] Settings, Controls (Markdown renderer), Support dialogs
+- [ ] File picker, game picker, player count, practice select
+
+### Phase 6 — The table
+- [ ] `table_view` (camera, layout, hit-test, felt, playmats, seat mirroring)
+- [ ] `card_render` (faces, backs, preview), `selection`, `card_pool_grid`
+- [ ] `table_screen`: drag/drop rules, hotkeys, context menus
+- [ ] Overlays: search, card library, token picker, game log, chat, game menu
+- [ ] Animations (discard flight, shuffle wiggle), drag ghosts, arrows
+- [ ] `controller` (Host), practice game, save game, load saved game + player remap
+
+### Phase 7 — Peer multiplayer
+- [ ] Client `protocol` connection, `host_server`, `game_client`, `controller` (Client)
+- [ ] Screens: HostSetup, AssignSeats, HostGameSelect, HostGame, Join, ClientGame
+- [ ] Reconnect / seat reclaim
+- [ ] `netinfo` (local + public IP), UPnP
+- [ ] Interop: Rust ↔ LÖVE, both host/join directions
+
+### Phase 8 — Decks and documents
+- [ ] Deck editor, deck library dialog
+- [ ] Rulebook viewer (Markdown TOC, PDF worker/cache, zoom, scroll persistence)
+
+### Phase 9 — Game definition editor
+- [ ] `gamedef_ops`, entry screen
+- [ ] Tabs: General, Playmats, Zones, Sets (folder import, in-process JPEG rotation), Cards, Tokens, Scenarios
+- [ ] Tools dialogs (duplicate ids, merge duplicate images)
+
+### Phase 10 — Lobby server client
+- [ ] `server_client`, `asset_sync` + worker, server `deck_store`
+- [ ] Screens: login, lobby, room, decks, collection, shop, trade
+- [ ] Admin screens (users, settings, games upload, files)
+- [ ] Interop: against the Go server and the Rust server
+
+### Phase 11 — Integrations + packaging
+- [ ] Discord (presence, OAuth, friends, invites, join prompt)
+- [ ] Self-updater (release repo to confirm with the user)
+- [ ] Icon/version resource, build script, CI
+
+### Phase 12 — Parity audit
+- [ ] Walk `CONTROLS.md` and `docs/*.html` feature-by-feature against the Rust build; fix gaps
+
+## Quirks log (original behaviours to preserve or consciously handle)
+
+- `PackSetting.count` may be fractional on the client (integer part guaranteed, fraction = chance of a bonus card); the Go
+  server declares it `int`. Decide server behaviour when porting `packBuy`.
+- Spectator visibility uses only `game.zones[].visibleToAll`; players use effective zones including scenario-loaded zones.
+- `chatSend` never replies, even with a `rid`.
+- Unknown authenticated message types are forwarded to the room engine rather than rejected.
+- Game-request failures are silent; a full peer lobby closes the socket without a `disconnect` message.
+- Unowned shared-zone cards and face-down table cards keep their real `definitionId` on the wire.
+- JSON `null` inside an object means "absent" (`requestGiveCard.newOwnerId`, `requestSetWidgetSize.sizeOverride`).
+- Go lobby messages sort keys alphabetically; engine payloads keep model field order. Interop does not depend on key order.
+- The original writes `1` where the older Dart app wrote `1.0`; `compat_check` tolerates that difference.
+- `docs/data.html` says game-log lines are `[mm:ss]`; the code writes `[HH:MM:SS]`. Follow the code.
+- Client RNG was never seeded in the original; the port seeds from OS entropy.
+- JSON: a lone surrogate unicode escape decodes to U+FFFD (Lua produced invalid UTF-8 bytes); invalid UTF-8 in input
+  files is replaced with U+FFFD (Lua passed raw bytes through). Rust strings must be valid UTF-8.
+
+## Build and tooling notes
+
+- SDL3, SDL3_image and SDL3_ttf are built from source by the `sdl3` crate (`build-from-source`). CMake is not on PATH, so
+  `.cargo/config.toml` sets `CMAKE` to the copy inside Visual Studio 18 Insiders. The first build takes about 2 minutes.
+- `sdl3` crate version 0.22.1 (SDL 3.4.20, SDL_image 3.4.8, SDL_ttf 3.2.2).
+- LÖVE 11.5 is installed at `C:\Program Files\LOVE`. To capture golden output from the original Lua code, copy the module
+  into a scratch folder with a `main.lua` that prints results and run `lovec.exe <folder>` (stdout is visible).
+
+## Open questions
+
+- Release repository for the Rust build's self-updater (Phase 11).
+
+## Session log
+
+- 2026-11-15: Explored the original, agreed decisions, wrote this plan. Phase 0 started.
+- 2026-11-15: All crates approved. Workspace builds; assets copied; SDL3 spike passes; Phase 0 complete.
+  Phase 1 started: `gametable-core::json` done (11 tests). Next: `color`, `util`, `uuid`, `geometry`, then `models`.

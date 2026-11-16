@@ -1,0 +1,10 @@
+[package]
+name = "gametable"
+description = "GameTable client: a tabletop card game sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gametable-core = { path = "../gametable-core" }
+sdl3 = { version = "0.22.1", features = ["build-from-source", "image", "ttf"] }

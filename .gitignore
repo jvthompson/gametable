@@ -1,0 +1,4 @@
+/target
+
+# Per-user Claude Code settings
+/.claude/settings.local.json

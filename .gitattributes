@@ -1,0 +1,9 @@
+# Keep LF everywhere: JSON fixtures and game data must stay byte-identical to what CardTable writes.
+* text=auto eol=lf
+
+*.wav binary
+*.ttf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

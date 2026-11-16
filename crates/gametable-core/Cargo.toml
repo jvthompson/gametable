@@ -1,0 +1,8 @@
+[package]
+name = "gametable-core"
+description = "Shared rules engine, data models, JSON format and network protocol for GameTable"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
