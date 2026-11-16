@@ -1,0 +1,113 @@
+name: CI
+
+# Every push and pull request: build and test on Windows, macOS and Linux.
+# A pushed tag like v0.2.0+39 (made by `python tools/package.py --publish`): also build the three
+# release packages and publish them as a GitHub release, which the in-app updater picks up.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  # .cargo/config.toml points at Visual Studio's CMake on the development machine; runners have
+  # cmake on PATH.
+  CMAKE: cmake
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxfixes-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libpulse-dev libasound2-dev libdbus-1-dev libudev-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace
+
+  create-release:
+    name: Create the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+
+  package:
+    name: Package (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            package_options: ""
+          - os: macos-latest
+            package_options: "--universal"
+          # The oldest supported Ubuntu runner, so the binary runs on older glibc versions.
+          - os: ubuntu-22.04
+            package_options: ""
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxfixes-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libpulse-dev libasound2-dev libdbus-1-dev libudev-dev
+      - name: Fetch the macOS libraries (pdfium, libwebp)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p runtime/macos
+          # PDFium: the same build as runtime/linux (bblanchon/pdfium-binaries, universal).
+          curl -sSL -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8165/pdfium-mac-univ.tgz"
+          mkdir pdfium && tar -xzf pdfium.tgz -C pdfium
+          cp pdfium/lib/libpdfium.dylib runtime/macos/
+          cp pdfium/LICENSE runtime/macos/LICENSE.pdfium
+          # libwebp from Homebrew (Apple silicon), made to find libsharpyuv beside itself.
+          brew install webp
+          prefix="$(brew --prefix webp)"
+          cp "$prefix/lib/libwebp.7.dylib" "$prefix/lib/libsharpyuv.0.dylib" runtime/macos/
+          chmod u+w runtime/macos/*.dylib
+          install_name_tool -id @loader_path/libsharpyuv.0.dylib runtime/macos/libsharpyuv.0.dylib
+          install_name_tool -id @loader_path/libwebp.7.dylib runtime/macos/libwebp.7.dylib
+          old="$(otool -L runtime/macos/libwebp.7.dylib | awk '/libsharpyuv/ {print $1}')"
+          install_name_tool -change "$old" @loader_path/libsharpyuv.0.dylib runtime/macos/libwebp.7.dylib
+      - uses: Swatinem/rust-cache@v2
+      - name: Package
+        run: python tools/package.py ${{ matrix.package_options }}
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/cardtable-*.zip --repo "$GITHUB_REPOSITORY" --clobber

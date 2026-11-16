@@ -6,13 +6,14 @@ pub const VERSION_NAME: &str = "0.2.0";
 pub const BUILD: u32 = 38;
 pub const RELEASE_REPOSITORY: &str = "jvthompson/cardtable";
 
-/// The release download for this platform (the original only published the Windows one).
+/// The release download for this platform (the original only published the Windows one). All
+/// are zips; the updater extracts them with the `zip` crate, keeping Unix permissions.
 pub const RELEASE_ASSET_NAME: &str = if cfg!(target_os = "windows") {
     "cardtable-windows.zip"
 } else if cfg!(target_os = "macos") {
     "cardtable-macos.zip"
 } else {
-    "cardtable-linux-x86_64.tar.gz"
+    "cardtable-linux-x86_64.zip"
 };
 
 /// The executable inside an install: `CardTable.exe` beside its DLLs on Windows, `CardTable`

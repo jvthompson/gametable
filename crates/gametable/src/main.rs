@@ -1,9 +1,14 @@
 //! GameTable client entry point. Port of `main.lua` / `conf.lua`.
 
+// Release builds on Windows are GUI programs (no console window), like the fused LÖVE exe;
+// development builds keep the console for their log output.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use gametable::app::{App, Options};
 use gametable::data::file_system::join_path;
 use gametable::data::game_loader::{load_library, load_standard_deck};
 use gametable::data::gamedef_ops::{find_game_definition_file, load_game_definition_file};
+use gametable::platform::updater;
 use gametable::screens::deck_editor::{DeckEditor, DeckEditorGameSelect};
 use gametable::screens::gamedef::{GameDefinitionEditor, GameDefinitionEntry};
 use gametable::screens::home::Home;
@@ -16,7 +21,15 @@ use gametable_core::models::DeckConfig;
 use std::collections::HashMap;
 
 fn main() {
-    let options = Options::parse(std::env::args().skip(1));
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    // Started by the updater from a downloaded release: install it and exit (no window).
+    if let Some(request) = updater::parse_helper_request(&arguments) {
+        std::process::exit(updater::run_helper(&request));
+    }
+    updater::remove_leftover_update_folders();
+    let options = Options::parse(arguments);
+    // `U.check`: once per launch, packaged builds only (`--update-check` forces it).
+    updater::start_check(options.force_update_check);
     let result = App::new(&options, || Box::new(Home::new(None))).and_then(|mut app| {
         // Development hook: `GAMETABLE_SCREEN=kit_gallery|player_count|practice_select` opens that
         // screen at startup.

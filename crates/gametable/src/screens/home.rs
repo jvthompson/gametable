@@ -7,6 +7,7 @@ use gametable_core::protocol::DEFAULT_GAME_PORT;
 
 use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::profile::{self, RecentServer};
+use crate::platform::updater::{self, AvailableRelease, UpdateJob, UpdateProgress};
 use crate::screens::deck_editor::DeckEditorGameSelect;
 use crate::screens::edit_player_settings::EditPlayerSettings;
 use crate::screens::gamedef::GameDefinitionEntry;
@@ -18,6 +19,7 @@ use crate::screens::settings_dialog::SettingsDialog;
 use crate::ui::components::{AvatarSource, BannerKind};
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
+use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
 use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::{Weight, with_alpha};
 use crate::ui::widgets::{ButtonOptions, ButtonVariant, Choice, IconButtonOptions};
@@ -57,6 +59,29 @@ enum HomeDialog {
     /// Only through the development hook: in the app the Controls dialog opens from the in-game
     /// Game Menu.
     Controls,
+    /// `Home.confirmUpdate`.
+    ConfirmUpdate(AvailableRelease),
+    /// `Home.runUpdate`: the progress dialog, then quitting so the helper can install.
+    Updating {
+        job: UpdateJob,
+        quit_at: Option<f64>,
+    },
+    UpdateFailed(String),
+}
+
+/// `PHASE_LABELS`, with the download line.
+fn update_phase_label(progress: &UpdateProgress) -> String {
+    match progress {
+        UpdateProgress::Downloading(fraction) => {
+            let percent = fraction.map(|fraction| format!(" ({}%)", (fraction * 100.0 + 0.5).floor() as i32));
+            format!("Downloading update{}...", percent.unwrap_or_default())
+        }
+        UpdateProgress::Extracting => "Extracting update...".to_string(),
+        UpdateProgress::Verifying => "Verifying update...".to_string(),
+        UpdateProgress::LaunchingInstaller | UpdateProgress::ReadyToQuit | UpdateProgress::Failed(_) => {
+            "Installing \u{2014} CardTable will restart shortly...".to_string()
+        }
+    }
 }
 
 pub struct Home {
@@ -67,8 +92,8 @@ pub struct Home {
     join_port: String,
     recent_open: bool,
     dialog: Option<HomeDialog>,
-    /// The release tag of an available update (the updater arrives with Phase 11).
-    update_available: Option<String>,
+    /// A newer release found by the launch check (`updater.state`).
+    update_available: Option<AvailableRelease>,
     /// Development hook (`GAMETABLE_HOME_OPEN=settings|support|editplayer|controls|recent`):
     /// opened on the first frame.
     development_open: Option<String>,
@@ -95,6 +120,14 @@ impl Home {
             Some("controls") => self.dialog = Some(HomeDialog::Controls),
             Some("editplayer") => self.dialog = Some(HomeDialog::EditPlayer(EditPlayerSettings::new(frame))),
             Some("recent") => self.recent_open = true,
+            // With `GAMETABLE_UPDATE_TEST_URL`: the confirmation, or the update straight away.
+            Some("update") => self.dialog = updater::available_release().map(HomeDialog::ConfirmUpdate),
+            Some("update_now") => {
+                if let Some(release) = updater::available_release() {
+                    let keep = vec![frame.paths.games_folder(frame.settings), frame.paths.decks_folder(frame.settings)];
+                    self.dialog = Some(HomeDialog::Updating { job: UpdateJob::start(release, keep), quit_at: None });
+                }
+            }
             _ => {}
         }
     }
@@ -336,6 +369,69 @@ impl Home {
             Some(HomeDialog::Settings(dialog)) => dialog.show(frame),
             Some(HomeDialog::Support) => show_support_dialog(frame),
             Some(HomeDialog::Controls) => show_controls_dialog(frame),
+            Some(HomeDialog::ConfirmUpdate(release)) => {
+                let message = format!("Version {} is available. Would you like to update now?", release.tag);
+                let actions = [DialogAction::text("Later"), DialogAction::filled("Update")];
+                let spec = DialogSpec {
+                    title: Some("Update Available"),
+                    message: Some(&message),
+                    actions: &actions,
+                    ..DialogSpec::default()
+                };
+                match frame.dialog("home:update", &spec, |_, _, _, _| 0.0) {
+                    DialogResponse::Open | DialogResponse::Enter => true,
+                    DialogResponse::Action(1) => {
+                        let keep =
+                            vec![frame.paths.games_folder(frame.settings), frame.paths.decks_folder(frame.settings)];
+                        let job = UpdateJob::start(release.clone(), keep);
+                        self.dialog = Some(HomeDialog::Updating { job, quit_at: None });
+                        return;
+                    }
+                    _ => false,
+                }
+            }
+            Some(HomeDialog::Updating { job, quit_at }) => {
+                let progress = job.poll();
+                if let UpdateProgress::Failed(message) = &progress {
+                    self.dialog = Some(HomeDialog::UpdateFailed(message.clone()));
+                    return;
+                }
+                // Let the final frame render, then exit so the helper can proceed.
+                if progress == UpdateProgress::ReadyToQuit {
+                    let at = *quit_at.get_or_insert(frame.time + 0.3);
+                    if frame.time >= at {
+                        frame.commands.push(ScreenCommand::Quit);
+                    }
+                }
+                let spec = DialogSpec {
+                    title: Some("Updating CardTable"),
+                    width: 420.0,
+                    dismissible: false,
+                    ..DialogSpec::default()
+                };
+                let label = update_phase_label(&progress);
+                let fraction = match progress {
+                    UpdateProgress::Downloading(fraction) => fraction,
+                    _ => None,
+                };
+                frame.dialog("home:updating", &spec, |frame, x, y, width| {
+                    frame.progress_bar(x, y + 4.0, width, 4.0, fraction, None);
+                    frame.text(&label, x, y + 24.0, TextOptions::new().width(width));
+                    48.0
+                });
+                true
+            }
+            Some(HomeDialog::UpdateFailed(message)) => {
+                let actions = [DialogAction::text("Close")];
+                let spec = DialogSpec {
+                    title: Some("Update Failed"),
+                    width: 420.0,
+                    message: Some(message.as_str()),
+                    actions: &actions,
+                    ..DialogSpec::default()
+                };
+                frame.dialog("home:updatefailed", &spec, |_, _, _, _| 0.0) == DialogResponse::Open
+            }
         };
         if !still_open {
             self.dialog = None;
@@ -372,8 +468,13 @@ impl Screen for Home {
         let logo_block_height = if logo.is_some() { logo_height + 24.0 } else { 0.0 };
 
         // Measure the column first so it can be centred vertically.
-        let update_text =
-            self.update_available.as_ref().map(|tag| format!("Update available: {tag} \u{2014} click to install"));
+        if self.update_available.is_none() {
+            self.update_available = updater::available_release();
+        }
+        let update_text = self
+            .update_available
+            .as_ref()
+            .map(|release| format!("Update available: {} \u{2014} click to install", release.tag));
         let mut banners_height = 0.0;
         for text in update_text.iter().chain(self.message.iter()) {
             banners_height += frame.text_height(text, banner_width - 24.0, 14.0, Weight::Regular) + 24.0 + 24.0;
@@ -392,8 +493,14 @@ impl Screen for Home {
             row_y += logo_height + 24.0;
         }
         if let Some(text) = &update_text {
-            let (banner_height, _clicked) = frame.banner(text, banner_x, row_y, banner_width, BannerKind::Info, true);
+            let (banner_height, clicked) = frame.banner(text, banner_x, row_y, banner_width, BannerKind::Info, true);
             row_y += banner_height + 24.0;
+            if clicked
+                && self.dialog.is_none()
+                && let Some(release) = self.update_available.clone()
+            {
+                self.dialog = Some(HomeDialog::ConfirmUpdate(release));
+            }
         }
         if let Some(message) = self.message.clone() {
             let (banner_height, _) = frame.banner(&message, banner_x, row_y, banner_width, BannerKind::Warning, false);

@@ -5,6 +5,7 @@ pub mod data;
 pub mod graphics;
 pub mod native_libraries;
 pub mod net;
+pub mod platform;
 pub mod screens;
 pub mod sound;
 pub mod table;

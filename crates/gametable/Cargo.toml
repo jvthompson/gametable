@@ -14,3 +14,4 @@ libloading = "0.9.1"
 sdl3 = { version = "0.22.1", features = ["build-from-source-static", "image", "ttf"] }
 sha2 = "0.11.1"
 zip = { version = "9.6.0", default-features = false, features = ["deflate"] }
+ureq = "3.5.2"

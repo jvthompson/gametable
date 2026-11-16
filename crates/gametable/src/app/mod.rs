@@ -166,8 +166,17 @@ impl Options {
 
 /// The `assets` folder: next to the executable, or the workspace's during development.
 pub fn find_assets_folder() -> PathBuf {
-    let beside_exe = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("assets")));
+    let executable_folder = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let beside_exe = executable_folder.as_ref().map(|folder| folder.join("assets"));
     if let Some(folder) = beside_exe.filter(|folder| folder.join("fonts").is_dir()) {
+        return folder;
+    }
+    // A macOS bundle keeps them in CardTable.app/Contents/Resources/assets.
+    let in_bundle = executable_folder
+        .as_ref()
+        .and_then(|folder| folder.parent())
+        .map(|contents| contents.join("Resources").join("assets"));
+    if let Some(folder) = in_bundle.filter(|folder| folder.join("fonts").is_dir()) {
         return folder;
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")

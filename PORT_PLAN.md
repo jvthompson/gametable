@@ -443,7 +443,12 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - Shader builds for non-Windows platforms: this machine's `dxc` has no SPIR-V backend; Vulkan/Metal builds need
   SPIR-V/MSL versions of `shaders/*.hlsl` (e.g. via SDL_shadercross or a SPIR-V-enabled dxc).
 
-- Release repository for the Rust build's self-updater (Phase 11).
+- Release repository for the Rust build's self-updater: **decided 2026-11-16, the same repo (`jvthompson/cardtable`)**.
+  Once a Rust release with a higher build number and the `cardtable-windows.zip` asset is published, existing LÖVE
+  installs update straight into it (their helper mirrors the new folder in; the settings folder is shared).
+- Phase 11 decisions (2026-11-16): the user downloads the Discord Social SDK for macOS and Linux from the developer
+  portal; macOS packages are unsigned (ad-hoc) for now; GitHub Actions tests all three platforms on every push and
+  builds the three release packages when a release tag is pushed.
 
 - Shader toolchain for Phase 10b: **decided 2026-11-16, the LunarG Vulkan SDK on Windows** (its `dxc.exe` emits
   SPIR-V, and `spirv-cross.exe` turns SPIR-V into MSL). The user installs it; `tools/compile_shaders.sh` will find
