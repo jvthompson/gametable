@@ -4,10 +4,18 @@
 //! `src/game/session.lua` and `src/game/host_engine.lua`). Both the client and the lobby server
 //! depend on it, so the rules can never drift apart.
 
+pub mod card_filters;
 pub mod color;
+pub mod deck_widget_zones;
 pub mod geometry;
 pub mod json;
 pub mod models;
+pub mod pack_generator;
+pub mod save_remap;
+pub mod seat_utils;
+pub mod stack_utils;
+pub mod state_filter;
+pub mod tag_match;
 pub mod util;
 pub mod uuid;
 
