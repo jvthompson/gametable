@@ -72,6 +72,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `tokio` | server | connections, per-room tasks, timers | yes (2026-11-15) |
 | `rusqlite` (`bundled`) | server | same SQLite schema/file as the Go server | yes (2026-11-15) |
 | `bcrypt` | server | password hashes compatible with existing DB rows | yes (2026-11-15) |
+| `jiff` | server | server-local calendar days / ISO weeks for the token allowance (`store::local_calendar_date`) | yes (2026-11-15), in use |
 
 Note: the JSON module turned out simpler to write by hand (`gametable-core::json`), so `serde`/`serde_json` are approved
 but not currently used.
@@ -130,7 +131,11 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [ ] `proto` (framing, heartbeat, send queue limits)
 - [x] `store` (schema, settings, users, sessions, decks, collections, token ledger, chat) — same schema as the Go
       server; 6 unit tests. Not yet checked against a real Go-created `cardflux.db` (do that in the interop step).
-- [ ] `games` (library scan, manifest, hash cache, built-in `standard_52`)
+- [x] `games` (library scan, manifest, hash cache, built-in `standard_52`) — unit test + ignored read-only scan of
+      the real library (`cargo test -p gametable-server -- --ignored real_library`, ~4.5 min) with 0 errors.
+      TODO: server card counts differ from the client's (VTES 4149 vs 8545, Lorcana 3423 vs 3433) because the server
+      keeps the first card per id and skips cards Go can't unmarshal; confirm against the real Go server
+      (manifest hashes too) during the interop step.
 - [ ] Handshake + dispatch (public / authed / admin / forward-to-room)
 - [ ] Auth (register, login, resume, logout, profile, avatars, rate limiting, allowance)
 - [ ] Lobby (state pushes, chat, slash commands)
@@ -257,10 +262,6 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 ## Open questions
 
 - Release repository for the Rust build's self-updater (Phase 11).
-- Local time on the server: the daily/weekly token allowance uses server-local calendar days and ISO weeks (Go's
-  `time.Local`). `std` has no time-zone support. `store::grant_allowance` takes calendar dates from the caller; the
-  server's `main` needs a unix-time -> local date conversion. Options: ask the user to approve a crate (`jiff` or
-  `chrono`), or use UTC days (a behaviour change). Ask before Phase 2's `main`.
 
 ## Session log
 
@@ -280,3 +281,5 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   to the original Lua (53 files). **Phase 1 complete.** Next: Phase 2, the server (start with `proto`, `store`, `games`).
 - 2026-11-15: Phase 2 started: server `store` ported (rusqlite, same schema). Next: `games` (library scan, manifest,
   hash cache), then `proto` framing over tokio, then handshake/dispatch and auth.
+- 2026-11-15: `jiff` approved and used for local allowance dates; `games` library scanner ported. Next: `proto`
+  framing over tokio (add tokio), handshake/dispatch, auth (add bcrypt).

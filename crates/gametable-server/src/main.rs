@@ -1,5 +1,6 @@
 //! GameTable lobby server entry point. Port of the Go `cardflux-server`.
 
+mod games;
 mod store;
 
 fn main() {

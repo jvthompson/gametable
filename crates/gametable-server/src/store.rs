@@ -389,6 +389,13 @@ impl CalendarDate {
     }
 }
 
+/// The calendar date of a unix time in the server's local time zone (Go's `time.Unix(...).Date()`).
+pub fn local_calendar_date(unix_seconds: i64) -> CalendarDate {
+    let timestamp = jiff::Timestamp::from_second(unix_seconds).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    let local_date = timestamp.to_zoned_datetime(jiff::tz::TimeZone::system()).date();
+    CalendarDate { year: i32::from(local_date.year()), month: local_date.month() as u32, day: local_date.day() as u32 }
+}
+
 /// Whether `now` falls in a later day (`"daily"`) or ISO week (`"weekly"`) than `last`.
 pub fn is_new_allowance_period(period: &str, last: CalendarDate, now: CalendarDate) -> bool {
     match period {
@@ -1008,5 +1015,32 @@ mod tests {
         assert!(!is_new_allowance_period("weekly", date(2025, 12, 29), date(2026, 1, 4)));
         assert!(is_new_allowance_period("weekly", date(2026, 1, 4), date(2026, 1, 5)));
         assert!(!is_new_allowance_period("none", date(2020, 1, 1), date(2026, 1, 1)));
+    }
+
+    #[test]
+    fn local_dates_and_iso_weeks_agree_with_jiff() {
+        // Noon UTC is the same calendar day in every zone from UTC-11 to UTC+11.
+        let noon_utc_2026_01_15 = 1_768_478_400;
+        assert_eq!(local_calendar_date(noon_utc_2026_01_15).month, 1);
+        for days_after in (0..800).step_by(3) {
+            let date = jiff::civil::date(2025, 1, 1).checked_add(jiff::Span::new().days(days_after)).unwrap();
+            let ours =
+                CalendarDate { year: i32::from(date.year()), month: date.month() as u32, day: date.day() as u32 };
+            let iso = date.iso_week_date();
+            assert_eq!(ours.iso_week(), (i32::from(iso.year()), iso.week() as u32), "{date}");
+        }
+    }
+
+    #[test]
+    fn grant_allowance_once_per_period() {
+        let (mut store, alice, _) = store_with_users();
+        let now = alice.last_allowance_at + 2 * 86_400;
+        let (balance, granted) =
+            store.grant_allowance(&alice.id, 5, "daily", local_calendar_date, now, local_calendar_date(now)).unwrap();
+        assert!(granted);
+        assert_eq!(balance, 15);
+        let (_, granted_again) =
+            store.grant_allowance(&alice.id, 5, "daily", local_calendar_date, now, local_calendar_date(now)).unwrap();
+        assert!(!granted_again);
     }
 }
