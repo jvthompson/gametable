@@ -288,6 +288,8 @@ impl App {
 
         let sdl = sdl3::init().map_err(|error| error.to_string())?;
         let video = sdl.video().map_err(|error| error.to_string())?;
+        // Which window system SDL picked (windows, cocoa, wayland, x11), for bug reports.
+        eprintln!("video: SDL video driver {}", video.current_video_driver());
         let mut window = video
             .window("CardTable", 1280, 720)
             .position_centered()
