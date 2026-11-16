@@ -148,14 +148,22 @@ pub fn icon_font(size: f32) -> FontKey {
 }
 
 /// The theme state: dark or light.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Theme {
     pub is_dark: bool,
+    /// The light palette is in use regardless of `is_dark` (the original set `theme.c` to the
+    /// light scheme around the game table while `theme.isDark` stayed as it was).
+    pub force_light: bool,
 }
 
 impl Theme {
+    pub fn new(is_dark: bool) -> Theme {
+        Theme { is_dark, force_light: false }
+    }
+
+    /// `theme.c`.
     pub fn palette(&self) -> &'static Palette {
-        if self.is_dark { &DARK } else { &LIGHT }
+        if self.is_dark && !self.force_light { &DARK } else { &LIGHT }
     }
 }
 

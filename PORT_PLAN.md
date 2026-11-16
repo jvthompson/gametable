@@ -193,12 +193,21 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] Legacy `cardflux` identity migration — `AppPaths::migrate_legacy_identity`.
 
 ### Phase 4 — UI kit
-- [ ] `ui.lua` core (ids, layers, capture, clip stack, scroll views, tooltips)
-- [ ] Widgets: button, iconButton, checkbox, switch, segmented, slider, spinner, progressBar, dropdown
-- [ ] textField / textArea (selection, word jumps, clipboard, Tab focus, password, filter, max length)
-- [ ] `theme` (light/dark), `overlays` (dialogs, context menus, toasts), `widgets`
-- [ ] `colorpicker`, `filter_menu`, `card_filter_bar`, `save_name_dialog`, `panel`, `list_detail`
-
+- [x] `ui.lua` core (ids, layers, capture, clip stack, scroll views, tooltips) — `ui/context.rs` (`Ui`), `ui/draw.rs`
+      (text/icon/rect/shadow helpers and the tooltip as `Frame` methods). Overlays draw in place in a new layer
+      (`Frame::overlay`); each layer has its own draw list, merged in layer order at the end of the frame.
+- [x] Widgets: button, iconButton, checkbox, switch, segmented, slider, spinner, progressBar, dropdown — `ui/widgets.rs`,
+      `ui/dropdown.rs`.
+- [x] textField / textArea (selection, word jumps, clipboard, Tab focus, password, filter, max length) — `ui/text_field.rs`;
+      clipboard behind `app::Clipboard` (SDL or in-memory).
+- [x] `theme` (light/dark), `overlays` (dialogs, context menus, toasts), `widgets` — `ui/overlays.rs`, `ui/components.rs`.
+      The title bar now uses the kit's icon buttons (tooltips, hover); all mouse input goes through the UI as in `app.lua`.
+- [x] `colorpicker`, `filter_menu`, `card_filter_bar`, `save_name_dialog`, `panel`, `list_detail` — `ui/color_picker.rs`,
+      `ui/filter_menu.rs`, `ui/card_filter_bar.rs`, `ui/save_name_dialog.rs`, `ui/panel.rs` (panel + list/detail).
+- Checks: `tests/ui_kit.rs` drives real frames through `app::harness::UiHarness` (text editing, paste/filter/max length,
+  Tab focus, dialogs incl. Escape/Enter/scrim/actions, modal blocking, nested menus, dropdown, wheel scrolling, app
+  alerts). `screens/kit_gallery.rs` shows every widget (`GAMETABLE_SCREEN=kit_gallery`, overlays opened with
+  `GAMETABLE_GALLERY_OPEN=dialog,confirm,menu,picker,save,panel`); checked by screenshot in light and dark.
 ### Phase 5 — Basic screens + data
 - [ ] `game_loader`, `deck_library`, `deck_store` (local), `save_files`, `image_resolver`, `image_utils`
 - [ ] Home (profile, join panel, recent servers, update banner)
@@ -296,6 +305,13 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   like the original. The felt noise uses `sin`-hash precision of the GPU, as before.
 - Client: SDL keycodes are read unmodified (`SDL_KEYCODE_OPTIONS=unmodified,latin_letters`) so key names don't change
   with Shift, as with LÖVE's SDL2.
+- UI kit: dialogs and context menus belong to the screen that shows them and report a response each frame
+  (`DialogResponse`, `MenuResponse`) instead of global callbacks; the screen closes them by not showing them again.
+  App-level alerts/confirmations (which outlive a screen) and snackbars live in `Ui`. Escape/Enter reach the top
+  dialog or menu one frame later (by id) rather than inside the key callback.
+- UI kit: a focused text field that is not drawn in a frame loses focus (the original blurred when a dialog closed;
+  without this a field of a vanished dialog would keep swallowing keys).
+- UI kit: wheel steps are SDL3's integer deltas (`integer_y`), matching LÖVE 11's whole-number `wheelmoved`.
 - `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
   will read local time from SDL.
 
@@ -359,3 +375,8 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   modules, LÖVE-exact tessellation + SDL3 GPU renderer, LÖVE-exact text, image cache with libwebp, audio, app shell
   (placeholder Home). `runtime/windows/` holds libwebp-7.dll + libsharpyuv-0.dll copied from the original build.
   Added `libloading`. Next: Phase 4, the UI kit (`ui.lua` first).
+- 2026-11-16: **Phase 4 complete.** The whole UI kit is ported (see the Phase 4 list); the app shell routes input
+  through it and its title bar uses icon buttons. `Frame` now carries `ui` (layers, input) and `clipboard` instead
+  of a draw list. `data/deck_library.rs` has `validate_name` (rest in Phase 5). 10 interaction tests + unit tests.
+  Next: Phase 5 (`game_loader`, `deck_library`, `deck_store`, `save_files`, `image_resolver`, `image_utils`,
+  then Home, Settings, Controls, Support, file/game pickers, player count, practice select).

@@ -3,29 +3,37 @@
 //! the frame loop.
 //!
 //! Screens draw into a [`Frame`], which bundles what the original reached through `love.*`
-//! and its global modules: the draw list, fonts, image cache, settings and keyboard state.
+//! and its global modules: the UI (input, layers, draw lists), fonts, image cache, settings and
+//! keyboard state. As in the original, mouse input goes only to the UI kit; screens read it
+//! through `frame.ui` while drawing.
 
+pub mod clipboard;
+pub mod harness;
 pub mod input;
 pub mod window_chrome;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use sdl3::event::{Event, WindowEvent};
+use sdl3::mouse::{Cursor, SystemCursor};
 use sdl3::video::Window;
 
 use crate::data::paths::{AppPaths, DEFAULT_IDENTITY, LEGACY_IDENTITY};
 use crate::data::profile;
 use crate::data::settings::{Settings, keys};
-use crate::graphics::draw_list::{DrawList, ScissorRect};
 use crate::graphics::gpu_renderer::GpuRenderer;
 use crate::graphics::image_cache::ImageCache;
 use crate::graphics::image_data::RgbaImage;
-use crate::graphics::tessellation::DrawMode;
 use crate::graphics::text::FontLibrary;
 use crate::sound::SoundPlayer;
-use crate::ui::theme::{self, Theme, Weight, fixed};
+use crate::ui::context::Ui;
+use crate::ui::draw::TextOptions;
+use crate::ui::theme::{Theme, fixed};
+use crate::ui::widgets::IconButtonOptions;
+pub use clipboard::{Clipboard, MemoryClipboard, SdlClipboard};
 use input::{KeyboardState, key_name, love_mouse_button};
 use window_chrome::{ChromeState, TITLE_BAR_HEIGHT};
 
@@ -68,15 +76,12 @@ pub trait Screen {
     /// Called for every screen in the stack each frame (network objects keep running).
     fn background_update(&mut self, _frame: &mut Frame, _dt: f32) {}
     fn update(&mut self, _frame: &mut Frame, _dt: f32) {}
-    /// Draws inside the content area below the title bar (logical units).
+    /// Draws inside the content area below the title bar (logical units). Mouse input is read
+    /// from `frame.ui` here, as the original's screens did through the UI kit.
     fn draw(&mut self, _frame: &mut Frame, _x: f32, _y: f32, _width: f32, _height: f32) {}
     fn key_pressed(&mut self, _frame: &mut Frame, _key: &'static str, _is_repeat: bool) {}
     fn key_released(&mut self, _frame: &mut Frame, _key: &'static str) {}
     fn text_input(&mut self, _frame: &mut Frame, _text: &str) {}
-    fn mouse_pressed(&mut self, _frame: &mut Frame, _x: f32, _y: f32, _button: u8, _presses: u8) {}
-    fn mouse_released(&mut self, _frame: &mut Frame, _x: f32, _y: f32, _button: u8) {}
-    fn mouse_moved(&mut self, _frame: &mut Frame, _x: f32, _y: f32) {}
-    fn wheel_moved(&mut self, _frame: &mut Frame, _x: f32, _y: f32) {}
     fn file_dropped(&mut self, _frame: &mut Frame, _path: &Path) {}
     fn directory_dropped(&mut self, _frame: &mut Frame, _path: &Path) {}
     /// Return true to cancel quitting.
@@ -89,7 +94,8 @@ pub trait Screen {
 
 /// Everything a screen can reach while handling an event or drawing.
 pub struct Frame<'a> {
-    pub list: &'a mut DrawList,
+    /// The UI kit state: input, layers (each with its draw list), focus, widget state.
+    pub ui: &'a mut Ui,
     pub fonts: &'a mut FontLibrary,
     pub images: &'a mut ImageCache,
     pub settings: &'a mut Settings,
@@ -97,15 +103,13 @@ pub struct Frame<'a> {
     pub sounds: &'a mut SoundPlayer,
     pub keyboard: &'a KeyboardState,
     pub theme: &'a mut Theme,
+    pub clipboard: &'a mut dyn Clipboard,
     pub commands: &'a mut Vec<ScreenCommand>,
     /// The UI scale (logical units to physical pixels).
     pub scale: f32,
     /// Logical size of the whole window.
     pub width: f32,
     pub height: f32,
-    /// Mouse position in logical units.
-    pub mouse_x: f32,
-    pub mouse_y: f32,
     /// Seconds since the app started.
     pub time: f64,
     pub assets_folder: &'a Path,
@@ -198,13 +202,20 @@ impl PlayerProfile {
     }
 }
 
-/// A title-bar button's place, for hit testing clicks until the UI kit draws real buttons.
+/// A title-bar button that was clicked this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum TitleButton {
+enum TitleAction {
     Back,
     Close,
     Maximize,
     Theme,
+}
+
+/// What drawing the title bar reports: a clicked button and the draggable span.
+struct TitleBarResult {
+    action: Option<TitleAction>,
+    title_end: f32,
+    buttons_start: f32,
 }
 
 /// The running app.
@@ -213,6 +224,7 @@ pub struct App {
     video: sdl3::VideoSubsystem,
     window: Window,
     renderer: GpuRenderer,
+    ui: Ui,
     fonts: FontLibrary,
     images: ImageCache,
     sounds: SoundPlayer,
@@ -221,6 +233,9 @@ pub struct App {
     assets_folder: PathBuf,
     theme: Theme,
     keyboard: KeyboardState,
+    clipboard: SdlClipboard,
+    cursors: HashMap<&'static str, Option<Cursor>>,
+    shown_cursor: &'static str,
     chrome: Arc<Mutex<ChromeState>>,
     framed: bool,
     screens: Vec<Box<dyn Screen>>,
@@ -228,10 +243,7 @@ pub struct App {
     applied_scale: f32,
     dpi_scale: f32,
     dpi_checked_at: f64,
-    mouse: (f32, f32),
     started_at: Instant,
-    title_buttons: Vec<(TitleButton, f32, f32, f32, f32)>,
-    pressed_title_button: Option<TitleButton>,
     frame_count: u64,
     /// Development hook (`GAMETABLE_CAPTURE=<file.png>`): save frame 30 and exit, like the
     /// original's `--shot`.
@@ -288,20 +300,25 @@ impl App {
         let sounds = SoundPlayer::new(audio, &assets_folder.join("audio"));
         let is_dark = options.dark.unwrap_or_else(|| profile::dark_mode(&settings));
         let profile = PlayerProfile::load(&settings);
+        let clipboard = SdlClipboard::new(video.clipboard());
 
         let mut app = App {
             sdl,
             video,
             window,
             renderer,
+            ui: Ui::new(),
             fonts,
             images: ImageCache::new(),
             sounds,
             settings,
             paths,
             assets_folder,
-            theme: Theme { is_dark },
+            theme: Theme::new(is_dark),
             keyboard: KeyboardState::default(),
+            clipboard,
+            cursors: HashMap::new(),
+            shown_cursor: "arrow",
             chrome,
             framed: false,
             screens: Vec::new(),
@@ -309,10 +326,7 @@ impl App {
             applied_scale: 0.0,
             dpi_scale: 1.0,
             dpi_checked_at: -1.0,
-            mouse: (0.0, 0.0),
             started_at: Instant::now(),
-            title_buttons: Vec::new(),
-            pressed_title_button: None,
             frame_count: 0,
             capture_path: std::env::var_os("GAMETABLE_CAPTURE").map(PathBuf::from),
         };
@@ -393,7 +407,6 @@ impl App {
     /// Builds a frame context around the app's state and runs `action` with it.
     fn with_frame<R>(
         &mut self,
-        list: &mut DrawList,
         action: impl FnOnce(&mut Frame, &mut Vec<Box<dyn Screen>>) -> R,
     ) -> (R, Vec<ScreenCommand>) {
         let (physical_width, physical_height) = self.window.size_in_pixels();
@@ -401,7 +414,7 @@ impl App {
         let mut commands = Vec::new();
         let time = self.elapsed();
         let mut frame = Frame {
-            list,
+            ui: &mut self.ui,
             fonts: &mut self.fonts,
             images: &mut self.images,
             settings: &mut self.settings,
@@ -409,12 +422,11 @@ impl App {
             sounds: &mut self.sounds,
             keyboard: &self.keyboard,
             theme: &mut self.theme,
+            clipboard: &mut self.clipboard,
             commands: &mut commands,
             scale,
             width: physical_width as f32 / scale,
             height: physical_height as f32 / scale,
-            mouse_x: self.mouse.0,
-            mouse_y: self.mouse.1,
             time,
             assets_folder: &self.assets_folder,
         };
@@ -425,10 +437,10 @@ impl App {
     fn run_commands(&mut self, commands: Vec<ScreenCommand>) {
         let mut queue: std::collections::VecDeque<ScreenCommand> = commands.into();
         while let Some(command) = queue.pop_front() {
-            let mut scratch = DrawList::new();
-            let (more, _) = self.with_frame(&mut scratch, |frame, screens| {
+            let (more, _) = self.with_frame(|frame, screens| {
                 match command {
                     ScreenCommand::Push(mut screen) => {
+                        frame.ui.blur();
                         screen.enter(frame);
                         screens.push(screen);
                     }
@@ -436,6 +448,7 @@ impl App {
                         if let Some(mut screen) = screens.pop() {
                             screen.leave(frame);
                         }
+                        frame.ui.blur();
                         if let Some(top) = screens.last_mut() {
                             top.resume(frame);
                         }
@@ -444,6 +457,7 @@ impl App {
                         if let Some(mut old) = screens.pop() {
                             old.leave(frame);
                         }
+                        frame.ui.blur();
                         screen.enter(frame);
                         screens.push(screen);
                     }
@@ -472,16 +486,20 @@ impl App {
         (x * factor, y * factor)
     }
 
+    /// Runs `handler` on the top screen.
+    fn on_top_screen(&mut self, handler: impl FnOnce(&mut dyn Screen, &mut Frame)) -> bool {
+        let (_, commands) = self.with_frame(|frame, screens| {
+            if let Some(screen) = screens.last_mut() {
+                handler(screen.as_mut(), frame);
+            }
+        });
+        self.after_event(commands)
+    }
+
     /// Returns false when the app should exit.
     fn handle_event(&mut self, event: Event) -> bool {
-        let mut list = DrawList::new();
         match event {
-            Event::Quit { .. } => {
-                let (cancel, commands) = self
-                    .with_frame(&mut list, |frame, screens| screens.iter_mut().rev().any(|screen| screen.quit(frame)));
-                self.run_commands(commands);
-                return cancel;
-            }
+            Event::Quit { .. } => return !self.screens_cancel_quit(),
             Event::KeyDown { keycode: Some(keycode), repeat, .. } => {
                 let key = key_name(keycode as u32);
                 self.keyboard.press(key);
@@ -489,100 +507,75 @@ impl App {
                     self.toggle_frame();
                     return true;
                 }
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.key_pressed(frame, key, repeat);
-                    }
-                });
-                return self.after_event(commands);
+                // Escape closes menus and dialogs even while a field inside them has focus.
+                if key == "escape" && self.ui.any_overlay_open() {
+                    self.ui.overlay_key_pressed(key);
+                    return true;
+                }
+                if self.ui.on_key_pressed(key, repeat) {
+                    return true;
+                }
+                if self.ui.any_overlay_open() {
+                    self.ui.overlay_key_pressed(key);
+                    return true;
+                }
+                return self.on_top_screen(|screen, frame| screen.key_pressed(frame, key, repeat));
             }
             Event::KeyUp { keycode: Some(keycode), .. } => {
                 let key = key_name(keycode as u32);
                 self.keyboard.release(key);
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.key_released(frame, key);
-                    }
-                });
-                return self.after_event(commands);
+                return self.on_top_screen(|screen, frame| screen.key_released(frame, key));
             }
             Event::TextInput { text, .. } => {
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.text_input(frame, &text);
-                    }
-                });
-                return self.after_event(commands);
+                if self.ui.on_text_input(&text) {
+                    return true;
+                }
+                return self.on_top_screen(|screen, frame| screen.text_input(frame, &text));
             }
             Event::MouseMotion { x, y, .. } => {
-                self.mouse = self.to_logical(x, y);
-                let (mx, my) = self.mouse;
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.mouse_moved(frame, mx, my);
-                    }
-                });
-                return self.after_event(commands);
+                let (x, y) = self.to_logical(x, y);
+                self.ui.on_mouse_moved(x, y);
             }
             Event::MouseButtonDown { mouse_btn, clicks, x, y, .. } => {
-                self.mouse = self.to_logical(x, y);
-                let Some(button) = love_mouse_button(mouse_btn) else { return true };
-                let (mx, my) = self.mouse;
-                if button == 1
-                    && let Some(title_button) = self.title_button_at(mx, my)
-                {
-                    self.pressed_title_button = Some(title_button);
-                    return true;
+                let (x, y) = self.to_logical(x, y);
+                if let Some(button) = love_mouse_button(mouse_btn) {
+                    self.ui.on_mouse_pressed(x, y, button, clicks);
                 }
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.mouse_pressed(frame, mx, my, button, clicks);
-                    }
-                });
-                return self.after_event(commands);
             }
             Event::MouseButtonUp { mouse_btn, x, y, .. } => {
-                self.mouse = self.to_logical(x, y);
-                let Some(button) = love_mouse_button(mouse_btn) else { return true };
-                let (mx, my) = self.mouse;
-                if let Some(pressed) = self.pressed_title_button.take() {
-                    if button == 1 && self.title_button_at(mx, my) == Some(pressed) {
-                        return self.click_title_button(pressed);
-                    }
-                    return true;
+                let (x, y) = self.to_logical(x, y);
+                if let Some(button) = love_mouse_button(mouse_btn) {
+                    self.ui.on_mouse_released(x, y, button);
                 }
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.mouse_released(frame, mx, my, button);
-                    }
-                });
-                return self.after_event(commands);
             }
-            Event::MouseWheel { x, y, .. } => {
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.wheel_moved(frame, x, y);
-                    }
-                });
-                return self.after_event(commands);
+            // LÖVE 11 reported whole wheel steps (SDL2's integer deltas).
+            Event::MouseWheel { integer_x, integer_y, .. } => {
+                self.ui.on_wheel(integer_x as f32, integer_y as f32);
             }
             Event::DropFile { filename, .. } => {
                 let path = PathBuf::from(filename);
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        if path.is_dir() {
-                            screen.directory_dropped(frame, &path);
-                        } else {
-                            screen.file_dropped(frame, &path);
-                        }
+                return self.on_top_screen(|screen, frame| {
+                    if path.is_dir() {
+                        screen.directory_dropped(frame, &path);
+                    } else {
+                        screen.file_dropped(frame, &path);
                     }
                 });
-                return self.after_event(commands);
             }
-            Event::Window { win_event: WindowEvent::FocusLost, .. } => self.keyboard.clear(),
+            Event::Window { win_event: WindowEvent::FocusLost, .. } => {
+                self.keyboard.clear();
+            }
             _ => {}
         }
         true
+    }
+
+    /// `love.quit`: true when a screen cancels quitting.
+    fn screens_cancel_quit(&mut self) -> bool {
+        let (cancel, commands) =
+            self.with_frame(|frame, screens| screens.iter_mut().rev().any(|screen| screen.quit(frame)));
+        self.run_commands(commands);
+        cancel
     }
 
     /// Applies screen commands; false when one asked to quit.
@@ -604,50 +597,30 @@ impl App {
         self.apply_scale(true);
     }
 
-    fn title_button_at(&self, x: f32, y: f32) -> Option<TitleButton> {
-        if self.framed || y >= TITLE_BAR_HEIGHT {
-            return None;
+    /// Shows the cursor the UI asked for (`love.mouse.setCursor`).
+    fn apply_cursor(&mut self, name: &'static str) {
+        if name == self.shown_cursor {
+            return;
         }
-        self.title_buttons
-            .iter()
-            .find(|(_, bx, by, bw, bh)| x >= *bx && x < bx + bw && y >= *by && y < by + bh)
-            .map(|(button, ..)| *button)
-    }
-
-    fn click_title_button(&mut self, button: TitleButton) -> bool {
-        match button {
-            TitleButton::Close => {
-                let mut list = DrawList::new();
-                let (cancel, commands) = self
-                    .with_frame(&mut list, |frame, screens| screens.iter_mut().rev().any(|screen| screen.quit(frame)));
-                self.run_commands(commands);
-                return cancel;
-            }
-            TitleButton::Maximize => {
-                if self.window.is_maximized() {
-                    self.window.restore();
-                } else {
-                    self.window.maximize();
+        self.shown_cursor = name;
+        let cursor = self
+            .cursors
+            .entry(name)
+            .or_insert_with(|| system_cursor(name).and_then(|cursor| Cursor::from_system(cursor).ok()));
+        match cursor {
+            Some(cursor) => cursor.set(),
+            None => {
+                if let Some(Some(arrow)) = self.cursors.get("arrow") {
+                    arrow.set();
+                } else if let Ok(arrow) = Cursor::from_system(SystemCursor::Arrow) {
+                    arrow.set();
+                    self.cursors.insert("arrow", Some(arrow));
                 }
             }
-            TitleButton::Theme => {
-                self.theme.is_dark = !self.theme.is_dark;
-                profile::set_dark_mode(&mut self.settings, self.theme.is_dark);
-            }
-            TitleButton::Back => {
-                let mut list = DrawList::new();
-                let (_, commands) = self.with_frame(&mut list, |frame, screens| {
-                    if let Some(screen) = screens.last_mut() {
-                        screen.on_back(frame);
-                    }
-                });
-                return self.after_event(commands);
-            }
         }
-        true
     }
 
-    /// One frame: update every screen, draw the top one and the title bar, present.
+    /// One frame: update every screen, draw the top one, the title bar and the overlays, present.
     fn update_and_draw(&mut self, dt: f32) -> Result<bool, String> {
         self.apply_scale(false);
         let (physical_width, physical_height) = self.window.size_in_pixels();
@@ -662,51 +635,77 @@ impl App {
         }
         self.images.update(&mut self.renderer);
 
-        let mut list = DrawList::new();
         let framed = self.framed;
         let maximized = self.window.is_maximized();
-        let (title_layout, commands) = self.with_frame(&mut list, |frame, screens| {
+        let ((title_bar, list), mut commands) = self.with_frame(|frame, screens| {
             for screen in screens.iter_mut() {
                 screen.background_update(frame, dt);
             }
             if let Some(screen) = screens.last_mut() {
                 screen.update(frame, dt);
             }
-            let scale = frame.scale;
             let (width, height) = (frame.width, frame.height);
-            frame.list.scale(scale, scale);
-            let light_override = screens.last().is_some_and(|screen| screen.forces_light_theme());
-            let saved_dark = frame.theme.is_dark;
-            if light_override {
-                frame.theme.is_dark = false;
-            }
-            frame.list.set_color(frame.theme.palette().surface);
-            frame.list.rectangle(DrawMode::Fill, 0.0, 0.0, width, height, 0.0, 0.0);
+            frame.ui.begin_frame(width, height, frame.scale, frame.time);
+            // Like Flutter's Theme(data: AppTheme.light) around the game table: the screen and
+            // its dialogs draw light regardless of the app's dark mode.
+            frame.theme.force_light = screens.last().is_some_and(|screen| screen.forces_light_theme());
+            let surface = frame.palette().surface;
+            frame.fill_rect(0.0, 0.0, width, height, 0.0, surface);
             let top = if framed { 0.0 } else { TITLE_BAR_HEIGHT };
+            frame.ui.content_top = top;
             let stack_depth = screens.len();
             if let Some(screen) = screens.last_mut() {
-                frame.list.set_scissor(Some(logical_scissor(0.0, top, width, height - top, scale)));
+                frame.ui.push_clip(0.0, top, width, height - top);
                 screen.draw(frame, 0.0, top, width, height - top);
-                frame.list.set_scissor(None);
+                frame.ui.pop_clip();
             }
-            frame.theme.is_dark = saved_dark;
-            if framed {
-                return None;
-            }
-            let screen = screens.last();
-            let title = screen.map_or("CardTable".to_string(), |screen| screen.title());
-            let shows_back = screen.is_some_and(|screen| screen.shows_back()) && stack_depth > 1;
-            Some(draw_title_bar(frame, &title, shows_back, maximized, width))
+            let title_bar = if framed {
+                None
+            } else {
+                let screen = screens.last();
+                let title = screen.map_or("CardTable".to_string(), |screen| screen.title());
+                let shows_back = screen.is_some_and(|screen| screen.shows_back()) && stack_depth > 1;
+                Some(draw_title_bar(frame, &title, shows_back, maximized, width))
+            };
+            frame.draw_app_overlays();
+            frame.draw_tooltip();
+            frame.theme.force_light = false;
+            let list = frame.ui.end_frame();
+            (title_bar, list)
         });
-        if let Some((buttons, title_end, buttons_start)) = title_layout {
-            self.title_buttons = buttons;
-            let mut chrome = self.chrome.lock().unwrap();
-            chrome.drag_from_x = title_end;
-            chrome.drag_to_x = buttons_start;
-        } else {
-            self.title_buttons.clear();
+        self.apply_cursor(self.ui.cursor());
+        let mut keep_running = true;
+        if let Some(title_bar) = title_bar {
+            {
+                let mut chrome = self.chrome.lock().unwrap();
+                chrome.drag_from_x = title_bar.title_end;
+                chrome.drag_to_x = title_bar.buttons_start;
+            }
+            match title_bar.action {
+                Some(TitleAction::Close) => keep_running = self.screens_cancel_quit(),
+                Some(TitleAction::Maximize) => {
+                    if self.window.is_maximized() {
+                        self.window.restore();
+                    } else {
+                        self.window.maximize();
+                    }
+                }
+                Some(TitleAction::Theme) => {
+                    self.theme.is_dark = !self.theme.is_dark;
+                    profile::set_dark_mode(&mut self.settings, self.theme.is_dark);
+                }
+                Some(TitleAction::Back) => {
+                    let (_, back_commands) = self.with_frame(|frame, screens| {
+                        if let Some(screen) = screens.last_mut() {
+                            screen.on_back(frame);
+                        }
+                    });
+                    commands.extend(back_commands);
+                }
+                None => {}
+            }
         }
-        let keep_running = self.after_event(commands);
+        keep_running &= self.after_event(commands);
         self.fonts.flush(&mut self.renderer)?;
         let clear = self.theme.palette().surface;
         self.frame_count += 1;
@@ -720,78 +719,73 @@ impl App {
         Ok(keep_running)
     }
 
+    /// Pushes a screen (development hooks open a screen directly at startup).
+    pub fn push(&mut self, screen: Box<dyn Screen>) {
+        self.run_commands(vec![ScreenCommand::Push(screen)]);
+    }
+
     pub fn video(&self) -> &sdl3::VideoSubsystem {
         &self.video
     }
 }
 
-/// `ui.pushClip`'s scissor: logical units to physical pixels, rounded outward.
-pub fn logical_scissor(x: f32, y: f32, width: f32, height: f32, scale: f32) -> ScissorRect {
-    let x1 = (x * scale).floor();
-    let y1 = (y * scale).floor();
-    ScissorRect {
-        x: x1 as i32,
-        y: y1 as i32,
-        width: (((x + width) * scale).ceil() - x1).max(0.0) as i32,
-        height: (((y + height) * scale).ceil() - y1).max(0.0) as i32,
-    }
+/// LÖVE's system cursor names.
+fn system_cursor(name: &str) -> Option<SystemCursor> {
+    Some(match name {
+        "arrow" => SystemCursor::Arrow,
+        "ibeam" => SystemCursor::IBeam,
+        "wait" => SystemCursor::Wait,
+        "waitarrow" => SystemCursor::WaitArrow,
+        "crosshair" => SystemCursor::Crosshair,
+        "sizenwse" => SystemCursor::SizeNWSE,
+        "sizenesw" => SystemCursor::SizeNESW,
+        "sizewe" => SystemCursor::SizeWE,
+        "sizens" => SystemCursor::SizeNS,
+        "sizeall" => SystemCursor::SizeAll,
+        "no" => SystemCursor::No,
+        "hand" => SystemCursor::Hand,
+        _ => return None,
+    })
 }
 
-type TitleLayout = (Vec<(TitleButton, f32, f32, f32, f32)>, f32, f32);
-
-/// The custom title bar (`drawTitleBar`). Buttons are 40×40 icons at y = 8; the UI kit's icon
-/// buttons (hover, tooltips) replace this drawing in Phase 4.
-fn draw_title_bar(frame: &mut Frame, title: &str, shows_back: bool, maximized: bool, width: f32) -> TitleLayout {
+/// The custom title bar (`drawTitleBar`, port of `app_title_bar.dart`).
+fn draw_title_bar(frame: &mut Frame, title: &str, shows_back: bool, maximized: bool, width: f32) -> TitleBarResult {
     let foreground = fixed::TITLE_BAR_FOREGROUND;
-    frame.list.set_color(fixed::TITLE_BAR);
-    frame.list.rectangle(DrawMode::Fill, 0.0, 0.0, width, TITLE_BAR_HEIGHT, 0.0, 0.0);
-    let mut buttons = Vec::new();
+    frame.fill_rect(0.0, 0.0, width, TITLE_BAR_HEIGHT, 0.0, fixed::TITLE_BAR);
+    let mut action = None;
     let mut x = 16.0;
-    let icon = |frame: &mut Frame, name: &str, button_x: f32| {
-        let hovered = frame.mouse_x >= button_x
-            && frame.mouse_x < button_x + 40.0
-            && frame.mouse_y >= 8.0
-            && frame.mouse_y < 48.0;
-        if hovered {
-            frame.list.set_color(theme::with_alpha(foreground, 0.1 / foreground.alpha));
-            frame.list.circle(DrawMode::Fill, button_x + 20.0, 28.0, 20.0, None);
-        }
-        frame.list.set_color(foreground);
-        let key = theme::icon_font(24.0);
-        let glyph = theme::glyph(name);
-        let glyph_width = frame.fonts.width(key, &glyph);
-        let glyph_height = frame.fonts.height(key);
-        let gx = button_x + (40.0 - glyph_width) / 2.0;
-        let gy = 8.0 + (40.0 - glyph_height) / 2.0;
-        frame.fonts.print(frame.list, key, &glyph, snap(gx, frame.scale), snap(gy, frame.scale));
+    let button = |id: &'static str, tooltip: &'static str| IconButtonOptions {
+        id: Some(id),
+        tooltip: Some(tooltip),
+        color: Some(foreground),
+        ..IconButtonOptions::default()
     };
     if shows_back {
-        buttons.push((TitleButton::Back, 8.0, 8.0, 40.0, 40.0));
-        icon(frame, "arrow_back", 8.0);
+        if frame.icon_button("arrow_back", 8.0, 8.0, &button("title:back", "Back")) {
+            action = Some(TitleAction::Back);
+        }
         x = 56.0;
     }
-    let title_font = theme::font(14.0, Weight::Medium);
-    frame.list.set_color(fixed::WHITE);
-    let title_height = frame.fonts.height(title_font);
-    let title_y = (TITLE_BAR_HEIGHT - title_height) / 2.0;
-    frame.fonts.print(frame.list, title_font, title, snap(x, frame.scale), snap(title_y, frame.scale));
-    let title_end = x + frame.fonts.width(title_font, title) + 8.0;
+    let title_options = TextOptions::new().medium().middle_of(TITLE_BAR_HEIGHT).color(fixed::WHITE);
+    frame.text(title, x, 0.0, title_options);
+    let title_end = x + frame.text_width(title, 14.0, crate::ui::theme::Weight::Medium) + 8.0;
     let mut button_x = width - 8.0 - 40.0;
-    buttons.push((TitleButton::Close, button_x, 8.0, 40.0, 40.0));
-    icon(frame, "close", button_x);
+    if frame.icon_button("close", button_x, 8.0, &button("title:close", "Close CardTable")) {
+        action = Some(TitleAction::Close);
+    }
     button_x -= 48.0;
-    buttons.push((TitleButton::Maximize, button_x, 8.0, 40.0, 40.0));
-    icon(frame, if maximized { "filter_none" } else { "crop_square" }, button_x);
+    let (maximize_icon, maximize_tooltip) =
+        if maximized { ("filter_none", "Restore") } else { ("crop_square", "Maximize") };
+    if frame.icon_button(maximize_icon, button_x, 8.0, &button("title:max", maximize_tooltip)) {
+        action = Some(TitleAction::Maximize);
+    }
     button_x -= 48.0;
-    buttons.push((TitleButton::Theme, button_x, 8.0, 40.0, 40.0));
-    let theme_icon = if frame.theme.is_dark { "light_mode" } else { "dark_mode" };
-    icon(frame, theme_icon, button_x);
-    (buttons, title_end, button_x - 4.0)
-}
-
-/// `ui.snap`: moves a logical coordinate down to the physical pixel grid.
-pub fn snap(value: f32, scale: f32) -> f32 {
-    (value * scale).floor() / scale
+    let (theme_icon, theme_tooltip) =
+        if frame.theme.is_dark { ("light_mode", "Switch to light mode") } else { ("dark_mode", "Switch to dark mode") };
+    if frame.icon_button(theme_icon, button_x, 8.0, &button("title:theme", theme_tooltip)) {
+        action = Some(TitleAction::Theme);
+    }
+    TitleBarResult { action, title_end, buttons_start: button_x - 4.0 }
 }
 
 #[cfg(test)]
@@ -825,16 +819,17 @@ mod tests {
     }
 
     #[test]
-    fn scissors_round_outward() {
-        let rect = logical_scissor(0.5, 56.0, 100.3, 10.0, 1.5);
-        assert_eq!(rect, ScissorRect { x: 0, y: 84, width: 152, height: 15 });
-    }
-
-    #[test]
     fn profile_defaults() {
         let profile = PlayerProfile::load(&Settings::in_memory());
         assert_eq!((profile.name.as_str(), profile.color), ("Player", 0xFF45_5A64));
         let spaced = PlayerProfile { name: "  ".to_string(), ..profile };
         assert_eq!(spaced.display_name(), "Player");
+    }
+
+    #[test]
+    fn love_cursor_names() {
+        assert_eq!(system_cursor("hand"), Some(SystemCursor::Hand));
+        assert_eq!(system_cursor("ibeam"), Some(SystemCursor::IBeam));
+        assert_eq!(system_cursor("bogus"), None);
     }
 }

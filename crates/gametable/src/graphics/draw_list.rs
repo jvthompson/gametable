@@ -515,6 +515,26 @@ impl DrawList {
             vertex_count,
         });
     }
+
+    /// Adds everything `other` recorded after what this list holds (the UI's layers are recorded
+    /// separately and drawn in order).
+    pub fn append(&mut self, other: &DrawList) {
+        let offset = self.vertices.len() as u32;
+        self.vertices.extend_from_slice(&other.vertices);
+        self.commands.extend(other.commands.iter().map(|command| match *command {
+            DrawCommand::Triangles { texture, program, stencil, scissor, first_vertex, vertex_count } => {
+                DrawCommand::Triangles {
+                    texture,
+                    program,
+                    stencil,
+                    scissor,
+                    first_vertex: first_vertex + offset,
+                    vertex_count,
+                }
+            }
+            DrawCommand::ClearStencil => DrawCommand::ClearStencil,
+        }));
+    }
 }
 
 fn pairs_to_points(coordinates: &[f32]) -> Vec<Point> {
