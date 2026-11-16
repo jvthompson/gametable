@@ -167,7 +167,7 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] Interop: Go server vs Rust server — the same scripted 2-player session (accounts, chat, decks, shop, admin,
       trading, rooms + engine, files, asset channel, error paths, kick, logout) gives byte-identical transcripts
       (210 lines) apart from random pack contents. Scripts: see session log.
-- [ ] Interop: original LÖVE client against the Rust server (manual; low risk after the Go comparison)
+- [x] Interop: original LÖVE client against the Rust server — checked by the user on 2026-11-15 (connects and works).
 
 ### Phase 3 — Client foundation
 - [ ] App shell (`src/app.lua`): screen stack, title bar, input routing, UI scale/DPI, F6 frame toggle, CLI flags
