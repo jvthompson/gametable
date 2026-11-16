@@ -122,7 +122,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - [x] `host_engine` — `tests/host_engine_golden.rs` replays two scripted games (~110 requests, roster changes,
       clock/timer ticks) and matches every outbound message and the final state against the original Lua
 - [x] Protocol envelope, line codec, message type constants (`protocol.rs`)
-- [ ] `compat-check` example (port of `tools/compat_check`): byte-identical re-save of a game library
+- [x] `compat-check` example (port of `tools/compat_check`, minus image decoding which needs the client):
+      0 problems over the real library; `tools/lua_golden/resave_library.sh` re-saves the library with both Lua and
+      Rust and diffs them — all 53 files (11 games, built-in decks, saves, library decks) byte-identical
 
 ### Phase 2 — `gametable-server`
 - [ ] `proto` (framing, heartbeat, send queue limits)
@@ -245,6 +247,10 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   `host_engine`). The `host_engine` generator pins uuid.v4 to `id-0001...`, math.random to `util.seededRng(seed)` and
   the clock to a script-controlled value; the Rust test does the same through `SessionEnvironment`. Use this for every
   engine module: add fixtures, regenerate, and make the Rust test compare against `expected/`.
+- **Real game library for testing: `D:\CardfluxLibrary` (`game_library/`, `deck_library/`). READ ONLY — never modify
+  anything there.** Lorcana and Middle Earth are the most complete games. Tools must write output elsewhere
+  (both `compat_check --resaved-output` and `resave_library.sh` refuse output paths inside the library).
+  Re-run `bash tools/lua_golden/resave_library.sh /d/CardfluxLibrary <scratch dir>` after any model/JSON change.
 - `rustfmt.toml` sets `max_width = 120`; run `cargo fmt --all` before committing.
 
 ## Open questions
@@ -265,3 +271,5 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   then `host_engine`, protocol codec, `compat-check`.
 - 2026-11-15: `session`, `host_engine` and `protocol` done; 101 core tests pass, including two golden multiplayer
   scenarios matched message for message. Next: `compat-check` example (last Phase 1 item), then Phase 2 (server).
+- 2026-11-15: `compat_check` example done; the real library (`D:\CardfluxLibrary`, read-only) re-saves byte-identically
+  to the original Lua (53 files). **Phase 1 complete.** Next: Phase 2, the server (start with `proto`, `store`, `games`).
