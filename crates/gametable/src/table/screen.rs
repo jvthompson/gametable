@@ -425,6 +425,22 @@ impl TableScreen {
         self.snapshot_session();
     }
 
+    /// A joined player's view turns around when their seat is on the far side.
+    pub fn set_mirrored(&mut self, is_mirrored: bool) {
+        self.is_mirrored = is_mirrored;
+    }
+
+    /// Other players' avatars: player id -> image cache key.
+    pub fn set_avatar_keys(&mut self, avatar_keys: HashMap<String, String>) {
+        self.avatar_keys = avatar_keys;
+    }
+
+    /// The same game resent by the host (e.g. after a reconnect): refresh the definitions.
+    pub fn replace_game(&mut self, game: GameDefinition) {
+        self.backend.session_mut().game = game.clone();
+        self.game = Rc::new(game);
+    }
+
     /// What happened since the last call (leave, save, kick).
     pub fn take_events(&mut self) -> Vec<TableEvent> {
         std::mem::take(&mut self.events)
@@ -1153,7 +1169,7 @@ impl TableScreen {
 
     pub fn update(&mut self, frame: &mut Frame, dt: f32) {
         self.last_dt = dt;
-        self.backend.update();
+        self.backend.update(frame.ui.frame_index());
         let chat_target = if self.chat_open { 1.0 } else { 0.0 };
         self.chat_animation += (chat_target - self.chat_animation) * (1.0 - (-CHAT_ANIMATION_RATE * dt).exp());
         let log_target = if self.log_open { 1.0 } else { 0.0 };

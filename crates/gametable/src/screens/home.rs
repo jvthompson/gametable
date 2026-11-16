@@ -9,8 +9,10 @@ use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::profile::{self, RecentServer};
 use crate::screens::edit_player_settings::EditPlayerSettings;
 use crate::screens::info_dialogs::{show_controls_dialog, show_support_dialog};
+use crate::screens::multiplayer::Join;
 use crate::screens::not_ported::NotPortedYet;
 use crate::screens::player_count::PlayerCount;
+use crate::screens::recent_servers::recent_servers_dropdown;
 use crate::screens::settings_dialog::SettingsDialog;
 use crate::ui::components::{AvatarSource, BannerKind};
 use crate::ui::context::RegionOptions;
@@ -19,6 +21,7 @@ use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::{Weight, with_alpha};
 use crate::ui::widgets::{ButtonOptions, ButtonVariant, Choice, IconButtonOptions};
 use crate::version;
+use gametable_core::util::trim_lua_whitespace;
 
 /// Below this content width there isn't room for both columns side by side.
 const WIDE_BREAKPOINT: f32 = 760.0;
@@ -95,10 +98,12 @@ impl Home {
         }
     }
 
-    /// Opens the Join screen for this address, which connects straight away (the Join screen
-    /// arrives with Phase 7; an unparsable port will mean the default port).
-    fn connect(frame: &mut Frame, _host: &str, _port: &str) {
-        frame.commands.push(ScreenCommand::Push(NotPortedYet::boxed("Join Game", "Joining a game", 7)));
+    /// Opens the Join screen for this address, which connects straight away (an unparsable port
+    /// means the default port).
+    fn connect(frame: &mut Frame, host: &str, port: &str) {
+        let port = trim_lua_whitespace(port).parse().ok();
+        let join = Join::new(Some(trim_lua_whitespace(host)), port, true);
+        frame.commands.push(ScreenCommand::Push(Box::new(join)));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -134,70 +139,11 @@ impl Home {
     /// The arrow at the right end of the address field opening the recently joined servers;
     /// picking one fills in both fields.
     fn draw_recent_servers_popup(&mut self, frame: &mut Frame, recent: &[RecentServer], x: f32, y: f32, width: f32) {
-        let options = IconButtonOptions::tooltip("Recent servers").id("home:join:recent");
-        if frame.icon_button("arrow_drop_down", x + width - 40.0, y + 4.0, &options) {
-            self.recent_open = !self.recent_open;
+        let picked = recent_servers_dropdown(frame, "home:join:recent", recent, x, y, width, &mut self.recent_open);
+        if let Some(server) = picked {
+            self.join_host = server.host;
+            self.join_port = server.port.to_string();
         }
-        if !self.recent_open {
-            return;
-        }
-        let item_height = 40.0;
-        let (popup_x, popup_y, popup_width) = (x, y + 50.0, width);
-        let popup_height = recent.len() as f32 * item_height + 16.0;
-        frame.overlay(|frame| {
-            let palette = frame.palette();
-            // Swallow clicks outside so they only close the popup.
-            frame.ui.cover(-1e9, -1e9, 2e9, 2e9);
-            frame.shadow(popup_x, popup_y, popup_width, popup_height, 4.0, 2.0);
-            frame.fill_rect(popup_x, popup_y, popup_width, popup_height, 4.0, palette.surface_container);
-            let mut item_y = popup_y + 8.0;
-            for (index, server) in recent.iter().enumerate() {
-                let number = index + 1;
-                let region = frame.ui.region(
-                    &format!("home:join:recent:{number}"),
-                    popup_x,
-                    item_y,
-                    popup_width - 40.0,
-                    item_height,
-                    RegionOptions::hand(),
-                );
-                if region.hovered {
-                    frame.fill_rect(
-                        popup_x,
-                        item_y,
-                        popup_width,
-                        item_height,
-                        0.0,
-                        with_alpha(palette.on_surface, 0.08),
-                    );
-                }
-                let label = format!("{} : {}", server.host, server.port);
-                let label_options = TextOptions::new()
-                    .width(popup_width - 56.0)
-                    .middle_of(item_height)
-                    .ellipsis()
-                    .color(palette.on_surface);
-                frame.text(&label, popup_x + 12.0, item_y, label_options);
-                let remove_id = format!("home:join:recent:rm:{number}");
-                let remove_options = IconButtonOptions::tooltip("Remove").id(&remove_id).size(32.0, 32.0 * 0.6);
-                if frame.icon_button("close", popup_x + popup_width - 40.0, item_y + 4.0, &remove_options) {
-                    profile::remove_recent_server(frame.settings, &server.host, server.port);
-                    if recent.len() == 1 {
-                        self.recent_open = false;
-                    }
-                } else if region.clicked {
-                    self.join_host = server.host.clone();
-                    self.join_port = server.port.to_string();
-                    self.recent_open = false;
-                }
-                item_y += item_height;
-            }
-            let clicked_outside = frame.ui.mouse_pressed(1)
-                && !frame.ui.hover_ignoring_layer(popup_x, popup_y, popup_width, popup_height);
-            if clicked_outside || frame.ui.mouse_pressed(2) {
-                self.recent_open = false;
-            }
-        });
     }
 
     fn draw_join_fields(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, recent: &[RecentServer]) {

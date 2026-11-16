@@ -3,6 +3,7 @@
 pub mod app;
 pub mod data;
 pub mod graphics;
+pub mod net;
 pub mod screens;
 pub mod sound;
 pub mod table;

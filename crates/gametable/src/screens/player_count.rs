@@ -3,7 +3,7 @@
 //! practising with 1-4 decks).
 
 use crate::app::{Frame, Screen, ScreenCommand};
-use crate::screens::not_ported::NotPortedYet;
+use crate::screens::multiplayer::HostSetup;
 use crate::screens::practice_select::PracticeSelect;
 use crate::ui::draw::TextOptions;
 use crate::ui::widgets::{ButtonOptions, ButtonVariant};
@@ -55,7 +55,7 @@ impl PlayerCount {
     fn choose(&self, frame: &mut Frame, count: usize) {
         let next: Box<dyn Screen> = match self.purpose {
             PlayerCountPurpose::Practice => Box::new(PracticeSelect::new(frame, count)),
-            PlayerCountPurpose::Host => NotPortedYet::boxed("Host Game", "Hosting a game", 7),
+            PlayerCountPurpose::Host => Box::new(HostSetup::new(frame, count)),
         };
         frame.commands.push(ScreenCommand::Push(next));
     }

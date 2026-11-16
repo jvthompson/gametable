@@ -258,11 +258,13 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   deck widgets, pack generator, card tokens, scenarios, Load Saved Game's seat matching.
 
 ### Phase 7 — Peer multiplayer
-- [ ] Client `protocol` connection, `host_server`, `game_client`, `controller` (Client)
-- [ ] Screens: HostSetup, AssignSeats, HostGameSelect, HostGame, Join, ClientGame
-- [ ] Reconnect / seat reclaim
-- [ ] `netinfo` (local + public IP), UPnP
-- [ ] Interop: Rust ↔ LÖVE, both host/join directions
+- [x] Client `protocol` connection, `host_server`, `game_client`, `controller` (Client)
+  (`net/`: std sockets, connect on a helper thread; `table/network.rs`: `NetworkHostBackend`, `ClientBackend`)
+- [x] Screens: HostSetup, AssignSeats, HostGameSelect, HostGame, Join, ClientGame (`screens/multiplayer.rs`; the
+  Discord tab says Discord isn't available until Phase 11; a CardTable server answer opens a Phase 10 stand-in)
+- [x] Reconnect / seat reclaim
+- [x] `netinfo` (local + public IP over plain HTTP), UPnP (hand-ported SSDP/SOAP, no `igd-next`)
+- [x] Interop: Rust ↔ LÖVE, both host/join directions
 
 ### Phase 8 — Decks and documents
 - [ ] Deck editor, deck library dialog
@@ -438,3 +440,12 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   by driving it with `--eval`/`--shot` under a test identity. 91 client unit tests, 3 table + 10 UI kit interaction
   tests. Next: Phase 7 (peer multiplayer: protocol connection, host server, game client, client backend for
   `TableBackend`, the multiplayer screens).
+- 2026-11-16: **Phase 7 complete.** `net/` (connection + heartbeat, connector thread, plain HTTP, netinfo, UPnP,
+  host server, game client), network table backends, the six multiplayer screens; Home's Join and Player Count's
+  Host now open them. `TableBackend::update` takes the frame index (the host server pumps once a frame).
+  `tests/multiplayer.rs` plays host + client over loopback (handshake, roster/avatars, game + state, a draw request,
+  seat reclaim, kick). `examples/interop_peer.rs host|join <port>` is a headless peer: checked against the original
+  LÖVE app (driven with `--script`, UPnP off) in both directions — handshake, roster, avatars, gameData, fullState,
+  requests, game log text and the `hostLeft` disconnect all interoperate; the Rust Host lobby and client table match
+  the original side by side. Dev hooks: `GAMETABLE_SCREEN=host|join`, `GAMETABLE_JOIN=<host:port>`,
+  `GAMETABLE_NO_UPNP`. Next: Phase 8 (deck editor, rulebook viewer).

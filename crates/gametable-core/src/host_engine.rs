@@ -626,7 +626,7 @@ impl HostEngine {
         (player_id != self.host_player_id).then(|| player_id.to_string())
     }
 
-    fn publish_card_drag_preview(
+    pub fn publish_card_drag_preview(
         &mut self,
         player_id: &str,
         instance_ids: Vec<String>,
@@ -647,7 +647,7 @@ impl HostEngine {
         transport.broadcast("cardDragPreview", payload.into(), self.except_for(player_id).as_deref());
     }
 
-    fn clear_card_drag_preview(&mut self, player_id: &str, transport: &mut dyn HostTransport) {
+    pub fn clear_card_drag_preview(&mut self, player_id: &str, transport: &mut dyn HostTransport) {
         if self.session.card_drag_previews.remove(player_id).is_none() {
             return;
         }
@@ -655,7 +655,7 @@ impl HostEngine {
         transport.broadcast("cardDragPreviewEnd", payload.into(), self.except_for(player_id).as_deref());
     }
 
-    fn publish_arrow_drag_preview(
+    pub fn publish_arrow_drag_preview(
         &mut self,
         player_id: &str,
         corners: (Option<f64>, Option<f64>, Option<f64>, Option<f64>),
@@ -675,7 +675,7 @@ impl HostEngine {
         transport.broadcast("arrowDragPreview", payload.into(), self.except_for(player_id).as_deref());
     }
 
-    fn clear_arrow_drag_preview(&mut self, player_id: &str, transport: &mut dyn HostTransport) {
+    pub fn clear_arrow_drag_preview(&mut self, player_id: &str, transport: &mut dyn HostTransport) {
         if self.session.arrow_drag_previews.remove(player_id).is_none() {
             return;
         }

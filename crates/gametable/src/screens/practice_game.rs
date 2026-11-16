@@ -12,6 +12,45 @@ use crate::table::{PracticeBackend, TableEvent, TableOptions, TableScreen};
 use crate::ui::save_name_dialog::{ExistingName, SaveNameDialog, SaveNameResponse};
 use gametable_core::models::format_iso_local_timestamp;
 
+/// The Save Game prompt (`saveNameDialog.open` in `S:saveGame`), for games with a folder.
+pub fn save_game_dialog(game: &GameDefinition) -> Option<SaveNameDialog> {
+    let folder = game.folder_path.clone()?;
+    let game_name = game.name.clone();
+    let existing = list_save_games(&folder)
+        .into_iter()
+        .map(|save| ExistingName {
+            name: save.display_name,
+            trailing: Some(format!("{} player(s)", save.player_count)),
+        })
+        .collect();
+    let overwrite_name = game_name.clone();
+    let mut dialog = SaveNameDialog::new(
+        "savegame",
+        "Save Game",
+        "Save Name",
+        existing,
+        "Existing saves -- tap to reuse a name",
+        format!("No saved games yet for {game_name}."),
+        "Overwrite Save?",
+        Box::new(move |name| format!("A save named \"{name}\" already exists for {overwrite_name}. Overwrite it?")),
+        Box::new(move |name| save_exists(&folder, name)),
+    );
+    dialog.empty_name_message = Some("Enter a name.".to_string());
+    Some(dialog)
+}
+
+/// Writes the table's current state (without open searches) as a save, with a snackbar.
+pub fn save_table(frame: &mut Frame, table: &TableScreen, name: &str) {
+    let Some(folder) = table.game().folder_path.clone() else { return };
+    let mut state = table.backend().session().state().clone();
+    state.searches.clear();
+    let save = SavedGame { saved_at: format_iso_local_timestamp(&local_now()), state };
+    match write_save_game(&folder, name, &save) {
+        Ok(_) => frame.ui.toast(&format!("Saved \"{name}\""), None),
+        Err(error) => frame.ui.toast(&format!("Could not save: {error}"), None),
+    }
+}
+
 pub struct PracticeGame {
     table: TableScreen,
     save_dialog: Option<SaveNameDialog>,
@@ -81,42 +120,11 @@ impl PracticeGame {
 
     /// The Save Game prompt over the table.
     fn open_save_dialog(&mut self) {
-        let game = self.table.game();
-        let Some(folder) = game.folder_path.clone() else { return };
-        let game_name = game.name.clone();
-        let existing = list_save_games(&folder)
-            .into_iter()
-            .map(|save| ExistingName {
-                name: save.display_name,
-                trailing: Some(format!("{} player(s)", save.player_count)),
-            })
-            .collect();
-        let overwrite_name = game_name.clone();
-        let exists_folder = folder.clone();
-        let mut dialog = SaveNameDialog::new(
-            "savegame",
-            "Save Game",
-            "Save Name",
-            existing,
-            "Existing saves -- tap to reuse a name",
-            format!("No saved games yet for {game_name}."),
-            "Overwrite Save?",
-            Box::new(move |name| format!("A save named \"{name}\" already exists for {overwrite_name}. Overwrite it?")),
-            Box::new(move |name| save_exists(&exists_folder, name)),
-        );
-        dialog.empty_name_message = Some("Enter a name.".to_string());
-        self.save_dialog = Some(dialog);
+        self.save_dialog = save_game_dialog(self.table.game());
     }
 
     fn save_game(&mut self, frame: &mut Frame, name: &str) {
-        let Some(folder) = self.table.game().folder_path.clone() else { return };
-        let mut state = self.table.backend().session().state().clone();
-        state.searches.clear();
-        let save = SavedGame { saved_at: format_iso_local_timestamp(&local_now()), state };
-        match write_save_game(&folder, name, &save) {
-            Ok(_) => frame.ui.toast(&format!("Saved \"{name}\""), None),
-            Err(error) => frame.ui.toast(&format!("Could not save: {error}"), None),
-        }
+        save_table(frame, &self.table, name);
     }
 }
 

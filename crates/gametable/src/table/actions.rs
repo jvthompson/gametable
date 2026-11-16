@@ -6,6 +6,7 @@
 //! (Phase 7) turns the same actions into request messages.
 
 use gametable_core::deck_widget_zones::parse_deck_widget_zone_id;
+use gametable_core::json::{JsonObject, JsonValue};
 use gametable_core::models::{BoardWidgetKind, DeckConfig, WidgetSizeOverride};
 use gametable_core::session::Session;
 use gametable_core::stack_utils::stack_of;
@@ -219,9 +220,231 @@ pub trait TableBackend {
     fn session_mut(&mut self) -> &mut Session;
     fn perform(&mut self, action: TableAction);
     /// Called once per frame before drawing (network backends pump messages here).
-    fn update(&mut self) {
+    fn update(&mut self, _frame_index: u64) {
         self.session_mut().update();
     }
+}
+
+fn object() -> JsonObject {
+    JsonObject::new()
+}
+
+/// `Client:*` in `src/game/controller.lua`: the request message a joined player sends for an
+/// action (payload keys in the original's order).
+pub fn request_message(action: &TableAction) -> (&'static str, JsonValue) {
+    use gametable_core::protocol::game_requests as requests;
+    let (message_type, payload) = match action {
+        TableAction::MoveCard { instance_id, x, y } => {
+            (requests::MOVE, object().with("instanceId", instance_id.as_str()).with("x", *x).with("y", *y))
+        }
+        TableAction::MoveGroup { primary_instance_id, passenger_root_ids, x, y } => (
+            requests::MOVE_GROUP,
+            object()
+                .with("primaryInstanceId", primary_instance_id.as_str())
+                .with("passengerRootInstanceIds", passenger_root_ids.clone())
+                .with("x", *x)
+                .with("y", *y),
+        ),
+        TableAction::MoveStack { root_instance_id, x, y } => (
+            requests::MOVE_STACK,
+            object().with("rootInstanceId", root_instance_id.as_str()).with("x", *x).with("y", *y),
+        ),
+        TableAction::RotateStack { root_instance_id, clockwise, step } => (
+            requests::ROTATE_STACK,
+            object()
+                .with("rootInstanceId", root_instance_id.as_str())
+                .with("clockwise", *clockwise)
+                .with("step", *step),
+        ),
+        TableAction::RotateWidget { instance_id, clockwise, step } => (
+            requests::ROTATE_WIDGET,
+            object().with("instanceId", instance_id.as_str()).with("clockwise", *clockwise).with("step", *step),
+        ),
+        TableAction::FlipWidget { instance_id } => {
+            (requests::FLIP_WIDGET, object().with("instanceId", instance_id.as_str()))
+        }
+        TableAction::SendWidgetToBack { instance_id } => {
+            (requests::SEND_WIDGET_TO_BACK, object().with("instanceId", instance_id.as_str()))
+        }
+        TableAction::SendToBack { root_instance_id } => {
+            (requests::SEND_TO_BACK, object().with("rootInstanceId", root_instance_id.as_str()))
+        }
+        TableAction::FlipCard { instance_id } => (requests::FLIP, object().with("instanceId", instance_id.as_str())),
+        TableAction::GiveCard { instance_id, new_owner_id } => (
+            requests::GIVE_CARD,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("newOwnerId", new_owner_id.as_deref().map_or(JsonValue::Null, JsonValue::from)),
+        ),
+        TableAction::StackCard { instance_id, onto_instance_id } => (
+            requests::STACK,
+            object().with("instanceId", instance_id.as_str()).with("ontoInstanceId", onto_instance_id.as_str()),
+        ),
+        TableAction::MoveToHand { instance_id } => {
+            (requests::MOVE_TO_HAND, object().with("instanceId", instance_id.as_str()))
+        }
+        TableAction::ReorderHand { instance_id, target_index } => (
+            requests::REORDER_HAND,
+            object().with("instanceId", instance_id.as_str()).with("targetIndex", *target_index as f64),
+        ),
+        TableAction::DrawCard { pile_instance_id, count } => {
+            (requests::DRAW, object().with("pileInstanceId", pile_instance_id.as_str()).with("count", *count as f64))
+        }
+        TableAction::ShufflePile { root_instance_id } => {
+            (requests::SHUFFLE, object().with("pileRootInstanceId", root_instance_id.as_str()))
+        }
+        TableAction::DrawFromZone { zone_id, count } => {
+            (requests::DRAW_FROM_ZONE, object().with("zoneId", zone_id.as_str()).with("count", *count as f64))
+        }
+        TableAction::ReturnToZone { instance_id, zone_id, to_bottom } => (
+            requests::RETURN_TO_ZONE,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("zoneId", zone_id.as_str())
+                .with("toBottom", *to_bottom),
+        ),
+        TableAction::ShuffleZone { zone_id } => (requests::SHUFFLE_ZONE, object().with("zoneId", zone_id.as_str())),
+        TableAction::LoadDeckIntoZone { zone_id, deck } => {
+            (requests::LOAD_DECK_INTO_ZONE, object().with("zoneId", zone_id.as_str()).with("deck", deck.to_json()))
+        }
+        TableAction::LoadScenario { scenario_id } => {
+            (requests::LOAD_SCENARIO, object().with("scenarioId", scenario_id.as_str()))
+        }
+        TableAction::SetSharedPlaymat { on, index } => {
+            (requests::SET_SHARED_PLAYMAT, object().with("on", *on).with("index", *index as f64))
+        }
+        TableAction::SetCurrentPlayer { player_id } => {
+            (requests::SET_CURRENT_PLAYER, object().with("playerId", player_id.as_str()))
+        }
+        TableAction::SetIndividualPlaymat { on, index } => {
+            (requests::SET_INDIVIDUAL_PLAYMAT, object().with("on", *on).with("index", *index as f64))
+        }
+        TableAction::StartSearchZone { zone_id } => {
+            (requests::START_SEARCH_ZONE, object().with("zoneId", zone_id.as_str()))
+        }
+        TableAction::StartSearchPile { root_instance_id } => {
+            (requests::START_SEARCH_PILE, object().with("pileRootInstanceId", root_instance_id.as_str()))
+        }
+        TableAction::StopSearch => (requests::STOP_SEARCH, object()),
+        TableAction::CreateWidget { instance_id, kind, x, y, image_path } => {
+            let mut payload = object()
+                .with("instanceId", instance_id.as_str())
+                .with("kind", kind.as_json_str())
+                .with("x", *x)
+                .with("y", *y);
+            if let Some(image_path) = image_path {
+                payload = payload.with("imagePath", image_path.as_str());
+            }
+            (requests::CREATE_WIDGET, payload)
+        }
+        TableAction::CreateArrow { instance_id, x, y, x2, y2 } => (
+            requests::CREATE_ARROW,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("x", *x)
+                .with("y", *y)
+                .with("x2", *x2)
+                .with("y2", *y2),
+        ),
+        TableAction::MoveWidget { instance_id, x, y } => {
+            (requests::MOVE_WIDGET, object().with("instanceId", instance_id.as_str()).with("x", *x).with("y", *y))
+        }
+        TableAction::SetWidgetValue { instance_id, value } => {
+            (requests::SET_WIDGET_VALUE, object().with("instanceId", instance_id.as_str()).with("value", *value))
+        }
+        TableAction::DeleteWidget { instance_id } => {
+            (requests::DELETE_WIDGET, object().with("instanceId", instance_id.as_str()))
+        }
+        TableAction::SetWidgetColors { instance_id, background_color, text_color } => (
+            requests::SET_WIDGET_COLORS,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("backgroundColor", f64::from(*background_color))
+                .with("textColor", f64::from(*text_color)),
+        ),
+        TableAction::SetWidgetText { instance_id, text, text_color } => (
+            requests::SET_WIDGET_TEXT,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("text", text.as_str())
+                .with("textColor", f64::from(*text_color)),
+        ),
+        TableAction::SetWidgetSize { instance_id, size_override } => (
+            requests::SET_WIDGET_SIZE,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("sizeOverride", size_override.map_or(JsonValue::Null, WidgetSizeOverride::to_json)),
+        ),
+        TableAction::DuplicateWidget { source_instance_id, new_instance_id, x, y } => (
+            requests::DUPLICATE_WIDGET,
+            object()
+                .with("sourceInstanceId", source_instance_id.as_str())
+                .with("newInstanceId", new_instance_id.as_str())
+                .with("x", *x)
+                .with("y", *y),
+        ),
+        TableAction::AttachWidgetToCard { instance_id, card_id, x, y } => (
+            requests::ATTACH_WIDGET_TO_CARD,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("cardId", card_id.as_str())
+                .with("x", *x)
+                .with("y", *y),
+        ),
+        TableAction::DrawBagToken { instance_id } => {
+            (requests::DRAW_BAG_TOKEN, object().with("instanceId", instance_id.as_str()))
+        }
+        TableAction::ReturnBagToken { instance_id, slot_id } => (
+            requests::RETURN_BAG_TOKEN,
+            object().with("instanceId", instance_id.as_str()).with("slotId", slot_id.as_str()),
+        ),
+        TableAction::PlaceBagTokenOnTable { instance_id, slot_id, new_instance_id, x, y } => (
+            requests::PLACE_BAG_TOKEN_ON_TABLE,
+            object()
+                .with("instanceId", instance_id.as_str())
+                .with("slotId", slot_id.as_str())
+                .with("newInstanceId", new_instance_id.as_str())
+                .with("x", *x)
+                .with("y", *y),
+        ),
+        TableAction::ResetBag { instance_id } => {
+            (requests::RESET_BAG, object().with("instanceId", instance_id.as_str()))
+        }
+        TableAction::SetBagRemaining { instance_id, bag_remaining } => (
+            requests::SET_BAG_REMAINING,
+            object().with("instanceId", instance_id.as_str()).with("bagRemaining", bag_remaining.clone()),
+        ),
+        TableAction::ReturnImageTokenToBag { bag_instance_id, token_instance_id } => (
+            requests::RETURN_IMAGE_TOKEN_TO_BAG,
+            object()
+                .with("bagInstanceId", bag_instance_id.as_str())
+                .with("tokenInstanceId", token_instance_id.as_str()),
+        ),
+        TableAction::GeneratePack { set_id } => (requests::GENERATE_PACK, object().with("setId", set_id.as_str())),
+        TableAction::CreateCardFromLibrary { definition_id, x, y } => (
+            requests::CREATE_CARD_FROM_LIBRARY,
+            object().with("definitionId", definition_id.as_str()).with("x", *x).with("y", *y),
+        ),
+        TableAction::PreviewCardDrag { primary_instance_id, passenger_root_ids, fraction_x, fraction_y } => {
+            let mut ids = vec![primary_instance_id.clone()];
+            ids.extend(passenger_root_ids.iter().cloned());
+            (
+                requests::CARD_DRAG_PREVIEW,
+                object().with("instanceIds", ids).with("fx", *fraction_x).with("fy", *fraction_y),
+            )
+        }
+        TableAction::EndCardDragPreview => (requests::CARD_DRAG_PREVIEW_END, object()),
+        TableAction::PreviewArrowDrag { fraction_x, fraction_y, fraction_x2, fraction_y2 } => (
+            requests::ARROW_DRAG_PREVIEW,
+            object()
+                .with("fx", *fraction_x)
+                .with("fy", *fraction_y)
+                .with("fx2", *fraction_x2)
+                .with("fy2", *fraction_y2),
+        ),
+        TableAction::EndArrowDragPreview => (requests::ARROW_DRAG_PREVIEW_END, object()),
+    };
+    (message_type, JsonValue::Object(payload))
 }
 
 /// A practice game: the session lives here and actions apply straight to it.

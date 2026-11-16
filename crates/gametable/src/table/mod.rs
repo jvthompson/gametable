@@ -14,6 +14,7 @@ pub mod card_pool_grid;
 pub mod card_render;
 pub mod input;
 pub mod menus;
+pub mod network;
 pub mod panels;
 pub mod screen;
 pub mod selection;

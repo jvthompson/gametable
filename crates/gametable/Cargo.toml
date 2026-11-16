@@ -7,5 +7,6 @@ license.workspace = true
 
 [dependencies]
 gametable-core = { path = "../gametable-core" }
+base64 = "0.23.1"
 libloading = "0.9.1"
 sdl3 = { version = "0.22.1", features = ["build-from-source", "image", "ttf"] }
