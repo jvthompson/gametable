@@ -1,0 +1,72 @@
+{
+  "seed": 7,
+  "hostPlayerId": "__server__",
+  "ownerId": "p1",
+  "game": {
+    "id": "deal_game",
+    "name": "Deal Variants",
+    "cards": [
+      {"id": "a", "cardTitle": "Alpha"},
+      {"id": "b", "cardTitle": "Beta", "unownable": true},
+      {"id": "c", "cardTitle": "Gamma"}
+    ],
+    "zones": [
+      {"id": "draw", "name": "Draw", "dealsBuiltDeck": true, "autoShuffle": true},
+      {"id": "hand_start", "name": "Opening Hand", "faceUp": true, "entries": [{"definitionId": "c", "quantity": 2}, {"definitionId": "unknown", "quantity": 3}]},
+      {"id": "secret", "name": "Secret", "faceUp": true, "visibleToAll": false, "entries": [{"definitionId": "a", "quantity": 1}]},
+      {"id": "standard", "name": "Playing Cards", "shared": true, "standardDeck": true, "autoShuffle": true},
+      {"id": "market", "name": "Market", "shared": true, "faceUp": true, "visibleToAll": true},
+      {"id": "loaded", "name": "Loaded Deck", "shared": true, "deckName": "Starter"},
+      {"id": "discard", "name": "Discard", "shared": true, "isDiscardPile": true},
+      {"id": "mybag", "name": "My Bag", "kind": "widget", "widgetKind": "tokenBag", "bagImagePath": "bag.png",
+       "bagEntries": [{"definitionId": "plus1.png", "quantity": 2}]},
+      {"id": "score", "name": "Score", "shared": true, "kind": "widget", "counterStartingValue": 3,
+       "counterStartingColor": 4291821359, "counterStartingTextColor": 4278190080, "counterImagePath": "coin.png"}
+    ],
+    "tableColor": "#1976D2"
+  },
+  "players": [
+    {"id": "p1", "name": "Alice", "role": "client", "color": 4291821359},
+    {"id": "p2", "name": "Bob", "role": "client", "color": 4282735204}
+  ],
+  "sharedDeckConfigsByZoneId": {
+    "loaded": {"gameId": "deal_game", "subdecks": [{"name": "main_deck", "entries": [{"definitionId": "b", "quantity": 2}]}]}
+  },
+  "initialRoster": [
+    {"id": "p1", "name": "Alice", "role": "client", "color": 4291821359}
+  ],
+  "steps": [
+    {"roster": [
+      {"id": "p1", "name": "Alice", "role": "client", "color": 4291821359},
+      {"id": "p2", "name": "Bob", "role": "client", "color": 4282735204}
+    ]},
+    {"from": "p1", "type": "requestCreateWidget", "payload": {"instanceId": "dw1", "kind": "deckBuilder", "x": 0.3, "y": 0.6}},
+    {"from": "p1", "type": "requestDrawFromZone", "payload": {"zoneId": "draw", "count": 2}},
+    {"from": "p1", "type": "requestReturnToZone", "payload": {"instanceId": "id-0003", "zoneId": "deckWidget:dw1:draw"}},
+    {"from": "p2", "type": "requestReturnToZone", "payload": {"instanceId": "id-0007", "zoneId": "deckWidget:dw1:draw"}},
+    {"from": "p2", "type": "requestStartSearchZone", "payload": {"zoneId": "deckWidget:dw1:draw"}},
+    {"from": "p1", "type": "requestStartSearchZone", "payload": {"zoneId": "deckWidget:dw1:draw"}},
+    {"from": "p2", "type": "requestDrawFromZone", "payload": {"zoneId": "deckWidget:dw1:draw"}},
+    {"from": "p1", "type": "requestDrawFromZone", "payload": {"zoneId": "deckWidget:dw1:draw"}},
+    {"from": "p1", "type": "requestMove", "payload": {"instanceId": "id-0005", "x": 0.2, "y": 0.2}},
+    {"from": "p2", "type": "requestMove", "payload": {"instanceId": "id-0010", "x": 0.7, "y": 0.2}},
+    {"from": "p2", "type": "requestDrawFromZone", "payload": {"zoneId": "standard", "count": 3}},
+    {"from": "p2", "type": "requestReturnToZone", "payload": {"instanceId": "id-0010", "zoneId": "market"}},
+    {"from": "p1", "type": "requestMoveToHand", "payload": {"instanceId": "id-0010"}},
+    {"from": "p1", "type": "requestDeleteWidget", "payload": {"instanceId": "dw1"}},
+    {"from": "p2", "type": "requestDrawBagToken", "payload": {"instanceId": "id-0014"}},
+    {"from": "p2", "type": "requestDrawBagToken", "payload": {"instanceId": "id-0014"}},
+    {"from": "p2", "type": "requestReturnBagToken", "payload": {"instanceId": "id-0014", "slotId": "id-0073"}},
+    {"from": "p1", "type": "requestSetWidgetValue", "payload": {"instanceId": "id-0015", "value": 7.25}},
+    {"from": "p2", "type": "requestDrawFromZone", "payload": {"zoneId": "loaded", "count": 2}},
+    {"from": "p2", "type": "requestMove", "payload": {"instanceId": "id-0072", "x": 0.5, "y": 0.9}},
+    {"from": "p2", "type": "requestStack", "payload": {"instanceId": "id-0071", "ontoInstanceId": "id-0072"}},
+    {"from": "p1", "type": "requestReturnToZone", "payload": {"instanceId": "id-0072", "zoneId": "discard"}},
+    {"from": "p2", "type": "requestShuffleZone", "payload": {"zoneId": "standard"}},
+    {"from": "p2", "type": "requestLoadScenario", "payload": {"scenarioId": "none"}},
+    {"from": "p1", "type": "requestSetSharedPlaymat", "payload": {"on": true}},
+    {"roster": [
+      {"id": "p2", "name": "Bob", "role": "client", "color": 4282735204}
+    ]}
+  ]
+}

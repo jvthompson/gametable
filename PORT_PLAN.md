@@ -117,9 +117,11 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
       (+ ports of `tag_match_test.lua`, `stack_utils_test.lua`, `utils_test.lua` in `tests/rules_helpers.rs`)
 - [x] `table_actions` + port of `tests/table_actions_test.lua`, plus an 87-step scripted golden test covering every
       action, matched against the original Lua state after every step (`tests/table_actions_golden.rs`)
-- [ ] `session` + port of `tests/session_test.lua`
-- [ ] `host_engine`
-- [ ] Protocol envelope, line codec, message type constants
+- [x] `session` — verified by golden multiplayer scenarios (game-log text, dealing incl. standard deck / shared
+      decks / token bags / scenarios / deck widgets, arrow timers) rather than a line-by-line port of `session_test.lua`
+- [x] `host_engine` — `tests/host_engine_golden.rs` replays two scripted games (~110 requests, roster changes,
+      clock/timer ticks) and matches every outbound message and the final state against the original Lua
+- [x] Protocol envelope, line codec, message type constants (`protocol.rs`)
 - [ ] `compat-check` example (port of `tools/compat_check`): byte-identical re-save of a game library
 
 ### Phase 2 — `gametable-server`
@@ -221,6 +223,14 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   golden output. The editor writes them in its own order.
 - `table_actions`: `moveToHand` / `drawCard` / `drawFromZone` take a required owner id (Lua accepted nil, which
   left the owner unchanged; no caller passes nil). Shuffles take a `RandomIndexSource` instead of an optional seed.
+- Session: listeners are replaced by `Session::notification_count()`; the host engine broadcasts when it changes
+  (same effect: a method that errors after changing state does not broadcast, as before). Clock, randomness and
+  instance-id generation are injected through `SessionEnvironment`.
+- Host engine: malformed requests (missing/non-numeric coordinates, non-text ids, fractional counts or indexes,
+  missing colours) are refused. The original sometimes half-applied them (e.g. `requestMove` without `y` moved only x).
+  Real clients never send these. `requestSetCurrentPlayer` without a player id still bumps the revision, as before.
+- Host engine: `gameData` sends to newly connected players and preview clears for departed players are sent in
+  sorted player-id order (the original used Lua hash order). Golden tests sort within each step.
 - `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
   will read local time from SDL.
 
@@ -231,7 +241,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - `sdl3` crate version 0.22.1 (SDL 3.4.20, SDL_image 3.4.8, SDL_ttf 3.2.2).
 - LÖVE 11.5 is installed at `C:\Program Files\LOVE`. `tools/lua_golden/run.sh <generator>` runs the original Lua code
   (copied from `cardflux-love/lib`, `src/core`, `src/game`) over `crates/gametable-core/tests/fixtures/<generator>/inputs`
-  and writes `expected/`. Generators are `tools/lua_golden/<generator>_golden.lua` (so far: `models`, `table_actions`). Use this for every
+  and writes `expected/`. Generators are `tools/lua_golden/<generator>_golden.lua` (so far: `models`, `table_actions`,
+  `host_engine`). The `host_engine` generator pins uuid.v4 to `id-0001...`, math.random to `util.seededRng(seed)` and
+  the clock to a script-controlled value; the Rust test does the same through `SessionEnvironment`. Use this for every
   engine module: add fixtures, regenerate, and make the Rust test compare against `expected/`.
 - `rustfmt.toml` sets `max_width = 120`; run `cargo fmt --all` before committing.
 
@@ -251,3 +263,5 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - 2026-11-15: Rules helpers and `table_actions` done; 97 core tests pass, including the step-by-step golden replay
   against the original Lua. Next: `session` (+ `session_test.lua`, needs a golden generator for game-log strings),
   then `host_engine`, protocol codec, `compat-check`.
+- 2026-11-15: `session`, `host_engine` and `protocol` done; 101 core tests pass, including two golden multiplayer
+  scenarios matched message for message. Next: `compat-check` example (last Phase 1 item), then Phase 2 (server).
