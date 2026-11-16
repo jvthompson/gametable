@@ -4,7 +4,12 @@
 //! `src/game/session.lua` and `src/game/host_engine.lua`). Both the client and the lobby server
 //! depend on it, so the rules can never drift apart.
 
+pub mod color;
+pub mod geometry;
 pub mod json;
+pub mod models;
+pub mod util;
+pub mod uuid;
 
 /// Version of the lobby-server wire protocol. Must match the original's `serverProtocolVersion`.
 pub const SERVER_PROTOCOL_VERSION: u32 = 7;

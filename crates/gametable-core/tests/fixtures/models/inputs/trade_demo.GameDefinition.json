@@ -1,0 +1,22 @@
+{
+  "id": "trade_demo",
+  "name": "Trade Demo",
+  "sets": [
+    {
+      "id": "core",
+      "name": "Core Set",
+      "packSettings": [{ "tag": "Common", "count": 3 }, { "tag": "Rare", "count": 1 }],
+      "cards": [
+        { "id": "c_fire", "cardTitle": "Fire Imp", "types": ["Common"], "colorHex": "#E53935" },
+        { "id": "c_water", "cardTitle": "Water Sprite", "types": ["Common"], "colorHex": "#1E88E5" },
+        { "id": "c_earth", "cardTitle": "Stone Golem", "types": ["Common"], "colorHex": "#6D4C41" },
+        { "id": "c_wind", "cardTitle": "Gale Hawk", "types": ["Common"], "colorHex": "#43A047" },
+        { "id": "c_bolt", "cardTitle": "Spark Imp", "types": ["Common"], "colorHex": "#FBC02D" },
+        { "id": "r_dragon", "cardTitle": "Ancient Dragon", "types": ["Rare"], "colorHex": "#FB8C00" },
+        { "id": "r_phoenix", "cardTitle": "Phoenix Lord", "types": ["Rare"], "colorHex": "#D81B60" },
+        { "id": "r_leviathan", "cardTitle": "Deep Leviathan", "types": ["Rare"], "colorHex": "#00838F" }
+      ]
+    }
+  ],
+  "tagGroups": [{ "id": "rarity", "name": "Rarity", "tags": ["Common", "Rare"] }]
+}

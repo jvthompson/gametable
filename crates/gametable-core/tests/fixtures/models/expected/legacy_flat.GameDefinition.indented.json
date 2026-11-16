@@ -1,0 +1,51 @@
+{
+  "id": "legacy",
+  "name": "Legacy Flat",
+  "cards": [
+    {
+      "id": "a",
+      "cardTitle": "A",
+      "extraFields": {
+        "a": "1",
+        "b": "2"
+      },
+      "setId": "orphan"
+    },
+    {
+      "id": "b",
+      "cardTitle": "B é♠ / \u0001"
+    }
+  ],
+  "cardBacks": [
+    {
+      "id": "default",
+      "name": "Default",
+      "imagePath": "back.png"
+    }
+  ],
+  "zones": [
+    {
+      "id": "z1",
+      "name": "Z1",
+      "dealsBuiltDeck": true
+    },
+    {
+      "id": "z2",
+      "name": "Z2",
+      "dealsBuiltDeck": true,
+      "deckType": "side"
+    },
+    {
+      "id": "z3",
+      "name": "Z3",
+      "dealsBuiltDeck": true
+    },
+    {
+      "id": "z4",
+      "name": "Z4",
+      "shared": true,
+      "dealsBuiltDeck": true,
+      "deckType": "x"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "name": "Every Field",
+  "id": "every_field",
+  "sets": [
+    {
+      "id": "core",
+      "name": "Core Set",
+      "packSettings": [{"count": 2.5, "tag": "Rarity|Common"}, {"tag": "Rare", "count": 1}],
+      "cards": [
+        {"id": "c1", "cardTitle": "Fire \"Imp\"", "colorHex": "#E53935", "suit": "hearts", "rank": "A",
+         "imagePath": "fire_imp.png", "extraFields": {"zeta": "last", "Alpha": 3, "beta": "b", "quantity": "2"},
+         "types": ["Rarity|Common", "Element|Fire"], "orientation": "left", "setId": "ignored_when_nested",
+         "unownable": true, "isFreeCard": true, "cardBackId": "__unique__", "uniqueBackOrientation": "right",
+         "isScenarioCard": true},
+        {"cardTitle": "Plain", "id": "c2", "unownable": false, "isFreeCard": "yes", "orientation": "portrait", "extraFields": {}}
+      ]
+    },
+    {"id": "empty_set", "name": "Empty", "cards": []}
+  ],
+  "cards": [{"id": "ignored", "cardTitle": "Ignored because sets exist"}],
+  "cardBacks": [{"id": "b1", "name": "Blue", "imagePath": "blue.png"}, {"id": "b2", "name": "Sideways", "orientation": "left"}],
+  "cardBackImagePath": "ignored_because_cardBacks_exist.png",
+  "zones": [
+    {"id": "deck", "name": "Deck", "dealsBuiltDeck": true, "deckType": "main_deck", "shuffleable": true, "side": "left"},
+    {"id": "side", "name": "Sideboard", "dealsBuiltDeck": true, "deckType": "side_deck", "deckOptional": true,
+     "faceUp": true, "shuffleable": false, "visibleToAll": true, "isDiscardPile": true, "flippable": true,
+     "autoShuffle": true, "standardDeck": true, "deckName": "Starter", "side": "right", "orientation": "right",
+     "entries": [{"definitionId": "c1", "quantity": 3}]},
+    {"id": "life", "name": "Life", "kind": "widget", "widgetKind": "counter", "counterStartingValue": 20,
+     "counterStartingColor": 4291821359, "counterStartingTextColor": 4278190080, "counterImagePath": "coin.png"},
+    {"id": "bag", "name": "Chaos Bag", "kind": "widget", "widgetKind": "tokenBag", "bagImagePath": "bag.png",
+     "bagReturnable": false, "bagEntries": [{"definitionId": "skull.png", "quantity": 2}],
+     "counterStartingColor": 4282735204, "counterStartingValue": 0.5}
+  ],
+  "tagGroups": [{"id": "rarity", "name": "Rarity", "tags": ["Common", "Rare"]}, {"id": "empty", "name": "Empty"}],
+  "tableColor": "#1976D2",
+  "playmatBorderColor": "#9E9E9E",
+  "currentTurnColor": "#FBC02D",
+  "playmatType": "shared",
+  "playmats": [{"imagePath": "mat.png"}, {"imagePath": "mat2.jpg", "scale": 1.25}],
+  "hasScenarios": true,
+  "scenarios": [
+    {"id": "s1", "name": "Opening", "guidePath": "opening.md",
+     "zones": [{"id": "z1", "name": "Battlefield", "shared": true, "orientation": "left"}],
+     "placements": [{"definitionId": "c1", "x": 0.25, "y": 0.75}, {"definitionId": "c2", "x": 0.1, "y": 0.2, "faceUp": false, "rotationTurns": 0.5}],
+     "tokenPlacements": [{"imagePath": "clue.png", "x": 0.3, "y": 0.4, "rotationTurns": 1, "sizeOverride": "native"}, {"imagePath": "doom.png", "x": 0, "y": 1, "sizeOverride": 2}],
+     "decks": [{"name": "boss_deck", "entries": [{"definitionId": "c2", "quantity": 1}]}]},
+    {"id": "s2", "name": "Empty Scenario"}
+  ],
+  "scenarioCardBackId": "b2",
+  "usesTokens": true,
+  "tokens": [{"id": "t1", "name": "Daisy|Investigator", "imagePath": "daisy.png"}, {"id": "t2", "name": "Clue"}],
+  "sameOrientationForAll": true,
+  "unknownExtraKey": "dropped"
+}

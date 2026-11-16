@@ -1,0 +1,160 @@
+{
+  "savedAt": "2026-01-02T03:04:05.678",
+  "state": {
+    "gameId": "every_field",
+    "players": [
+      {
+        "id": "p1",
+        "name": "Alice",
+        "role": "host",
+        "color": 4291821359,
+        "connected": true
+      },
+      {
+        "id": "p2",
+        "name": "Bob",
+        "role": "client",
+        "color": 4282735204,
+        "connected": false,
+        "individualPlaymatOn": true,
+        "individualPlaymatIndex": 2
+      }
+    ],
+    "cards": [
+      {
+        "instanceId": "i1",
+        "definitionId": "c1",
+        "x": 0.5,
+        "y": 0.5,
+        "zIndex": 1,
+        "faceUp": true,
+        "zone": "table"
+      },
+      {
+        "instanceId": "i2",
+        "definitionId": "c2",
+        "x": 0.123456789012345,
+        "y": -0.25,
+        "zIndex": 7,
+        "faceUp": false,
+        "zone": "zone",
+        "ownerId": "p1",
+        "stackParentId": "i1",
+        "zoneId": "deck",
+        "rotationTurns": -1.5,
+        "unownable": true
+      },
+      {
+        "instanceId": "i3",
+        "definitionId": "c1",
+        "x": 1,
+        "y": 0,
+        "zIndex": 0,
+        "faceUp": true,
+        "zone": "hand",
+        "ownerId": "p2"
+      }
+    ],
+    "revision": 42,
+    "widgets": [
+      {
+        "instanceId": "w1",
+        "kind": "simpleCounter",
+        "x": 0.1,
+        "y": 0.2,
+        "zIndex": 3,
+        "value": 20
+      },
+      {
+        "instanceId": "w2",
+        "kind": "arrow",
+        "x": 0.1,
+        "y": 0.2,
+        "zIndex": 4,
+        "backgroundColor": 4278190080,
+        "textColor": 4291821359,
+        "x2": 0.9,
+        "y2": 0.8,
+        "creatorId": "p1"
+      },
+      {
+        "instanceId": "w3",
+        "kind": "imageToken",
+        "x": 0.3,
+        "y": 0.3,
+        "zIndex": 5,
+        "attachedCardId": "i1",
+        "attachOffsetX": 0.01,
+        "attachOffsetY": -0.02,
+        "imagePath": "clue.png",
+        "sizeOverride": "native",
+        "rotationTurns": 0.5,
+        "faceUp": false
+      },
+      {
+        "instanceId": "w4",
+        "kind": "tokenBag",
+        "x": 0.6,
+        "y": 0.6,
+        "zIndex": 6,
+        "ownerId": "p2",
+        "zoneId": "bag",
+        "sizeOverride": 2,
+        "bagRemaining": [
+          "skull.png",
+          "skull.png"
+        ],
+        "bagRevealed": [
+          {
+            "slotId": "s1",
+            "imagePath": "elder.png"
+          }
+        ]
+      },
+      {
+        "instanceId": "w5",
+        "kind": "cardToken",
+        "x": 0.7,
+        "y": 0.7,
+        "zIndex": 8,
+        "text": "Line1\nLine2"
+      }
+    ],
+    "searches": [
+      {
+        "searcherId": "p1",
+        "targetType": "zone",
+        "targetId": "deck",
+        "targetOwnerId": "p1"
+      },
+      {
+        "searcherId": "p2",
+        "targetType": "pile",
+        "targetId": "i1"
+      }
+    ],
+    "log": [
+      {
+        "elapsedMs": 1500,
+        "message": "Alice drew a card."
+      },
+      {
+        "elapsedMs": 3723000,
+        "message": "Bob shuffled \"Deck\"."
+      }
+    ],
+    "loadedZones": [
+      {
+        "id": "z1",
+        "name": "Battlefield",
+        "shared": true
+      }
+    ],
+    "loadedScenarioIds": [
+      "s1"
+    ],
+    "sharedPlaymatOn": true,
+    "sharedPlaymatIndex": 1,
+    "currentPlayerId": "p1"
+  }
+}

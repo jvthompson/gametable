@@ -56,8 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     println!("window: borderless, hit-test installed");
 
-    let gpu_device = Device::new(ShaderFormat::SPIRV | ShaderFormat::DXIL, cfg!(debug_assertions))?
-        .with_window(&window)?;
+    let gpu_device =
+        Device::new(ShaderFormat::SPIRV | ShaderFormat::DXIL, cfg!(debug_assertions))?.with_window(&window)?;
     println!("gpu: device created, supported shader formats {:?}", gpu_device.get_shader_formats());
 
     let logo_surface = Surface::from_file(assets_directory.join("logo.png"))?;

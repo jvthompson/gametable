@@ -1,0 +1,23 @@
+{
+  "gameId": "g",
+  "subdecks": [
+    {
+      "name": "main_deck",
+      "entries": [
+        {
+          "definitionId": "a",
+          "quantity": 2
+        },
+        {
+          "definitionId": "b",
+          "quantity": 1
+        }
+      ]
+    },
+    {
+      "name": "side_deck",
+      "entries": []
+    }
+  ],
+  "isStarter": true
+}

@@ -374,11 +374,7 @@ pub fn format_like_c_percent_g(number: f64, precision: usize) -> String {
 }
 
 fn strip_trailing_fraction_zeros(text: &str) -> &str {
-    if text.contains('.') {
-        text.trim_end_matches('0').trim_end_matches('.')
-    } else {
-        text
-    }
+    if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.') } else { text }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,11 +392,7 @@ pub struct JsonDecodeError {
 
 impl fmt::Display for JsonDecodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "JSON error at line {} (pos {}): {}",
-            self.line, self.byte_position, self.message
-        )
+        write!(formatter, "JSON error at line {} (pos {}): {}", self.line, self.byte_position, self.message)
     }
 }
 
@@ -436,11 +428,7 @@ impl Decoder<'_> {
         // Lua counts newlines in str:sub(1, pos), i.e. up to and including the 1-based position.
         let inclusive_end = (zero_based_position + 1).min(self.source.len());
         let newline_count = self.source[..inclusive_end].iter().filter(|&&b| b == b'\n').count();
-        JsonDecodeError {
-            line: newline_count + 1,
-            byte_position: zero_based_position + 1,
-            message: message.into(),
-        }
+        JsonDecodeError { line: newline_count + 1, byte_position: zero_based_position + 1, message: message.into() }
     }
 
     fn skip_whitespace(&mut self) {
@@ -745,10 +733,7 @@ mod tests {
     #[test]
     fn escapes_strings_like_lua() {
         let value = JsonValue::from("quote\" back\\ \u{8}\u{c}\n\r\t \u{1}\u{1f}\u{7f} /é♠");
-        assert_eq!(
-            compact(&value),
-            "\"quote\\\" back\\\\ \\b\\f\\n\\r\\t \\u0001\\u001f\\u007f /é♠\""
-        );
+        assert_eq!(compact(&value), "\"quote\\\" back\\\\ \\b\\f\\n\\r\\t \\u0001\\u001f\\u007f /é♠\"");
     }
 
     #[test]
@@ -760,7 +745,8 @@ mod tests {
                 .with("c", Vec::<JsonValue>::new())
                 .with("d", JsonObject::new().with("e", "f")),
         );
-        let expected = "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {},\n  \"c\": [],\n  \"d\": {\n    \"e\": \"f\"\n  }\n}";
+        let expected =
+            "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {},\n  \"c\": [],\n  \"d\": {\n    \"e\": \"f\"\n  }\n}";
         assert_eq!(encode_indented(&value).unwrap(), expected);
     }
 

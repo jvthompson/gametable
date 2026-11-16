@@ -110,8 +110,9 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 
 ### Phase 1 — `gametable-core`
 - [x] `json` (byte-exact encoder/decoder) + port of `tests/json_test.lua`; number golden values captured from real LuaJIT
-- [ ] `color`, `util`, `uuid`, `geometry`
-- [ ] `models` + port of `tests/models_test.lua`
+- [x] `color`, `util`, `uuid`, `geometry`
+- [x] `models` + port of `tests/models_test.lua`, plus golden fixtures checked byte-for-byte against the original Lua
+      (`crates/gametable-core/tests/models_golden.rs`)
 - [ ] `tag_match`, `card_filters`, `stack_utils`, `seat_utils`, `deck_widget_zones`, `state_filter`, `save_remap`, `pack_generator`
 - [ ] `table_actions` + port of `tests/table_actions_test.lua`
 - [ ] `session` + port of `tests/session_test.lua`
@@ -211,14 +212,24 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - Client RNG was never seeded in the original; the port seeds from OS entropy.
 - JSON: a lone surrogate unicode escape decodes to U+FFFD (Lua produced invalid UTF-8 bytes); invalid UTF-8 in input
   files is replaced with U+FFFD (Lua passed raw bytes through). Rust strings must be valid UTF-8.
+- Models are typed: a field holding the wrong JSON type (e.g. a number where an id belongs) is an error, where Lua
+  kept the value as-is. `quantity`, `zIndex`, `revision`, `elapsedMs` and playmat indexes must be whole numbers;
+  colours must be whole numbers 0..=4294967295. The Dart app that wrote these files could never produce other types.
+- `extraFields` keys come out sorted after a load/save cycle (Lua copies them into a plain table). Confirmed with
+  golden output. The editor writes them in its own order.
+- `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
+  will read local time from SDL.
 
 ## Build and tooling notes
 
 - SDL3, SDL3_image and SDL3_ttf are built from source by the `sdl3` crate (`build-from-source`). CMake is not on PATH, so
   `.cargo/config.toml` sets `CMAKE` to the copy inside Visual Studio 18 Insiders. The first build takes about 2 minutes.
 - `sdl3` crate version 0.22.1 (SDL 3.4.20, SDL_image 3.4.8, SDL_ttf 3.2.2).
-- LÖVE 11.5 is installed at `C:\Program Files\LOVE`. To capture golden output from the original Lua code, copy the module
-  into a scratch folder with a `main.lua` that prints results and run `lovec.exe <folder>` (stdout is visible).
+- LÖVE 11.5 is installed at `C:\Program Files\LOVE`. `tools/lua_golden/run.sh <generator>` runs the original Lua code
+  (copied from `cardflux-love/lib`, `src/core`, `src/game`) over `crates/gametable-core/tests/fixtures/<generator>/inputs`
+  and writes `expected/`. Generators are `tools/lua_golden/<generator>_golden.lua` (so far: `models`). Use this for every
+  engine module: add fixtures, regenerate, and make the Rust test compare against `expected/`.
+- `rustfmt.toml` sets `max_width = 120`; run `cargo fmt --all` before committing.
 
 ## Open questions
 
@@ -229,3 +240,7 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 - 2026-11-15: Explored the original, agreed decisions, wrote this plan. Phase 0 started.
 - 2026-11-15: All crates approved. Workspace builds; assets copied; SDL3 spike passes; Phase 0 complete.
   Phase 1 started: `gametable-core::json` done (11 tests). Next: `color`, `util`, `uuid`, `geometry`, then `models`.
+- 2026-11-15: Git repo set up (LF line endings enforced). `color`, `util` (Park-Miller seeded RNG + shuffle matching
+  Lua), `uuid`, `geometry` and `models` done; 40 core tests pass, including golden fixtures from the original Lua.
+  Next: `tag_match`, `card_filters`, `stack_utils`, `seat_utils`, `deck_widget_zones`, `state_filter`, `save_remap`,
+  `pack_generator`, then `table_actions`.
