@@ -128,7 +128,8 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 
 ### Phase 2 — `gametable-server`
 - [ ] `proto` (framing, heartbeat, send queue limits)
-- [ ] `store` (schema, settings, users, sessions, decks, collections, token ledger, chat)
+- [x] `store` (schema, settings, users, sessions, decks, collections, token ledger, chat) — same schema as the Go
+      server; 6 unit tests. Not yet checked against a real Go-created `cardflux.db` (do that in the interop step).
 - [ ] `games` (library scan, manifest, hash cache, built-in `standard_52`)
 - [ ] Handshake + dispatch (public / authed / admin / forward-to-room)
 - [ ] Auth (register, login, resume, logout, profile, avatars, rate limiting, allowance)
@@ -256,6 +257,10 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
 ## Open questions
 
 - Release repository for the Rust build's self-updater (Phase 11).
+- Local time on the server: the daily/weekly token allowance uses server-local calendar days and ISO weeks (Go's
+  `time.Local`). `std` has no time-zone support. `store::grant_allowance` takes calendar dates from the caller; the
+  server's `main` needs a unix-time -> local date conversion. Options: ask the user to approve a crate (`jiff` or
+  `chrono`), or use UTC days (a behaviour change). Ask before Phase 2's `main`.
 
 ## Session log
 
@@ -273,3 +278,5 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   scenarios matched message for message. Next: `compat-check` example (last Phase 1 item), then Phase 2 (server).
 - 2026-11-15: `compat_check` example done; the real library (`D:\CardfluxLibrary`, read-only) re-saves byte-identically
   to the original Lua (53 files). **Phase 1 complete.** Next: Phase 2, the server (start with `proto`, `store`, `games`).
+- 2026-11-15: Phase 2 started: server `store` ported (rusqlite, same schema). Next: `games` (library scan, manifest,
+  hash cache), then `proto` framing over tokio, then handshake/dispatch and auth.

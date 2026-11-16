@@ -1,4 +1,6 @@
-//! GameTable lobby server entry point.
+//! GameTable lobby server entry point. Port of the Go `cardflux-server`.
+
+mod store;
 
 fn main() {
     println!(
