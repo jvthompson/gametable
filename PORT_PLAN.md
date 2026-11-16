@@ -577,3 +577,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   platforms (see the Phase 11 list). Added `ureq` (approved). `ScreenCommand`-free Discord: the module keeps its own
   state on the main thread; screens publish presence every frame (repeats ignored) and poll `Outcome`s. Next:
   push to run CI (expect fixes for the first macOS build), then Phase 12 (parity audit).
+- 2026-11-16: Created the public repo `jvthompson/gametable` and pushed `main`. The first CI run passed on Windows,
+  macOS (Apple silicon) and Ubuntu 22.04 with no changes: the full suite builds and passes on macOS, including the
+  LÖVE font metrics and binding the macOS Discord library. Still untested: the release packaging jobs (they run
+  only for a `v*` tag) and running the app on a Mac. CI warns that `actions/checkout@v4` uses the deprecated
+  Node 20. Next: Phase 12 (parity audit).
