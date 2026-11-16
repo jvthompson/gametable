@@ -6,8 +6,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.23.1"
+bcrypt = "0.19.3"
 gametable-core = { path = "../gametable-core" }
 jiff = "1.0.0"
 rand = "0.10.4"
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 sha2 = "0.11.1"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }

@@ -10,3 +10,10 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Unlicense"
+
+# Password hashing is far too slow unoptimized (the server tests register many accounts).
+[profile.dev.package.bcrypt]
+opt-level = 3
+
+[profile.dev.package.blowfish]
+opt-level = 3

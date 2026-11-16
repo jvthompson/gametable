@@ -60,7 +60,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 |---|---|---|---|
 | `serde`, `serde_json` (`preserve_order`) | all | JSON parsing; output via a custom byte-exact formatter | yes (2026-11-15) |
 | `sha2` | all | asset hashes, password hash | yes (2026-11-15) |
-| `base64` | all | avatars, asset chunks | yes (2026-11-15) |
+| `base64` | all | avatars, asset chunks | yes (2026-11-15), in use (server) |
 | `rand` | all | shuffling, UUID v4 | yes (2026-11-15) |
 | `sdl3` (gpu, ttf, image, build-from-source) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use |
 | `pdfium-render` | client | PDF rulebooks | yes (2026-11-15) |
@@ -69,9 +69,9 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
 | `libloading` | client | load `discord_partner_sdk.dll` at runtime | yes (2026-11-15) |
 | `md-5` | client | avatar cache keys | yes (2026-11-15) |
-| `tokio` | server | connections, per-room tasks, timers | yes (2026-11-15) |
+| `tokio` | server | connections, per-room tasks, timers | yes (2026-11-15), in use |
 | `rusqlite` (`bundled`) | server | same SQLite schema/file as the Go server | yes (2026-11-15) |
-| `bcrypt` | server | password hashes compatible with existing DB rows | yes (2026-11-15) |
+| `bcrypt` | server | password hashes compatible with existing DB rows | yes (2026-11-15), in use |
 | `jiff` | server | server-local calendar days / ISO weeks for the token allowance (`store::local_calendar_date`) | yes (2026-11-15), in use |
 
 Note: the JSON module turned out simpler to write by hand (`gametable-core::json`), so `serde`/`serde_json` are approved
@@ -136,16 +136,28 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
       TODO: server card counts differ from the client's (VTES 4149 vs 8545, Lorcana 3423 vs 3433) because the server
       keeps the first card per id and skips cards Go can't unmarshal; confirm against the real Go server
       (manifest hashes too) during the interop step.
-- [ ] Handshake + dispatch (public / authed / admin / forward-to-room)
-- [ ] Auth (register, login, resume, logout, profile, avatars, rate limiting, allowance)
-- [ ] Lobby (state pushes, chat, slash commands)
-- [ ] Rooms (create/join/spectate/leave/seats/start/close, native engine per room, idle timeout, collection gate)
+- [x] `proto` → `connection.rs` (tokio; line framing, 64 MiB line cap, 4096-line send queue that drops slow peers,
+      4 s ping / 12 s timeout, 200 ms close grace, `send_waiting` for bulk transfers). Crate is now lib + bin so
+      integration tests can start a real server.
+- [x] Handshake + dispatch (public / authed / admin / forward-to-room) — `server/mod.rs`. Handlers are blocking
+      functions run with `block_in_place`; one state mutex like Go's `srv.mu`; clients are `ClientId`s.
+- [x] Auth (register, login, resume, logout, profile, avatars, rate limiting, allowance) — `server/auth.rs`; bcrypt
+      written in Go's `$2a$` format, base64 decoded like Go's `StdEncoding`.
+- [x] Lobby (state pushes, chat, slash commands, allowance loop) — `server/lobby.rs`. Trade chat still TODO.
+- [x] Rooms (create/join/spectate/leave/seats/start/close, native engine per room, idle timeout, collection gate)
+      — `server/rooms.rs`. Each room's engine runs on its own thread (replaces gopher-lua VM + room goroutine; no VM
+      pool or call timeout needed). TODO: `requestLoadDeckIntoZone` collection check (comes with decks).
 - [ ] Decks, collection, shop (packs, starter decks)
 - [ ] Trading
-- [ ] Admin (users, settings, rescan, kick, shutdown, files, game install/delete)
+- [ ] Admin (users, settings, rescan, kick, files, game install/delete) — `adminShutdown` and `adminCloseRoom` done
+      (`server/shutdown.rs`); the other admin types already answer `notAdmin`/`notLoggedIn` correctly but do nothing.
 - [ ] Asset channel (download, admin upload)
-- [ ] `main` (flags, `server.log`, signals)
-- [ ] Integration tests ported from `server_test.go` / `engine_test.go`
+- [x] `main` (flags `--data`/`--port` in Go flag style, `server.log`, Ctrl+C) — log lines use Go's `LstdFlags` format.
+- [ ] Integration tests ported from `server_test.go` / `engine_test.go` — done so far (`tests/server_lobby.rs`,
+      harness in `tests/common`): VersionChecks, Accounts, Chat, ChatCommands, RoomLifecycle, TwoConcurrentRooms,
+      WaitingRoomOwnerLeaves, ShutdownWhenPlayersLeave, ShutdownCountdown, plus a profile/avatar test. Remaining:
+      Decks, CollectionMode, StarterDecks, BuiltInDecksPrefersUnderscoreFolder, Admin, Assets, AdminFiles,
+      AdminGames, AllowancePeriods, Trading, and the relevant `engine_test.go` cases.
 - [ ] Interop: original LÖVE client against the Rust server
 
 ### Phase 3 — Client foundation
@@ -239,6 +251,10 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   Real clients never send these. `requestSetCurrentPlayer` without a player id still bumps the revision, as before.
 - Host engine: `gameData` sends to newly connected players and preview clears for departed players are sent in
   sorted player-id order (the original used Lua hash order). Golden tests sort within each step.
+- Server JSON: Go's `encoding/json` escapes `<`, `>`, `&`, U+2028 and U+2029 as `<` etc.; the Rust server writes
+  them as plain characters (identical once decoded). Map payloads are still key-sorted like Go's.
+- Server: Go's `json.Unmarshal` into `int` refuses `3.0`; the Rust server accepts any whole number (the Lua client
+  always writes `3`).
 - `isoNow` (save timestamps) needs local time; the core only formats it (`format_iso_local_timestamp`) and the client
   will read local time from SDL.
 
@@ -283,3 +299,7 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
   hash cache), then `proto` framing over tokio, then handshake/dispatch and auth.
 - 2026-11-15: `jiff` approved and used for local allowance dates; `games` library scanner ported. Next: `proto`
   framing over tokio (add tokio), handshake/dispatch, auth (add bcrypt).
+- 2026-11-15: Added tokio, bcrypt, base64. Ported connection framing, handshake/dispatch, auth, lobby/chat, rooms
+  (native engine per room thread), shutdown and `main`; 17 server unit tests + 10 integration tests pass (two
+  mutation-checked). Next: `decks.go` (decks, collection, packs, starters, collection deck check), then
+  `trade.go`, `admin.go`, `admin_files.go`, `admin_games.go` (needs `zip`), `assets.go`, remaining Go tests, interop.
