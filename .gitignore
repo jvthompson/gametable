@@ -3,3 +3,6 @@
 # Per-user Claude Code settings
 /.claude/settings.local.json
 /dist
+
+# Live server connection details for tools/deploy-server.ps1
+/tools/deploy-server.local.json

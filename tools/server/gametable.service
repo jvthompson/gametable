@@ -1,0 +1,15 @@
+[Unit]
+Description=GameTable Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# {{USER}} and {{HOME}} are filled in by tools/deploy-server.ps1 from deploy-server.local.json.
+User={{USER}}
+WorkingDirectory={{HOME}}
+ExecStart={{HOME}}/gametable-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
