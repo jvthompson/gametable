@@ -22,6 +22,7 @@ use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::{
     FileImport, GAP, ImportResponse, display_card, display_card_backs, orientation_choices,
 };
+use crate::screens::gamedef::title_suggestion_dialogs::SuggestTitleFlow;
 use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw, orientation_turns};
 use crate::ui::card_filter_bar::{CardFilterState, LeadingButton};
@@ -89,6 +90,10 @@ pub struct CardViewTab {
     selected: Option<u64>,
     import: Option<(FileImport, u64)>,
     confirm_delete: Option<u64>,
+    /// The open "Suggest Title" dialogs.
+    suggest_title: Option<SuggestTitleFlow>,
+    /// Development hook: open Suggest Title on the next frame.
+    open_suggest_title_next_frame: bool,
     /// Split handles: last mouse x while held.
     split_drag: HashMap<&'static str, f32>,
 }
@@ -108,6 +113,8 @@ impl CardViewTab {
             selected: None,
             import: None,
             confirm_delete: None,
+            suggest_title: None,
+            open_suggest_title_next_frame: false,
             split_drag: HashMap::new(),
         }
     }
@@ -708,6 +715,19 @@ impl CardViewTab {
         let mut row_y = y + padding - offset;
         let options = TextOptions::new().width(form_width).middle_of(28.0).color(palette.on_surface_variant);
         frame.text(&format!("{} cards selected", selected.len()), form_x, row_y, options);
+        let suggest_options = ButtonOptions::variant(ButtonVariant::Tonal).icon("auto_fix_high").id("cv:bulk:suggest");
+        let suggest_width = frame.button_width("Suggest Titles...", &suggest_options);
+        if frame.button(
+            "Suggest Titles...",
+            form_x + form_width - suggest_width,
+            row_y - 6.0,
+            Some(suggest_width),
+            Some(40.0),
+            &suggest_options,
+        ) {
+            let keys = selected.iter().map(|&index| model.card_keys.key(index)).collect();
+            self.suggest_title = Some(SuggestTitleFlow::open(frame, None, keys));
+        }
         row_y += 28.0 + GAP;
 
         let apply = |model: &mut EditorModel, change: &dyn Fn(&mut CardDefinition)| {
@@ -884,12 +904,22 @@ impl CardViewTab {
         title_options.custom_tab |= self.tab_focuses_title;
         let mut title = model.game.cards()[index].card_title.clone();
         let response =
-            frame.text_field(&format!("{id}:title"), form_x, row_y, form_width - 48.0, &mut title, &title_options);
+            frame.text_field(&format!("{id}:title"), form_x, row_y, form_width - 92.0, &mut title, &title_options);
         if title != model.game.cards()[index].card_title {
             model.game.cards_mut()[index].card_title = title;
         }
         if let Some(shift) = response.tab {
             tab_delta = Some(if shift { -1 } else { 1 });
+        }
+        let suggest_id = format!("{id}:suggest");
+        if frame.icon_button(
+            "auto_fix_high",
+            form_x + form_width - 84.0,
+            row_y + 2.0,
+            &IconButtonOptions::tooltip("Suggest Title...").id(&suggest_id),
+        ) {
+            frame.ui.blur();
+            self.suggest_title = Some(SuggestTitleFlow::open(frame, Some(key), Vec::new()));
         }
         let delete_id = format!("{id}:delete");
         if frame.icon_button(
@@ -1175,7 +1205,20 @@ impl CardViewTab {
         delta
     }
 
+    /// Development hook (`GAMETABLE_GAMEDEF_TAB=cards,select,suggest`).
+    pub fn open_suggest_title_for_development(&mut self) {
+        self.open_suggest_title_next_frame = true;
+    }
+
     fn finish_dialogs(&mut self, frame: &mut Frame, model: &mut EditorModel) {
+        if std::mem::take(&mut self.open_suggest_title_next_frame) {
+            self.suggest_title = Some(SuggestTitleFlow::open(frame, self.selected, Vec::new()));
+        }
+        if let Some(flow) = &mut self.suggest_title
+            && !flow.show(frame, model)
+        {
+            self.suggest_title = None;
+        }
         if let Some((import, key)) = &mut self.import {
             let key = *key;
             match import.show(frame) {

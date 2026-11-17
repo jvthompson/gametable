@@ -78,7 +78,8 @@ impl AppPaths {
             return;
         }
         let Some(parent) = new_folder.parent() else { return };
-        let Some(old_folder) = old_identities.iter().map(|identity| parent.join(identity)).find(|folder| folder.exists())
+        let Some(old_folder) =
+            old_identities.iter().map(|identity| parent.join(identity)).find(|folder| folder.exists())
         else {
             return;
         };
@@ -215,7 +216,10 @@ mod tests {
         assert_eq!(settings.text(keys::PLAYER_AVATAR_PATH), Some(new_avatar.to_string_lossy().as_ref()));
         assert!(new_avatar.exists());
         // The old app's own settings are untouched.
-        assert_eq!(Settings::load_from_folder(&cardtable).text(keys::PLAYER_AVATAR_PATH), Some(old_avatar.to_string_lossy().as_ref()));
+        assert_eq!(
+            Settings::load_from_folder(&cardtable).text(keys::PLAYER_AVATAR_PATH),
+            Some(old_avatar.to_string_lossy().as_ref())
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

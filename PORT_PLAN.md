@@ -74,6 +74,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `rusqlite` (`bundled`) | server | same SQLite schema/file as the Go server | yes (2026-11-15), in use |
 | `bcrypt` | server | password hashes compatible with existing DB rows | yes (2026-11-15), in use |
 | `jiff` | server | server-local calendar days / ISO weeks for the token allowance (`store::local_calendar_date`) | yes (2026-11-15), in use |
+| `ocrs`, `rten` | client | Card View "Suggest Title → Image (local)": offline text recognition (pure Rust; models downloaded on first use) | yes (2026-11-16), in use |
 
 Note: the JSON module turned out simpler to write by hand (`gametable-core::json`), so `serde`/`serde_json` are approved
 but not currently used.
@@ -360,6 +361,18 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
     double-click maximize, click-through, F6) checked against the code. The unused `NotPortedYet` stand-in was removed.
   - Still only testable by hand: Discord OAuth/friends/invites, running on a Mac, the release packaging jobs.
 
+### Beyond the port — new GameTable features
+- [x] Card View **Suggest Title** (`data/title_suggestion/`, `screens/gamedef/title_suggestion_dialogs.rs`): a
+  button beside Card Title (and "Suggest Titles..." on the bulk form) reads titles from the ID / image file name
+  (text rules), from the image with local OCR (`ocrs`; the largest short line of text), or from the image with
+  Claude (Anthropic Messages API, the user's key, Haiku 5.5 by default or Opus 5.5; Settings → "Suggest Title with
+  Claude"). Scope: this card, the selection, untitled cards (title still equals ID / image name) or all cards. One
+  card is filled in directly; many run in the background (Claude 4 at a time) and end in a review list (old → new,
+  editable, per-row checkbox). Tests: unit tests per engine, `tests/title_suggestion.rs` through real frames.
+  - Local OCR on samples: Middle Earth and Lorcana titles read correctly (Lorcana only the first line), stylised
+    .hack and Spellfire titles mostly misread — Claude is the accurate option. Not done: a per-game "title area"
+    box for OCR; a real Claude call (needs the user's key).
+
 ## Quirks log (original behaviours to preserve or consciously handle)
 
 - `PackSetting.count` may be fractional on the client (integer part guaranteed, fraction = chance of a bonus card). The Go
@@ -469,6 +482,16 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   (both `compat_check --resaved-output` and `resave_library.sh` refuse output paths inside the library).
   Re-run `bash tools/lua_golden/resave_library.sh /d/CardfluxLibrary <scratch dir>` after any model/JSON change.
 - `rustfmt.toml` sets `max_width = 120`; run `cargo fmt --all` before committing.
+- **Updating the live server: `pwsh tools/deploy-server.ps1`** (`-DryRun` first to trial the new build on the VM
+  against a copy of the data on port 51299; `-SkipTests`). Port of the original's `server/tools/build.ps1` +
+  `upload-server.bat`: tests, builds the Linux server in WSL, checks its glibc need against the VM's, zips it,
+  uploads with PuTTY `pscp`, then `tools/server/install.sh` on the VM backs up `data/cardflux.db*` and the
+  programs to `~/backups/<stamp>/`, installs `tools/server/gametable.service` and `server.sh`, runs
+  `server.sh update server.zip` and waits for the listening line. Connection details are in the uncommitted
+  `tools/deploy-server.local.json` (host, user, PuTTY key). Startup takes about 2.5 minutes (it hashes every
+  game file; the Go server took about 3). Rollback to the Go server:
+  `sudo systemctl disable --now gametable && sudo systemctl enable --now cardflux` (its binary and service file
+  are still there; restore the database from the backup to undo data changes).
 
 ## Open questions
 
@@ -622,3 +645,20 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   (checked by screenshot in each). Home now draws it as wide as the content below it when the window is tall
   enough, shrinking to fit, never below the original 220. The Discord application's name is set in Discord's developer
   portal, not in the code.
+- 2026-11-17: **The live development server now runs the Rust server.** `tools/deploy-server.ps1` (see Build and
+  tooling notes) replaced the Go `cardflux` service with a `gametable` service on the VM (Ubuntu 26.04, glibc
+  2.43; the WSL build needs 2.34). The dry run and the switch both opened the live `cardflux.db` and all five games
+  with no errors; a `hello` from outside returns the existing server settings (name, MOTD, collection mode). Backup
+  of the Go-era database and binary: `~/backups/20261117-030725`. Not yet done: a sign-in by a real player.
+- 2026-11-17: **GameTable colour scheme.** The Material green accents are replaced (`ui/theme.rs`): the light
+  theme's accent is midnight blue `#191970` with pale neon cyan containers, the dark theme's is neon cyan `#00E5FF`
+  with midnight blue containers, and the neutral surfaces have a cool blue tint instead of a green one. Table
+  defaults (`data/display_settings.rs`): felt `#191970`, playmat border `#0A0A4A`, current turn `#00E5FF` (a
+  game's or player's own colours still win). The fixed status greens are gone: the lobby's "In progress" chip,
+  Join's "Connected" message and the shop's NEW badge use the theme accent; the deck editor's unused-copies
+  badge is neon cyan. Checked by screenshot (Settings in both themes, the table).
+- 2026-11-16: **Suggest Title in the game definition editor** (see "Beyond the port"). New crates `ocrs` + `rten`
+  (approved; optimised in dev builds via `[profile.dev.package.*]`, unusable otherwise). The UI harness now records
+  region rectangles (`Ui::recorded_regions`, on only in `UiHarness`) so tests can click any widget by id
+  (`UiHarness::click_region`, which runs one settling frame first: a dialog's first frame lays out before it knows
+  its height). Dev hook: `GAMETABLE_GAMEDEF_TAB=cards,select,suggest`.

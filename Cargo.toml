@@ -20,6 +20,31 @@ opt-level = 3
 
 # SDL is built with CMake and linked statically. Unoptimized, CMake would build it against MSVC's
 # debug C runtime, which can't link with Rust's; optimized builds use the release runtime.
+# Text recognition (Suggest Title → Image (local)) is unusably slow unoptimized.
+[profile.dev.package.ocrs]
+opt-level = 3
+
+[profile.dev.package.rten]
+opt-level = 3
+
+[profile.dev.package.rten-gemm]
+opt-level = 3
+
+[profile.dev.package.rten-tensor]
+opt-level = 3
+
+[profile.dev.package.rten-vecmath]
+opt-level = 3
+
+[profile.dev.package.rten-simd]
+opt-level = 3
+
+[profile.dev.package.rten-imageproc]
+opt-level = 3
+
+[profile.dev.package.rten-base]
+opt-level = 3
+
 [profile.dev.package.sdl3-sys]
 opt-level = 2
 

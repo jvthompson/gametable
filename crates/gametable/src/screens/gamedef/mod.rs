@@ -15,6 +15,7 @@ pub mod playmat_tab;
 pub mod scenario_tab;
 pub mod sets_tab;
 pub mod settings_tab;
+pub mod title_suggestion_dialogs;
 pub mod tokens_tab;
 pub mod zones_tab;
 
@@ -220,8 +221,9 @@ impl GameDefinitionEditor {
         }
     }
 
-    /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,placement|deck]`): opens
-    /// a tab; `select` selects the first card on the Cards tab, `placement`/`deck` pick the
+    /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,suggest][,placement|deck]`):
+    /// opens a tab; `select` selects the first card on the Cards tab, `suggest` opens its Suggest
+    /// Title dialog, `placement`/`deck` pick the
     /// Scenarios tab's sub-view.
     pub fn apply_development_setup(&mut self, steps: &str) {
         for step in steps.split(',').map(str::trim) {
@@ -230,6 +232,7 @@ impl GameDefinitionEditor {
             }
             match step {
                 "select" => self.cards_tab.select_first(&self.model),
+                "suggest" => self.cards_tab.open_suggest_title_for_development(),
                 "placement" | "deck" => {
                     self.scenario_tab.get_or_insert_with(ScenarioTab::new).set_view_for_development(step)
                 }

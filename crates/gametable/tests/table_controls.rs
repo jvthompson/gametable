@@ -128,7 +128,11 @@ fn build_pile(harness: &mut UiHarness, table: &mut TableScreen) {
     play_card(harness, table, PILE_SPOT, true);
     let on_table = cards_in(table, CardZone::Table);
     assert_eq!(on_table.len(), 3);
-    assert_eq!(on_table.iter().filter(|card| card.stack_parent_id.is_some()).count(), 2, "Alt+drop stacks: {on_table:?}");
+    assert_eq!(
+        on_table.iter().filter(|card| card.stack_parent_id.is_some()).count(),
+        2,
+        "Alt+drop stacks: {on_table:?}"
+    );
 }
 
 #[test]
@@ -154,8 +158,7 @@ fn dragging_a_pile_peels_the_top_card_and_alt_moves_it_whole() {
 
     // A plain drag peels off just the top card.
     drag(&mut harness, &mut table, PILE_SPOT, (400.0, 300.0));
-    let loose: Vec<CardInstance> =
-        cards_in(&table, CardZone::Table).into_iter().filter(|card| card.x < 0.45).collect();
+    let loose: Vec<CardInstance> = cards_in(&table, CardZone::Table).into_iter().filter(|card| card.x < 0.45).collect();
     assert_eq!(loose.len(), 1, "one card peeled off");
     assert!(loose[0].stack_parent_id.is_none());
 

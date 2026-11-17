@@ -37,45 +37,53 @@ pub struct Palette {
     pub shadow: Color,
 }
 
+/// The accent colours. GameTable's own scheme (the original CardTable used a Material green):
+/// the light theme's accent is midnight blue on pale neon cyan containers, the dark theme's is
+/// neon cyan with midnight blue containers. Neutral surfaces carry a slight cool-blue tint.
+pub const MIDNIGHT_BLUE: Color = hex(0x191970, 1.0);
+pub const NEON_CYAN: Color = hex(0x00E5FF, 1.0);
+const PALE_NEON_CYAN: Color = hex(0xB3F5FF, 1.0);
+const DEEP_MIDNIGHT: Color = hex(0x0A0A4A, 1.0);
+
 pub const LIGHT: Palette = Palette {
-    primary: hex(0x3B6939, 1.0),
+    primary: MIDNIGHT_BLUE,
     on_primary: hex(0xFFFFFF, 1.0),
-    primary_container: hex(0xBCF0B4, 1.0),
-    on_primary_container: hex(0x002204, 1.0),
-    secondary_container: hex(0xD7E8CD, 1.0),
-    on_secondary_container: hex(0x121F0E, 1.0),
-    surface: hex(0xF8FBF1, 1.0),
-    on_surface: hex(0x191D17, 1.0),
-    on_surface_variant: hex(0x424940, 1.0),
-    surface_container: hex(0xECEFE5, 1.0),
-    surface_container_high: hex(0xE7E9E0, 1.0),
-    surface_container_highest: hex(0xE1E4DA, 1.0),
-    outline: hex(0x72796F, 1.0),
-    outline_variant: hex(0xC2C9BD, 1.0),
+    primary_container: PALE_NEON_CYAN,
+    on_primary_container: DEEP_MIDNIGHT,
+    secondary_container: hex(0xDCE3F5, 1.0),
+    on_secondary_container: hex(0x141B2C, 1.0),
+    surface: hex(0xF7F9FE, 1.0),
+    on_surface: hex(0x181C22, 1.0),
+    on_surface_variant: hex(0x40454F, 1.0),
+    surface_container: hex(0xEBEEF5, 1.0),
+    surface_container_high: hex(0xE5E8F0, 1.0),
+    surface_container_highest: hex(0xDFE2EA, 1.0),
+    outline: hex(0x707784, 1.0),
+    outline_variant: hex(0xC0C6D2, 1.0),
     error: hex(0xBA1A1A, 1.0),
     scrim: hex(0x000000, 0.32),
-    disabled: hex(0x191D17, 0.38),
+    disabled: hex(0x181C22, 0.38),
     shadow: hex(0x000000, 0.35),
 };
 
 pub const DARK: Palette = Palette {
-    primary: hex(0xA1D39A, 1.0),
-    on_primary: hex(0x0A390F, 1.0),
-    primary_container: hex(0x235024, 1.0),
-    on_primary_container: hex(0xBCF0B4, 1.0),
-    secondary_container: hex(0x3B4B37, 1.0),
-    on_secondary_container: hex(0xD7E8CD, 1.0),
-    surface: hex(0x11140F, 1.0),
-    on_surface: hex(0xE1E4DA, 1.0),
-    on_surface_variant: hex(0xC2C9BD, 1.0),
-    surface_container: hex(0x1D211B, 1.0),
-    surface_container_high: hex(0x282B25, 1.0),
-    surface_container_highest: hex(0x32362F, 1.0),
-    outline: hex(0x8C9388, 1.0),
-    outline_variant: hex(0x424940, 1.0),
+    primary: NEON_CYAN,
+    on_primary: DEEP_MIDNIGHT,
+    primary_container: MIDNIGHT_BLUE,
+    on_primary_container: PALE_NEON_CYAN,
+    secondary_container: hex(0x2B3450, 1.0),
+    on_secondary_container: hex(0xD6E0F5, 1.0),
+    surface: hex(0x0E1117, 1.0),
+    on_surface: hex(0xE0E3EA, 1.0),
+    on_surface_variant: hex(0xC0C6D2, 1.0),
+    surface_container: hex(0x1A1E26, 1.0),
+    surface_container_high: hex(0x242832, 1.0),
+    surface_container_highest: hex(0x2F333D, 1.0),
+    outline: hex(0x8A909C, 1.0),
+    outline_variant: hex(0x40454F, 1.0),
     error: hex(0xFFB4AB, 1.0),
     scrim: hex(0x000000, 0.5),
-    disabled: hex(0xE1E4DA, 0.38),
+    disabled: hex(0xE0E3EA, 0.38),
     shadow: hex(0x000000, 0.6),
 };
 
@@ -93,8 +101,6 @@ pub mod fixed {
     pub const BLUE: Color = hex(0x2196F3, 1.0);
     pub const BLUE_ACCENT: Color = hex(0x448AFF, 1.0);
     pub const RED: Color = hex(0xF44336, 1.0);
-    pub const GREEN: Color = hex(0x4CAF50, 1.0);
-    pub const GREEN_DARK: Color = hex(0x43A047, 1.0);
     pub const RED_ACCENT: Color = hex(0xFF5252, 1.0);
     pub const CARD_BACK_BLUE: Color = hex(0x1565C0, 1.0);
     pub const MISSING_BACK: Color = hex(0xB71C1C, 1.0);
@@ -242,6 +248,7 @@ pub fn icon_codepoint(name: &str) -> Option<char> {
         "arrow_upward" => 0xe5d8,
         "upload_file" => 0xe2c6,
         "menu_book" => 0xea19,
+        "auto_fix_high" => 0xe663,
         _ => return None,
     };
     char::from_u32(codepoint)
@@ -258,7 +265,8 @@ mod tests {
 
     #[test]
     fn palettes_and_helpers() {
-        assert_eq!(LIGHT.primary, Color::rgba(0x3B as f32 / 255.0, 0x69 as f32 / 255.0, 0x39 as f32 / 255.0, 1.0));
+        assert_eq!(LIGHT.primary, Color::rgba(0x19 as f32 / 255.0, 0x19 as f32 / 255.0, 0x70 as f32 / 255.0, 1.0));
+        assert_eq!(DARK.primary, NEON_CYAN);
         assert!(is_light(LIGHT.surface) && !is_light(DARK.surface));
         assert_eq!(mix(fixed::BLACK, fixed::WHITE, 0.5).red, 0.5);
         assert_eq!(with_alpha(fixed::WHITE, 0.5).alpha, 0.5);

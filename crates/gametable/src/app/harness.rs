@@ -40,8 +40,10 @@ impl UiHarness {
         let assets_folder = find_assets_folder();
         let fonts = FontLibrary::new(&assets_folder.join("fonts")).expect("fonts load");
         let scratch = std::env::temp_dir().join("gametable-ui-harness");
+        let mut ui = Ui::new();
+        ui.recorded_regions = Some(std::collections::HashMap::new());
         UiHarness {
-            ui: Ui::new(),
+            ui,
             fonts,
             images: ImageCache::new(),
             settings: Settings::in_memory(),
@@ -128,6 +130,25 @@ impl UiHarness {
 
     pub fn type_text(&mut self, text: &str) -> bool {
         self.ui.on_text_input(text)
+    }
+
+    /// The centre of the region `id` as last drawn.
+    pub fn region_center(&self, id: &str) -> Option<(f32, f32)> {
+        let recorded = self.ui.recorded_regions.as_ref()?;
+        recorded.get(id).map(|&(x, y, width, height)| (x + width / 2.0, y + height / 2.0))
+    }
+
+    /// Clicks the region `id`: one settling frame (a dialog's first frame lays out before it
+    /// knows its height), then move, press and release, one frame each.
+    pub fn click_region(&mut self, id: &str, draw: &mut dyn FnMut(&mut Frame)) {
+        self.frame(|frame| draw(frame));
+        let (x, y) = self.region_center(id).unwrap_or_else(|| panic!("no region '{id}' was drawn"));
+        self.move_mouse(x, y);
+        self.frame(|frame| draw(frame));
+        self.press(x, y, 1, 1);
+        self.frame(|frame| draw(frame));
+        self.release(x, y, 1);
+        self.frame(|frame| draw(frame));
     }
 }
 

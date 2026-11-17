@@ -948,7 +948,7 @@ impl Screen for Join {
                     if client.reconnected { "Reconnected to " } else { "Connected to " },
                     client.opponent_name.as_deref().unwrap_or("host")
                 );
-                let options = TextOptions::new().width(column_width).centered().bold().color(fixed::GREEN);
+                let options = TextOptions::new().width(column_width).centered().bold().color(frame.palette().primary);
                 frame.text(&message, column_x, row_y, options);
             }
             ClientStatus::Failed => {

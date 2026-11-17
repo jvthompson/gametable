@@ -14,3 +14,4 @@ pub mod pdf_render;
 pub mod profile;
 pub mod save_files;
 pub mod settings;
+pub mod title_suggestion;

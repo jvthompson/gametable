@@ -39,8 +39,11 @@ impl AssetChannel {
         if reply != "assetReady" {
             return Err(if reply == "disconnect" {
                 let reason = payload.get("reason").and_then(JsonValue::as_str).unwrap_or("");
-                let refused =
-                    if purpose == "for downloads" { "server refused downloads" } else { "server refused the connection" };
+                let refused = if purpose == "for downloads" {
+                    "server refused downloads"
+                } else {
+                    "server refused the connection"
+                };
                 format!("{refused} ({reason})")
             } else {
                 format!("unexpected reply {reply}")

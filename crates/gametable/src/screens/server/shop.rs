@@ -22,7 +22,7 @@ use crate::ui::components::TAB_BAR_HEIGHT;
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
-use crate::ui::theme::{Weight, fixed};
+use crate::ui::theme::Weight;
 
 const TABS: [&str; 2] = ["Packs", "Decks"];
 const REVEAL_WIDTH: f32 = 480.0;
@@ -67,8 +67,9 @@ pub struct ShopScreen {
 }
 
 fn new_badge(frame: &mut Frame, x: f32, y: f32) {
-    frame.fill_rect(x, y, 36.0, 18.0, 9.0, fixed::GREEN);
-    let options = TextOptions::new().size(10.0).bold().width(36.0).middle_of(18.0).centered().color(fixed::WHITE);
+    let palette = frame.palette();
+    frame.fill_rect(x, y, 36.0, 18.0, 9.0, palette.primary);
+    let options = TextOptions::new().size(10.0).bold().width(36.0).middle_of(18.0).centered().color(palette.on_primary);
     frame.text("NEW", x, y, options);
 }
 

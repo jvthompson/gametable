@@ -7,9 +7,12 @@ use crate::data::display_settings::{
     selection_color, set_felt_texture_enabled, set_selection_color,
 };
 use crate::data::profile;
+use crate::data::settings::keys;
+use crate::data::title_suggestion::claude_vision::ClaudeModel;
 use crate::ui::draw::TextOptions;
 use crate::ui::dropdown::DropdownOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
+use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::Weight;
 use crate::ui::widgets::{BUTTON_HEIGHT, ButtonOptions, Choice, SliderOptions, ToggleOptions};
 
@@ -77,6 +80,49 @@ impl SettingsDialog {
             color.reset(frame.settings);
         }
         row_y += BUTTON_HEIGHT + 16.0;
+        row_y - y
+    }
+
+    /// "Suggest Title with Claude": the user's Anthropic API key and which model reads the
+    /// cards. Returns the height used (including the gap below).
+    fn claude_section(frame: &mut Frame, x: f32, y: f32, width: f32) -> f32 {
+        let palette = frame.palette();
+        let mut row_y = y;
+        row_y += Self::heading(frame, "Suggest Title with Claude", x, row_y);
+        let mut api_key = frame.settings.text(keys::ANTHROPIC_API_KEY).unwrap_or("").to_string();
+        let field_options = TextFieldOptions {
+            height: Some(48.0),
+            password: true,
+            label_background: Some(palette.surface_container_high),
+            hint: Some("sk-ant-..."),
+            ..TextFieldOptions::label("Claude API key")
+        };
+        frame.text_field("settings:anthropicKey", x, row_y + 6.0, width, &mut api_key, &field_options);
+        let api_key = api_key.trim();
+        if api_key != frame.settings.text(keys::ANTHROPIC_API_KEY).unwrap_or("") {
+            if api_key.is_empty() {
+                frame.settings.remove(keys::ANTHROPIC_API_KEY);
+            } else {
+                frame.settings.set(keys::ANTHROPIC_API_KEY, api_key);
+            }
+        }
+        row_y += 6.0 + 48.0 + 12.0;
+        let current = ClaudeModel::from_setting_value(frame.settings.text(keys::CLAUDE_TITLE_MODEL));
+        let choices = [
+            Choice::new(ClaudeModel::Haiku, "Haiku 5.5 (cheaper)"),
+            Choice::new(ClaudeModel::Opus, "Opus 5.5 (most accurate)"),
+        ];
+        let picked = frame.segmented("settings:claudeModel", x, row_y, width, &choices, current, None, false);
+        if picked != current {
+            frame.settings.set(keys::CLAUDE_TITLE_MODEL, picked.setting_value());
+        }
+        row_y += 40.0 + 8.0;
+        let note = "Used by the game definition editor's Suggest Title to read titles from card images. Create a key \
+                    at console.anthropic.com; API use is billed to that account, separately from a Claude \
+                    subscription. Stored in this computer's settings file.";
+        let note_options = TextOptions::new().width(width).size(SUBTITLE_SIZE).color(palette.on_surface_variant);
+        frame.text(note, x, row_y, note_options);
+        row_y += frame.text_height(note, width, SUBTITLE_SIZE, Weight::Regular) + 24.0;
         row_y - y
     }
 
@@ -221,6 +267,10 @@ impl SettingsDialog {
                 row_y,
                 width,
             );
+            if !self.in_game {
+                row_y += 8.0;
+                row_y += Self::claude_section(frame, x, row_y, width);
+            }
             // The last row has no gap below it.
             row_y - 16.0 - y
         });

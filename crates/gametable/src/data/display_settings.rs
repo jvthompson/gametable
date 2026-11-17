@@ -170,9 +170,12 @@ impl HandSettings {
 // ---------------------------------------------------------------------------
 
 pub const DEFAULT_SELECTION_COLOR: ArgbColor = 0xFFFF_EB3B; // Material yellow 500
-pub const DEFAULT_FELT_COLOR: ArgbColor = 0xFF0B_6E4F;
-pub const DEFAULT_PLAYMAT_BORDER_COLOR: ArgbColor = 0xFF06_3D2A;
-pub const DEFAULT_CURRENT_TURN_COLOR: ArgbColor = 0xFF00_C853; // pure green
+// GameTable's defaults: a midnight blue felt, a deeper midnight playmat border and a neon cyan
+// current-turn highlight (the original CardTable used greens: 0xFF0B6E4F, 0xFF063D2A, 0xFF00C853).
+// A game's own colours, and anything a player picked in Settings > Table, still win.
+pub const DEFAULT_FELT_COLOR: ArgbColor = 0xFF19_1970;
+pub const DEFAULT_PLAYMAT_BORDER_COLOR: ArgbColor = 0xFF0A_0A4A;
+pub const DEFAULT_CURRENT_TURN_COLOR: ArgbColor = 0xFF00_E5FF;
 
 /// A colour that resolves player override → the current game's own colour → a default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

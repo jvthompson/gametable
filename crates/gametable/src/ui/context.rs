@@ -236,6 +236,9 @@ pub struct Ui {
     pending_overlay_key: Option<(String, OverlayKey)>,
     /// Alerts, confirmations and snackbars owned by the app rather than a screen.
     pub(crate) app_overlays: crate::ui::overlays::AppOverlays,
+    /// Tests only: every region drawn, by id, as `(x, y, width, height)` (latest frame wins).
+    /// `None` (the default) records nothing.
+    pub recorded_regions: Option<HashMap<String, (f32, f32, f32, f32)>>,
 }
 
 impl Default for Ui {
@@ -282,6 +285,7 @@ impl Ui {
             open_overlays_last_frame: Vec::new(),
             pending_overlay_key: None,
             app_overlays: Default::default(),
+            recorded_regions: None,
         }
     }
 
@@ -617,6 +621,9 @@ impl Ui {
 
     /// A generic interactive area.
     pub fn region(&mut self, id: &str, x: f32, y: f32, width: f32, height: f32, options: RegionOptions) -> Region {
+        if let Some(recorded) = &mut self.recorded_regions {
+            recorded.insert(id.to_string(), (x, y, width, height));
+        }
         let mut region = Region { hovered: self.hover(x, y, width, height), ..Region::default() };
         if region.hovered {
             self.hovered_id = Some(id.to_string());

@@ -30,6 +30,13 @@ pub mod keys {
     pub const PLAYMAT_BORDER_COLOR: &str = "playmat_border_color";
     pub const CURRENT_TURN_COLOR: &str = "current_turn_color";
     pub const FELT_TEXTURE: &str = "felt_texture_enabled";
+    // Added by GameTable:
+    /// The user's Anthropic API key for "Suggest Title → From Image" with Claude.
+    pub const ANTHROPIC_API_KEY: &str = "anthropic_api_key";
+    /// `"haiku"` (default) or `"opus"`.
+    pub const CLAUDE_TITLE_MODEL: &str = "claude_title_model";
+    /// The last "Suggest Title" choices: `"id"`, `"ocr"` or `"claude"`.
+    pub const SUGGEST_TITLE_SOURCE: &str = "suggest_title_source";
 }
 
 /// The settings file, loaded into memory once and rewritten after every change.

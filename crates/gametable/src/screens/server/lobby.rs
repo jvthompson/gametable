@@ -934,7 +934,7 @@ impl ServerLobby {
         // Text on the left.
         let (text_x, text_width) = (x + 20.0, button_x - x - 28.0);
         let (chip, chip_color) =
-            if playing { ("In progress", fixed::GREEN) } else { ("Waiting for players", fixed::BLUE) };
+            if playing { ("In progress", palette.primary) } else { ("Waiting for players", fixed::BLUE) };
         frame.text(&room.name, text_x, y + 14.0, TextOptions::new().bold().width(text_width).ellipsis());
         let mut subtitle = format!("{}  ·  {}/{} players", room.game_name, room.seats.len(), room.max_players);
         if room.spectators > 0 {

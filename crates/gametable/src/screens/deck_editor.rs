@@ -23,7 +23,7 @@ use crate::ui::components::{EDITOR_TOOLBAR_HEIGHT, ToolbarAction};
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
 use crate::ui::dropdown::DropdownOptions;
-use crate::ui::theme::{Weight, fixed, with_alpha};
+use crate::ui::theme::{NEON_CYAN, Weight, fixed, with_alpha};
 use crate::ui::widgets::{Choice, ScrollbarStyle};
 
 /// The deck list's width on the right.
@@ -419,7 +419,7 @@ impl DeckEditor {
             }
             if let Some(unused) = unused {
                 let (badge_x, badge_y) = (tile.center_x - TILE_CARD_WIDTH / 2.0 - 6.0 + 11.0, tile.y - 6.0 + 11.0);
-                DeckEditor::badge(frame, badge_x, badge_y, fixed::GREEN_DARK, &unused.to_string(), fixed::BLACK);
+                DeckEditor::badge(frame, badge_x, badge_y, NEON_CYAN, &unused.to_string(), fixed::BLACK);
             }
             let label = match limit {
                 Some(limit) => {
