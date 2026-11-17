@@ -657,8 +657,11 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   game's or player's own colours still win). The fixed status greens are gone: the lobby's "In progress" chip,
   Join's "Connected" message and the shop's NEW badge use the theme accent; the deck editor's unused-copies
   badge is neon cyan. Checked by screenshot (Settings in both themes, the table).
-- 2026-11-16: **Suggest Title in the game definition editor** (see "Beyond the port"). New crates `ocrs` + `rten`
+- 2026-11-17: **Suggest Title in the game definition editor** (see "Beyond the port"). New crates `ocrs` + `rten`
   (approved; optimised in dev builds via `[profile.dev.package.*]`, unusable otherwise). The UI harness now records
   region rectangles (`Ui::recorded_regions`, on only in `UiHarness`) so tests can click any widget by id
   (`UiHarness::click_region`, which runs one settling frame first: a dialog's first frame lays out before it knows
-  its height). Dev hook: `GAMETABLE_GAMEDEF_TAB=cards,select,suggest`.
+  its height). Dev hook: `GAMETABLE_GAMEDEF_TAB=cards,select,suggest`. The Claude engine was tested by the user
+  with their own key and works.
+- 2026-11-17: **Release `v0.2.0+41`** (Suggest Title, colours, deploy script), the first release published to test
+  the self-updater from an earlier GameTable install (`v0.2.0+40`).
