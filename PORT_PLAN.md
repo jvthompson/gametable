@@ -607,3 +607,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   (packs, deck widget, scenarios, token bags). Found one wording difference (fixed). The other two failures the
   tests hit were the original's own behaviour (recorded in the quirks log). Every phase of the plan is now checked;
   what remains is hand testing: Discord sign-in and invites, a Mac, and the first tagged release.
+- 2026-11-17: **First release `v0.2.0+39`** (`tools/package.py --publish`). The tag's CI run passed: tests on all
+  three platforms, then the Windows, Linux and macOS packages were built and attached to the GitHub release
+  (`cardtable-windows.zip` 15.6 MB, `cardtable-linux-x86_64.zip` 16.8 MB, `cardtable-macos.zip` 28.8 MB). The Windows
+  zip has the expected flat layout. Not yet tried: installing from these downloads, the in-app updater against
+  this real release, and opening the macOS app.
