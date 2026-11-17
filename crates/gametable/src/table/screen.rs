@@ -462,6 +462,22 @@ impl TableScreen {
         self.game = Rc::new(game);
     }
 
+    /// Where the open context menu shows an item, by label (for scripted UI checks).
+    pub fn menu_item_rect(&self, label: &str) -> Option<crate::ui::context::Rect> {
+        self.menu.as_ref().and_then(|menu| menu.menu.item_rect(label))
+    }
+
+    /// Last frame's hit items as (original kind name, centre), front-most last (for scripted
+    /// UI checks).
+    pub fn hit_item_centers(&self) -> Vec<(&'static str, f32, f32)> {
+        self.previous_items.iter().map(|item| (item.kind.name(), item.shape.center_x, item.shape.center_y)).collect()
+    }
+
+    /// Whether a table dialog (set value, colours, confirm give, ...) is showing.
+    pub fn is_dialog_open(&self) -> bool {
+        self.dialog.is_some()
+    }
+
     /// What happened since the last call (leave, save, kick).
     pub fn take_events(&mut self) -> Vec<TableEvent> {
         std::mem::take(&mut self.events)

@@ -15,16 +15,16 @@ pub struct AssetChannel {
 }
 
 impl AssetChannel {
-    /// Connects and says `assetHello` with the session token; `what` names the purpose in errors
-    /// ("downloads", "upload").
-    pub fn open(host: &str, port: u16, token: Option<&str>, what: &str) -> Result<AssetChannel, String> {
+    /// Connects and says `assetHello` with the session token; `purpose` completes the error
+    /// message "Could not connect ...": "for downloads" (asset worker) or "to upload" (admin upload).
+    pub fn open(host: &str, port: u16, token: Option<&str>, purpose: &str) -> Result<AssetChannel, String> {
         let address = (host, port)
             .to_socket_addrs()
             .ok()
             .and_then(|mut addresses| addresses.next())
-            .ok_or_else(|| format!("Could not connect for {what}: host not found"))?;
+            .ok_or_else(|| format!("Could not connect {purpose}: host not found"))?;
         let stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
-            .map_err(|error| format!("Could not connect for {what}: {error}"))?;
+            .map_err(|error| format!("Could not connect {purpose}: {error}"))?;
         let _ = stream.set_nodelay(true);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
@@ -40,7 +40,7 @@ impl AssetChannel {
             return Err(if reply == "disconnect" {
                 let reason = payload.get("reason").and_then(JsonValue::as_str).unwrap_or("");
                 let refused =
-                    if what == "downloads" { "server refused downloads" } else { "server refused the connection" };
+                    if purpose == "for downloads" { "server refused downloads" } else { "server refused the connection" };
                 format!("{refused} ({reason})")
             } else {
                 format!("unexpected reply {reply}")

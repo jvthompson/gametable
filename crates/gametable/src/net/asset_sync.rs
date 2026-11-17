@@ -237,7 +237,7 @@ fn run_worker(job: DownloadJob, out: mpsc::Sender<WorkerMessage>) {
                 continue;
             }
             if channel.is_none() {
-                channel = Some(AssetChannel::open(&job.host, job.port, job.token.as_deref(), "downloads")?);
+                channel = Some(AssetChannel::open(&job.host, job.port, job.token.as_deref(), "for downloads")?);
             }
             let data = download(channel.as_mut().expect("opened above"), &job.game_id, &file.path)?;
             let _ = std::fs::create_dir_all(parent_folder(&destination));

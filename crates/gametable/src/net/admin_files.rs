@@ -56,7 +56,7 @@ impl FileUpload {
             .spawn(move || {
                 let result = (|| -> Result<(), String> {
                     let data = std::fs::read(&local_path).map_err(|_| format!("Could not read {local_path}"))?;
-                    let mut channel = AssetChannel::open(&host, port, token.as_deref(), "upload")?;
+                    let mut channel = AssetChannel::open(&host, port, token.as_deref(), "to upload")?;
                     let total = data.len();
                     let mut offset = 0;
                     loop {

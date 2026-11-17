@@ -11,7 +11,6 @@ pub mod info_dialogs;
 pub mod kit_gallery;
 pub mod load_saved_game;
 pub mod multiplayer;
-pub mod not_ported;
 pub mod player_count;
 pub mod practice_game;
 pub mod practice_select;

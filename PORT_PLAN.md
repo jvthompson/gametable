@@ -342,7 +342,22 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   running them from a fresh unzip. Not yet run: the workflow itself (nothing pushed) and anything on macOS.
 
 ### Phase 12 — Parity audit
-- [ ] Walk `CONTROLS.md` and `docs/*.html` feature-by-feature against the Rust build; fix gaps
+- [x] Walk `CONTROLS.md` and `docs/*.html` feature-by-feature against the Rust build; fix gaps
+  - Inventories (scripts kept out of the repo): every Lua function name has a Rust counterpart except renames,
+    Windows-only helpers the port replaced (PowerShell, WinHTTP, Win32 process calls) and inlined helpers; every
+    user-facing Lua string is in the Rust code except the same Windows-only text. One wording gap was fixed: admin
+    uploads said "Could not connect for upload" where the original says "Could not connect to upload".
+  - Keyboard: `T:keypressed` / `T:update` match key for key (players, spectators, rulebook and game menu states).
+  - `tests/table_controls.rs` walks the game-table part of `CONTROLS.md` through real frames: click a pile to draw
+    its top card, drag to peel one, Alt+drag to move it whole or deal it into the hand, Alt+drop to stack, the board
+    menu's Simple Counter (double-click halves, clamped at 0; Increment; Delete), Pass Turn To, Ctrl+click and
+    Shift+box selection with Create Pile Here, Tab+drag arrows, Z, and Give to's confirmation.
+  - `tests/table_real_games.rs` (ignored; `GAMETABLE_LIBRARY=<library>`, read only) covers what no bundled game
+    has: Lorcana's Pack Generator (open a pack from a set, delete) and Deck Widget (create, delete), Arkham Horror
+    LCG's scenario load (7 zones, 11 widgets), token bag draw-by-click and return-by-click, and the token picker.
+  - Deck Editor and Game Definition Editor controls (add/remove clicks, Ctrl+R), window chrome (hit-test drag,
+    double-click maximize, click-through, F6) checked against the code. The unused `NotPortedYet` stand-in was removed.
+  - Still only testable by hand: Discord OAuth/friends/invites, running on a Mac, the release packaging jobs.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -358,6 +373,11 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - Go lobby messages sort keys alphabetically; engine payloads keep model field order. Interop does not depend on key order.
 - The original writes `1` where the older Dart app wrote `1.0`; `compat_check` tolerates that difference.
 - `docs/data.html` says game-log lines are `[mm:ss]`; the code writes `[HH:MM:SS]`. Follow the code.
+- `CONTROLS.md` lags the code in places: the board menu has its own **Tokens** item (not Widgets > Token), and the
+  Card Library stays in the board menu in collection mode. Follow the code.
+- Confirmation dialogs (`overlays.confirm`) have no Enter action: Return does nothing, only the button confirms.
+- A card's menu offers Give to / Remove Ownership for any card the player can act on, including unownable ones
+  (e.g. Standard 52's shared deck); the rules engine then refuses the change silently.
 - Client RNG was never seeded in the original; the port seeds from OS entropy.
 - JSON: a lone surrogate unicode escape decodes to U+FFFD (Lua produced invalid UTF-8 bytes); invalid UTF-8 in input
   files is replaced with U+FFFD (Lua passed raw bytes through). Rust strings must be valid UTF-8.
@@ -582,3 +602,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   LÖVE font metrics and binding the macOS Discord library. Still untested: the release packaging jobs (they run
   only for a `v*` tag) and running the app on a Mac. CI warns that `actions/checkout@v4` uses the deprecated
   Node 20. Next: Phase 12 (parity audit).
+- 2026-11-16: **Phase 12 complete.** Parity audit by function and string inventories against the Lua source, plus
+  two new frame-driven test files covering `CONTROLS.md`'s table interactions and the features only real games use
+  (packs, deck widget, scenarios, token bags). Found one wording difference (fixed). The other two failures the
+  tests hit were the original's own behaviour (recorded in the quirks log). Every phase of the plan is now checked;
+  what remains is hand testing: Discord sign-in and invites, a Mac, and the first tagged release.
