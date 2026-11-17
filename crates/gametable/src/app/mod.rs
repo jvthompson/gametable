@@ -22,7 +22,7 @@ use sdl3::mouse::{Cursor, SystemCursor};
 use sdl3::video::Window;
 
 use crate::data::display_settings::HandSettings;
-use crate::data::paths::{AppPaths, DEFAULT_IDENTITY, LEGACY_IDENTITY};
+use crate::data::paths::{AppPaths, DEFAULT_IDENTITY, LEGACY_IDENTITIES};
 use crate::data::profile;
 use crate::data::settings::{Settings, keys};
 use crate::graphics::gpu_renderer::GpuRenderer;
@@ -65,7 +65,7 @@ pub enum ScreenCommand {
 /// One screen of the app (the original's screen tables with optional methods).
 pub trait Screen {
     fn title(&self) -> String {
-        "CardTable".to_string()
+        "GameTable".to_string()
     }
     /// Whether the title bar shows a back arrow (when there is a screen to go back to).
     fn shows_back(&self) -> bool {
@@ -180,7 +180,7 @@ fn pump_discord(frame: &mut Frame, dt: f32) {
         let Some((host, port)) = discord::parse_join_secret(&secret) else { continue };
         frame.ui.app_dialog(AppDialogSpec {
             title: "Discord Game Invite".to_string(),
-            message: format!("Join the CardTable game at {host}:{port}?"),
+            message: format!("Join the GameTable game at {host}:{port}?"),
             confirm_label: "Join".to_string(),
             cancel_label: "Dismiss".to_string(),
             dismissible: true,
@@ -199,7 +199,7 @@ pub fn find_assets_folder() -> PathBuf {
     if let Some(folder) = beside_exe.filter(|folder| folder.join("fonts").is_dir()) {
         return folder;
     }
-    // A macOS bundle keeps them in CardTable.app/Contents/Resources/assets.
+    // A macOS bundle keeps them in GameTable.app/Contents/Resources/assets.
     let in_bundle = executable_folder
         .as_ref()
         .and_then(|folder| folder.parent())
@@ -316,7 +316,7 @@ impl App {
             Some(identity) => AppPaths::for_identity(identity)?,
             None => {
                 let paths = AppPaths::for_identity(DEFAULT_IDENTITY)?;
-                paths.migrate_legacy_identity(LEGACY_IDENTITY);
+                paths.migrate_legacy_identity(&LEGACY_IDENTITIES);
                 paths
             }
         };
@@ -328,7 +328,7 @@ impl App {
         // Which window system SDL picked (windows, cocoa, wayland, x11), for bug reports.
         eprintln!("video: SDL video driver {}", video.current_video_driver());
         let mut window = video
-            .window("CardTable", 1280, 720)
+            .window("GameTable", 1280, 720)
             .position_centered()
             .resizable()
             .borderless()
@@ -745,7 +745,7 @@ impl App {
                 None
             } else {
                 let screen = screens.last();
-                let title = screen.map_or("CardTable".to_string(), |screen| screen.title());
+                let title = screen.map_or("GameTable".to_string(), |screen| screen.title());
                 let shows_back = screen.is_some_and(|screen| screen.shows_back()) && stack_depth > 1;
                 Some(draw_title_bar(frame, &title, shows_back, maximized, width))
             };
@@ -860,7 +860,7 @@ fn draw_title_bar(frame: &mut Frame, title: &str, shows_back: bool, maximized: b
     frame.text(title, x, 0.0, title_options);
     let title_end = x + frame.text_width(title, 14.0, crate::ui::theme::Weight::Medium) + 8.0;
     let mut button_x = width - 8.0 - 40.0;
-    if frame.icon_button("close", button_x, 8.0, &button("title:close", "Close CardTable")) {
+    if frame.icon_button("close", button_x, 8.0, &button("title:close", "Close GameTable")) {
         action = Some(TitleAction::Close);
     }
     button_x -= 48.0;

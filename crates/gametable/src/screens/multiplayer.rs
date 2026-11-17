@@ -864,7 +864,7 @@ impl Screen for Join {
         let (host, port) = self.host_and_port();
         let status = client.borrow().status;
         if status == ClientStatus::Server {
-            // A CardTable server: its sign-in screen takes over the connection.
+            // A GameTable server: its sign-in screen takes over the connection.
             self.navigated = true;
             profile::add_recent_server(frame.settings, &host, f64::from(port));
             let (connection, info) = {
@@ -980,10 +980,10 @@ impl Screen for Join {
                         "This game is already in progress and your seat couldn't be found. Make sure you're reconnecting \
                          to the same host."
                     }
-                    Some("versionMismatch") => "That CardTable server needs a different version of CardTable.",
-                    Some("serverRequiresUpdate") => "That CardTable server needs a newer version of CardTable.",
+                    Some("versionMismatch") => "That GameTable server needs a different version of GameTable.",
+                    Some("serverRequiresUpdate") => "That GameTable server needs a newer version of GameTable.",
                     Some("serverShuttingDown") => {
-                        "That CardTable server is shutting down and isn't accepting connections."
+                        "That GameTable server is shutting down and isn't accepting connections."
                     }
                     _ => "Disconnected from host.",
                 };
@@ -1014,7 +1014,7 @@ fn disconnect_message(reason: Option<&str>) -> &'static str {
     }
 }
 
-/// What a CardTable server game adds to [`ClientGame`] (the original's `opts` from
+/// What a GameTable server game adds to [`ClientGame`] (the original's `opts` from
 /// `server/common.lua`'s `gameScreen`).
 pub struct ServerGameContext {
     pub server: SharedServer,
@@ -1091,7 +1091,7 @@ impl ClientGame {
         }
     }
 
-    /// A CardTable server game: the room's channel on an already-joined server.
+    /// A GameTable server game: the room's channel on an already-joined server.
     pub fn for_server(frame: &Frame, context: ServerGameContext) -> ClientGame {
         // Spectators watch under the id the server filters for them.
         let local_player_id = {

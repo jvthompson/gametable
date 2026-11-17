@@ -1,7 +1,7 @@
 //! Where decks are listed, loaded and saved. Port of `src/data/deck_store.lua`.
 //!
 //! The deck dialogs work through [`DeckStore`] so they don't care whether decks live in the
-//! local deck library folder or in a CardTable server account (the server store arrives with the
+//! local deck library folder or in a GameTable server account (the server store arrives with the
 //! lobby client). Results arrive through callbacks, as in the original: the local store calls them
 //! straight away, the server store when its reply comes in.
 
@@ -34,7 +34,7 @@ pub trait DeckStore {
     fn set_also_local(&mut self, _also_local: bool) {}
 }
 
-/// A CardTable server account's decks (`M.serverStore(sc)`), with the game's built-in decks.
+/// A GameTable server account's decks (`M.serverStore(sc)`), with the game's built-in decks.
 pub struct ServerDeckStore {
     pub server: crate::net::server_client::SharedServer,
     /// The local deck library, for "also save a local copy".

@@ -15,6 +15,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done and tested
 | Layout | One Cargo workspace, three crates: `gametable-core`, `gametable` (client), `gametable-server` |
 | SDL3 | Use SDL3 wherever it makes sense (window, input, GPU rendering, ttf, image, audio, clipboard, hit-test) |
 | Crates | Ask the user before adding any cargo crate |
+| Name (2026-11-17) | The app is **GameTable** everywhere a user sees it (window, dialogs, executable `GameTable.exe` / `GameTable.app` / `gametable`, release files `gametable-<platform>.zip`, CONTROLS.md, Discord invite text, UPnP mapping, the Rust server's default name). The save folder moves to `%APPDATA%\gametable`; the first launch copies `cardtable` (else `cardflux`) in and repoints the avatar. Kept for compatibility: the `cardflux:` password-hash prefix, `.cardflux_manifest.json`, `cardflux.db`. Installs of `v0.2.0+39` (CardTable names) don't auto-update; they download once by hand |
 
 ## Key facts about the original
 
@@ -612,3 +613,12 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   (`cardtable-windows.zip` 15.6 MB, `cardtable-linux-x86_64.zip` 16.8 MB, `cardtable-macos.zip` 28.8 MB). The Windows
   zip has the expected flat layout. Not yet tried: installing from these downloads, the in-app updater against
   this real release, and opening the macOS app.
+- 2026-11-17: **Renamed to GameTable** (see Decisions). The save folder is now `gametable`, filled once from
+  `cardtable`/`cardflux` with the avatar path repointed (tested). Because development builds are now also named
+  `gametable`, the updater only treats an executable as an install when its packaged `assets` folder is beside it
+  (or in `Contents/Resources` on macOS). The Windows package was built and run: title bar, version resource and
+  file names all say GameTable. The Home logo (`assets/logo.png` for dark, `logo_light.png` for light) is the
+  user's new GameTable artwork (their own transparent PNG, trimmed to 881×813), the same image for both themes
+  (checked by screenshot in each). Home now draws it as wide as the content below it when the window is tall
+  enough, shrinking to fit, never below the original 220. The Discord application's name is set in Discord's developer
+  portal, not in the code.

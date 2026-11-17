@@ -1,6 +1,6 @@
 [package]
 name = "gametable"
-description = "GameTable client: a tabletop card game sandbox"
+description = "GameTable client: a virtual tabletop for card and board games"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

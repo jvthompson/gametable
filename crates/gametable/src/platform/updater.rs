@@ -10,7 +10,7 @@
 //! that leaves the current install intact.
 //!
 //! Install layouts: Windows and Linux are a folder holding the executable; macOS is
-//! `CardTable.app` (the executable is `CardTable.app/Contents/MacOS/CardTable`). Release packages
+//! `GameTable.app` (the executable is `GameTable.app/Contents/MacOS/GameTable`). Release packages
 //! are zips of the same layout.
 
 use std::io::{Read, Write};
@@ -24,11 +24,11 @@ use gametable_core::json::{self, JsonValue};
 use crate::version::{BUILD, EXECUTABLE_NAME, RELEASE_ASSET_NAME, RELEASE_REPOSITORY};
 
 /// Temporary folders for downloaded updates start with this.
-const TEMPORARY_FOLDER_PREFIX: &str = "cardtable_update_";
+const TEMPORARY_FOLDER_PREFIX: &str = "gametable_update_";
 /// The command-line switch that runs the install helper.
 pub const APPLY_UPDATE_SWITCH: &str = "--apply-update";
 /// GitHub rejects API requests without a User-Agent. Generic on purpose.
-const USER_AGENT: &str = "CardTable-updater";
+const USER_AGENT: &str = "GameTable-updater";
 /// See [`start_check`]. The helper clears it (and `GAMETABLE_HOME_OPEN`) for the relaunched app.
 const TEST_URL_VARIABLE: &str = "GAMETABLE_UPDATE_TEST_URL";
 
@@ -100,7 +100,7 @@ pub fn paths_inside(install_folder: &Path, candidates: &[PathBuf]) -> Vec<PathBu
 /// The executable inside an install (or an extracted package) rooted at `root`.
 pub fn executable_in(root: &Path) -> PathBuf {
     if cfg!(target_os = "macos") {
-        root.join("CardTable.app").join("Contents").join("MacOS").join(EXECUTABLE_NAME)
+        root.join("GameTable.app").join("Contents").join("MacOS").join(EXECUTABLE_NAME)
     } else {
         root.join(EXECUTABLE_NAME)
     }
@@ -110,21 +110,33 @@ pub fn executable_in(root: &Path) -> PathBuf {
 fn install_root_of(executable: &Path) -> Option<PathBuf> {
     let folder = executable.parent()?;
     if cfg!(target_os = "macos") {
-        // CardTable.app/Contents/MacOS/CardTable -> CardTable.app
+        // GameTable.app/Contents/MacOS/GameTable -> GameTable.app
         let bundle = folder.parent()?.parent()?;
         return (bundle.extension().is_some_and(|extension| extension == "app")).then(|| bundle.to_path_buf());
     }
     Some(folder.to_path_buf())
 }
 
-/// `U.supported()`: only a packaged build checks for or installs updates (a development run's
-/// executable is `gametable` inside `target/`). The packaged executable is named
-/// [`EXECUTABLE_NAME`].
+/// `U.supported()`: only a packaged build checks for or installs updates. A package's executable
+/// is named [`EXECUTABLE_NAME`] and has its `assets` folder beside it (in `Contents/Resources` on
+/// macOS). A development run's executable has the same name (`gametable` inside `target/`) but
+/// finds its assets in the repository instead.
 pub fn is_packaged_install() -> bool {
     let Ok(executable) = std::env::current_exe() else { return false };
     let named_like_a_package =
         executable.file_name().is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(EXECUTABLE_NAME));
-    named_like_a_package && install_root_of(&executable).is_some()
+    named_like_a_package && install_root_of(&executable).is_some() && has_packaged_assets(&executable)
+}
+
+/// Whether the package's `assets` folder is where the packaging script puts it.
+fn has_packaged_assets(executable: &Path) -> bool {
+    let Some(folder) = executable.parent() else { return false };
+    let assets = if cfg!(target_os = "macos") {
+        folder.parent().map(|contents| contents.join("Resources").join("assets"))
+    } else {
+        Some(folder.join("assets"))
+    };
+    assets.is_some_and(|assets| assets.is_dir())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -325,8 +337,8 @@ fn download_and_launch(
     if !staged_executable.is_file() {
         return Err(format!("Downloaded update package is missing {EXECUTABLE_NAME} -- aborting."));
     }
-    // macOS: the package holds CardTable.app; mirror that bundle over the installed one.
-    let staged_root = if cfg!(target_os = "macos") { staged.join("CardTable.app") } else { staged.clone() };
+    // macOS: the package holds GameTable.app; mirror that bundle over the installed one.
+    let staged_root = if cfg!(target_os = "macos") { staged.join("GameTable.app") } else { staged.clone() };
 
     let _ = sender.send(UpdateProgress::LaunchingInstaller);
     let mut command = std::process::Command::new(&staged_executable);
@@ -535,15 +547,15 @@ mod tests {
         assert_eq!(build_from_tag("v0.1.0+x"), None);
         let release = json::decode(
             r#"{"tag_name":"v0.3.0+40","assets":[{"name":"other.zip","browser_download_url":"u1","size":1},
-            {"name":"cardtable-windows.zip","browser_download_url":"https://x/y.zip","size":1234}]}"#,
+            {"name":"gametable-windows.zip","browser_download_url":"https://x/y.zip","size":1234}]}"#,
         )
         .unwrap();
         assert_eq!(
-            pick_release(&release, 38, "cardtable-windows.zip"),
+            pick_release(&release, 38, "gametable-windows.zip"),
             Some(AvailableRelease { tag: "v0.3.0+40".into(), url: "https://x/y.zip".into(), size: Some(1234) })
         );
-        assert_eq!(pick_release(&release, 40, "cardtable-windows.zip"), None, "not newer");
-        assert_eq!(pick_release(&release, 1, "cardtable-macos.zip"), None, "no asset for this platform");
+        assert_eq!(pick_release(&release, 40, "gametable-windows.zip"), None, "not newer");
+        assert_eq!(pick_release(&release, 1, "gametable-macos.zip"), None, "no asset for this platform");
     }
 
     #[test]
@@ -561,10 +573,10 @@ mod tests {
 
     #[test]
     fn libraries_inside_the_install_are_kept() {
-        let root = PathBuf::from(if cfg!(windows) { "C:\\Apps\\CardTable" } else { "/apps/CardTable" });
+        let root = PathBuf::from(if cfg!(windows) { "C:\\Apps\\GameTable" } else { "/apps/GameTable" });
         let inside = root.join("game_library");
         let outside = PathBuf::from(if cfg!(windows) { "D:\\Games" } else { "/games" });
-        let sibling = PathBuf::from(if cfg!(windows) { "C:\\Apps\\CardTable2" } else { "/apps/CardTable2" });
+        let sibling = PathBuf::from(if cfg!(windows) { "C:\\Apps\\GameTable2" } else { "/apps/GameTable2" });
         assert_eq!(paths_inside(&root, &[inside.clone(), outside, sibling]), vec![inside]);
     }
 
@@ -597,7 +609,7 @@ mod tests {
         {
             let mut writer = zip::ZipWriter::new(&mut buffer);
             let options = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
-            writer.start_file("CardTable", options).unwrap();
+            writer.start_file("GameTable", options).unwrap();
             writer.write_all(b"binary").unwrap();
             writer.start_file("assets/fonts/a.ttf", zip::write::SimpleFileOptions::default()).unwrap();
             writer.write_all(b"font").unwrap();
@@ -615,7 +627,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(root.join("out").join("CardTable")).unwrap().permissions().mode();
+            let mode = std::fs::metadata(root.join("out").join("GameTable")).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0o111, "executable bit kept");
         }
         std::fs::remove_dir_all(root).unwrap();

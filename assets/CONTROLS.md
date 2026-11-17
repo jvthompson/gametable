@@ -1,4 +1,4 @@
-# CardTable Controls
+# GameTable Controls
 
 ## Window
 
@@ -66,7 +66,7 @@ Hotkeys act on the card (or token, for Q / E; a card token also responds to Z) u
 
 ### Chat commands
 
-Typed into any chat box (lobby, room, or the in-game chat panel) on a CardTable server. /flip and /roll also work in a practice game's chat panel, run locally with no server involved; anything else typed there is just kept as a personal note, since there's no one else at the table to read it.
+Typed into any chat box (lobby, room, or the in-game chat panel) on a GameTable server. /flip and /roll also work in a practice game's chat panel, run locally with no server involved; anything else typed there is just kept as a personal note, since there's no one else at the table to read it.
 
 | Command | Effect |
 |---------|--------|

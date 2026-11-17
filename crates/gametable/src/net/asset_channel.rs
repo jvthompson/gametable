@@ -1,4 +1,4 @@
-//! A blocking second connection to a CardTable server for game files (the asset channel), used
+//! A blocking second connection to a GameTable server for game files (the asset channel), used
 //! on worker threads by the downloads and the admin uploads. Port of the socket parts shared by
 //! `src/net/asset_worker.lua` and `admin_upload_worker.lua`.
 

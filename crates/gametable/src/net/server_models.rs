@@ -1,4 +1,4 @@
-//! What a CardTable server sends to the lobby, read leniently from its JSON (missing fields take
+//! What a GameTable server sends to the lobby, read leniently from its JSON (missing fields take
 //! defaults, as the original's plain Lua tables did).
 
 use std::collections::HashMap;
@@ -52,9 +52,9 @@ impl ServerInfo {
         }
     }
 
-    /// The server's name, or "CardTable Server".
+    /// The server's name, or "GameTable Server".
     pub fn display_name(&self) -> &str {
-        self.name.as_deref().unwrap_or("CardTable Server")
+        self.name.as_deref().unwrap_or("GameTable Server")
     }
 }
 
@@ -307,6 +307,6 @@ mod tests {
         .unwrap());
         assert_eq!((game.sets[0].card_count, game.starter_decks[0].name.as_str()), (4, "Red"));
         let info = ServerInfo::parse(&decode(r#"{"motd":"hi","mode":"collection"}"#).unwrap());
-        assert!(info.registration_open && info.display_name() == "CardTable Server");
+        assert!(info.registration_open && info.display_name() == "GameTable Server");
     }
 }

@@ -1,4 +1,4 @@
-//! The connection to a CardTable server (the lobby server). Port of `src/net/server_client.lua`.
+//! The connection to a GameTable server (the lobby server). Port of `src/net/server_client.lua`.
 //!
 //! It uses the same line protocol as peer hosting; requests carry `payload.rid` and are answered
 //! with `{type="response", payload={rid, ok, error?, message?, ...}}`. A request's answer is either
@@ -46,7 +46,7 @@ fn disconnect_message_for(reason: &str) -> Option<&'static str> {
         "loggedInElsewhere" => "Your account signed in from another connection.",
         "serverShutdown" => "The server shut down.",
         "serverShuttingDown" => "The server is shutting down and isn't accepting connections.",
-        "versionMismatch" => "This server needs a different version of CardTable.",
+        "versionMismatch" => "This server needs a different version of GameTable.",
         _ => return None,
     })
 }

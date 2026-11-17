@@ -9,20 +9,21 @@ pub const RELEASE_REPOSITORY: &str = "jvthompson/gametable";
 
 /// The release download for this platform (the original only published the Windows one). All
 /// are zips; the updater extracts them with the `zip` crate, keeping Unix permissions.
+/// (Releases up to `v0.2.0+39` used the CardTable names: `cardtable-windows.zip` etc.)
 pub const RELEASE_ASSET_NAME: &str = if cfg!(target_os = "windows") {
-    "cardtable-windows.zip"
+    "gametable-windows.zip"
 } else if cfg!(target_os = "macos") {
-    "cardtable-macos.zip"
+    "gametable-macos.zip"
 } else {
-    "cardtable-linux-x86_64.zip"
+    "gametable-linux-x86_64.zip"
 };
 
-/// The executable inside an install: `CardTable.exe` beside its DLLs on Windows, `CardTable`
-/// inside `CardTable.app/Contents/MacOS/` on macOS, `cardtable` on Linux.
+/// The executable inside an install: `GameTable.exe` beside its DLLs on Windows, `GameTable`
+/// inside `GameTable.app/Contents/MacOS/` on macOS, `gametable` on Linux.
 pub const EXECUTABLE_NAME: &str = if cfg!(target_os = "windows") {
-    "CardTable.exe"
+    "GameTable.exe"
 } else if cfg!(target_os = "macos") {
-    "CardTable"
+    "GameTable"
 } else {
-    "cardtable"
+    "gametable"
 };

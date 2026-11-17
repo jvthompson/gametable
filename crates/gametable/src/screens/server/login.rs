@@ -1,4 +1,4 @@
-//! Sign in to, or create an account on, a CardTable server. With "Remember me", the saved
+//! Sign in to, or create an account on, a GameTable server. With "Remember me", the saved
 //! sign-in (a token) is tried first so the player goes straight to the lobby. Port of
 //! `src/ui/screens/server/login.lua`.
 

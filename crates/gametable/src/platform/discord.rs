@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use crate::native_libraries;
 
-/// The CardTable application on Discord.
+/// The GameTable application on Discord.
 const APPLICATION_ID: u64 = 1551391208423555102;
 const PUMP_INTERVAL: f32 = 0.1;
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -894,7 +894,7 @@ pub fn send_game_invite(friend_user_id: u64) -> Outcome {
             (state.sdk.client_send_activity_invite)(
                 client,
                 friend_user_id,
-                DiscordString::borrowed("Join my CardTable game!"),
+                DiscordString::borrowed("Join my GameTable game!"),
                 on_result,
                 ignore_user_data,
                 user_data,

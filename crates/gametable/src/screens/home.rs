@@ -28,7 +28,8 @@ use gametable_core::util::trim_lua_whitespace;
 
 /// Below this content width there isn't room for both columns side by side.
 const WIDE_BREAKPOINT: f32 = 760.0;
-const LOGO_MAX_WIDTH: f32 = 220.0;
+/// The logo's width when the window is too short for more (the original's fixed size).
+const LOGO_MINIMUM_WIDTH: f32 = 220.0;
 const RECONNECT_BANNER_HEIGHT: f32 = 76.0;
 /// The left column sets the wide layout's height: it's taller than the join card with or
 /// without a recent server.
@@ -79,7 +80,7 @@ fn update_phase_label(progress: &UpdateProgress) -> String {
         UpdateProgress::Extracting => "Extracting update...".to_string(),
         UpdateProgress::Verifying => "Verifying update...".to_string(),
         UpdateProgress::LaunchingInstaller | UpdateProgress::ReadyToQuit | UpdateProgress::Failed(_) => {
-            "Installing \u{2014} CardTable will restart shortly...".to_string()
+            "Installing \u{2014} GameTable will restart shortly...".to_string()
         }
     }
 }
@@ -404,7 +405,7 @@ impl Home {
                     }
                 }
                 let spec = DialogSpec {
-                    title: Some("Updating CardTable"),
+                    title: Some("Updating GameTable"),
                     width: 420.0,
                     dismissible: false,
                     ..DialogSpec::default()
@@ -459,14 +460,6 @@ impl Screen for Home {
         let banner_width = if wide { left_width + gap + right_width } else { narrow_column_width };
         let recent = profile::recent_servers(frame.settings);
 
-        // The logo, centred above everything else.
-        let logo_name = if frame.theme.is_dark { "logo.png" } else { "logo_light.png" };
-        let logo_path = frame.assets_folder.join(logo_name).to_string_lossy().into_owned();
-        let logo = frame.images.get(&logo_path);
-        let logo_width = LOGO_MAX_WIDTH.min(banner_width);
-        let logo_height = logo.map_or(0.0, |logo| logo_width * logo.height / logo.width);
-        let logo_block_height = if logo.is_some() { logo_height + 24.0 } else { 0.0 };
-
         // Measure the column first so it can be centred vertically.
         if self.update_available.is_none() {
             self.update_available = updater::available_release();
@@ -484,6 +477,20 @@ impl Screen for Home {
         } else {
             (64.0 + 10.0 + 20.0) + 20.0 + 40.0 + 16.0 + join_fields_height(!recent.is_empty()) + 24.0 + 40.0 + 40.0
         };
+
+        // The logo, centred above everything else: as wide as the content below it when the
+        // window is tall enough (16 above, 24 below it, 16 at the bottom), never under
+        // LOGO_MINIMUM_WIDTH.
+        let logo_name = if frame.theme.is_dark { "logo.png" } else { "logo_light.png" };
+        let logo_path = frame.assets_folder.join(logo_name).to_string_lossy().into_owned();
+        let logo = frame.images.get(&logo_path);
+        let (logo_width, logo_height) = logo.map_or((0.0, 0.0), |logo| {
+            let aspect = logo.width / logo.height;
+            let spare_height = height - 16.0 - 24.0 - 16.0 - banners_height - content_height;
+            let width = banner_width.min(spare_height * aspect).max(LOGO_MINIMUM_WIDTH.min(banner_width)).floor();
+            (width, width / aspect)
+        });
+        let logo_block_height = if logo.is_some() { logo_height + 24.0 } else { 0.0 };
         let total = logo_block_height + banners_height + content_height;
         let banner_x = (x + (width - banner_width) / 2.0).floor();
         let mut row_y = (y + (16.0_f32).max((height - total) / 2.0)).floor();

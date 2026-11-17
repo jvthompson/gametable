@@ -100,7 +100,7 @@ impl HostServer {
             reclaimable_ids: None,
             collect_events: false,
             events: Vec::new(),
-            upnp_request: (!skip_upnp).then(|| MappingRequest::start(port, "Cardtable")),
+            upnp_request: (!skip_upnp).then(|| MappingRequest::start(port, "GameTable")),
             upnp_mapping: None,
             upnp_mapped: if skip_upnp { Some(false) } else { None },
             public_ip: None,

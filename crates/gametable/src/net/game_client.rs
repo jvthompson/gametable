@@ -1,6 +1,6 @@
 //! Joining a peer host. Port of `src/net/game_client.lua` (`game_client.dart`).
 //!
-//! If the address turns out to be a CardTable server (it answers `hello` with `serverInfo`), the
+//! If the address turns out to be a GameTable server (it answers `hello` with `serverInfo`), the
 //! status becomes [`ClientStatus::Server`] and the connection is handed to the lobby client.
 
 use base64::Engine as _;
@@ -17,7 +17,7 @@ pub enum ClientStatus {
     Connected,
     Failed,
     Disconnected,
-    /// The address is a CardTable server, not a peer host.
+    /// The address is a GameTable server, not a peer host.
     Server,
 }
 

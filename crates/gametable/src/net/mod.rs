@@ -1,5 +1,5 @@
 //! Networking: the wire connection, peer hosting and joining, this machine's addresses and UPnP,
-//! and the CardTable server client with its game downloads and admin uploads. Ports of
+//! and the GameTable server client with its game downloads and admin uploads. Ports of
 //! `src/net/*.lua`, on `std` sockets with helper threads where the original used LÖVE threads.
 
 pub mod admin_files;

@@ -1,4 +1,4 @@
-//! The GameTable client: a tabletop card game sandbox. Port of the CardTable LÖVE app.
+//! The GameTable client: a virtual tabletop for card and board games. Port of the CardTable LÖVE app.
 
 pub mod app;
 pub mod data;

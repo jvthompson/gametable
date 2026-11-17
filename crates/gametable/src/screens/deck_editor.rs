@@ -241,7 +241,7 @@ impl DeckBuilder {
 
 pub struct DeckEditor {
     builder: DeckBuilder,
-    /// For a CardTable server's decks (Phase 10); the local library otherwise.
+    /// For a GameTable server's decks (Phase 10); the local library otherwise.
     store: Option<Box<dyn DeckStore>>,
     filters: CardFilterState,
     rulebook: RulebookViewer,
@@ -251,7 +251,7 @@ pub struct DeckEditor {
 }
 
 impl DeckEditor {
-    /// `E.new(game, opts)`: `store` and `owned_quantities` are for a CardTable server.
+    /// `E.new(game, opts)`: `store` and `owned_quantities` are for a GameTable server.
     pub fn new(
         game: GameDefinition,
         store: Option<Box<dyn DeckStore>>,

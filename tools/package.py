@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Packages CardTable for this platform, and optionally starts a release. Port of the original's
+"""Packages GameTable for this platform, and optionally starts a release. Port of the original's
 tools/build.ps1, for Windows, macOS and Linux.
 
-  python tools/package.py              build dist/cardtable-<platform>.zip for this platform
+  python tools/package.py              build dist/gametable-<platform>.zip for this platform
   python tools/package.py --skip-build package the existing release binary
   python tools/package.py --universal  (macOS) a universal arm64 + x86_64 binary
   python tools/package.py --publish    bump BUILD in version.rs, commit, tag v<name>+<build> and
@@ -10,10 +10,10 @@ tools/build.ps1, for Windows, macOS and Linux.
                                        publishes the release (.github/workflows/ci.yml)
 
 Package layouts (what the in-app updater expects, see crates/gametable/src/platform/updater.rs):
-  Windows  cardtable-windows.zip       CardTable.exe, assets/, the DLLs, LICENSE at the zip's root
+  Windows  gametable-windows.zip       GameTable.exe, assets/, the DLLs, LICENSE at the zip's root
                                        (as the LOVE build did, so its updater can move to this one)
-  Linux    cardtable-linux-x86_64.zip  cardtable, assets/, libpdfium.so, cardtable.desktop, LICENSE
-  macOS    cardtable-macos.zip         CardTable.app (ad-hoc signed; libraries in Contents/Frameworks)
+  Linux    gametable-linux-x86_64.zip  gametable, assets/, libpdfium.so, gametable.desktop, LICENSE
+  macOS    gametable-macos.zip         GameTable.app (ad-hoc signed; libraries in Contents/Frameworks)
 The app's version comes from crates/gametable/src/version.rs; Windows gets its icon and version
 resource from crates/gametable/build.rs.
 """
@@ -35,7 +35,7 @@ DIST = ROOT / "dist"
 TARGET = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 # Assets the app reads at runtime (shaders and the standard deck are compiled into the binary).
 ASSET_EXCLUDES = {"games", "shaders", "icon.ico"}
-BUNDLE_IDENTIFIER = "io.github.jvthompson.cardtable"
+BUNDLE_IDENTIFIER = "io.github.jvthompson.gametable"
 
 
 def step(message):
@@ -126,41 +126,41 @@ def zip_folder_contents(folder, zip_path):
 
 
 def package_windows(binary, name, build):
-    folder = DIST / "CardTable"
+    folder = DIST / "GameTable"
     folder.mkdir(parents=True)
-    shutil.copy2(binary, folder / "CardTable.exe")
+    shutil.copy2(binary, folder / "GameTable.exe")
     (folder / "assets").mkdir()
     copy_assets(folder / "assets")
     copy_runtime_libraries("windows", folder)
     shutil.copy2(ROOT / "LICENSE", folder / "LICENSE")
-    zip_path = DIST / "cardtable-windows.zip"
+    zip_path = DIST / "gametable-windows.zip"
     zip_folder_contents(folder, zip_path)
     return zip_path
 
 
 DESKTOP_ENTRY = """[Desktop Entry]
 Type=Application
-Name=CardTable
-Comment=A tabletop sandbox for trading card games
-Exec=cardtable
-Icon=cardtable
+Name=GameTable
+Comment=A virtual tabletop for card and board games
+Exec=gametable
+Icon=gametable
 Categories=Game;CardGame;
 Terminal=false
 """
 
 
 def package_linux(binary, name, build):
-    folder = DIST / "cardtable"
+    folder = DIST / "gametable"
     folder.mkdir(parents=True)
-    shutil.copy2(binary, folder / "cardtable")
-    make_executable(folder / "cardtable")
+    shutil.copy2(binary, folder / "gametable")
+    make_executable(folder / "gametable")
     (folder / "assets").mkdir()
     copy_assets(folder / "assets")
     copy_runtime_libraries("linux", folder)
-    shutil.copy2(ROOT / "assets" / "icon.png", folder / "cardtable.png")
-    (folder / "cardtable.desktop").write_text(DESKTOP_ENTRY, encoding="utf-8")
+    shutil.copy2(ROOT / "assets" / "icon.png", folder / "gametable.png")
+    (folder / "gametable.desktop").write_text(DESKTOP_ENTRY, encoding="utf-8")
     shutil.copy2(ROOT / "LICENSE", folder / "LICENSE")
-    zip_path = DIST / "cardtable-linux-x86_64.zip"
+    zip_path = DIST / "gametable-linux-x86_64.zip"
     zip_folder_contents(folder, zip_path)
     return zip_path
 
@@ -169,16 +169,16 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>CardTable</string>
-  <key>CFBundleDisplayName</key><string>CardTable</string>
+  <key>CFBundleName</key><string>GameTable</string>
+  <key>CFBundleDisplayName</key><string>GameTable</string>
   <key>CFBundleIdentifier</key><string>{identifier}</string>
-  <key>CFBundleExecutable</key><string>CardTable</string>
-  <key>CFBundleIconFile</key><string>CardTable</string>
+  <key>CFBundleExecutable</key><string>GameTable</string>
+  <key>CFBundleIconFile</key><string>GameTable</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>{name}</string>
   <key>CFBundleVersion</key><string>{build}</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.card-games</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.board-games</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
@@ -186,8 +186,8 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def make_icns(png, destination):
-    """CardTable.icns from icon.png with the system's sips and iconutil."""
-    iconset = DIST / "CardTable.iconset"
+    """GameTable.icns from icon.png with the system's sips and iconutil."""
+    iconset = DIST / "GameTable.iconset"
     iconset.mkdir()
     for size in (16, 32, 128, 256, 512):
         for scale in (1, 2):
@@ -200,23 +200,23 @@ def make_icns(png, destination):
 
 
 def package_macos(binary, name, build):
-    bundle = DIST / "CardTable.app"
+    bundle = DIST / "GameTable.app"
     contents = bundle / "Contents"
     (contents / "MacOS").mkdir(parents=True)
     (contents / "Resources" / "assets").mkdir(parents=True)
-    shutil.copy2(binary, contents / "MacOS" / "CardTable")
-    make_executable(contents / "MacOS" / "CardTable")
+    shutil.copy2(binary, contents / "MacOS" / "GameTable")
+    make_executable(contents / "MacOS" / "GameTable")
     copy_assets(contents / "Resources" / "assets")
     copy_runtime_libraries("macos", contents / "Frameworks")
     shutil.copy2(ROOT / "LICENSE", contents / "Resources" / "LICENSE")
     (contents / "Info.plist").write_text(INFO_PLIST.format(identifier=BUNDLE_IDENTIFIER, name=name, build=build),
                                          encoding="utf-8")
-    make_icns(ROOT / "assets" / "icon.png", contents / "Resources" / "CardTable.icns")
+    make_icns(ROOT / "assets" / "icon.png", contents / "Resources" / "GameTable.icns")
     # Ad-hoc signature: Apple silicon refuses unsigned code. Not notarized, so the first launch
     # of a downloaded copy needs right-click > Open.
     run(["codesign", "--force", "--deep", "--sign", "-", bundle])
-    zip_path = DIST / "cardtable-macos.zip"
-    # The zip holds CardTable.app itself; ditto keeps the bundle's attributes intact.
+    zip_path = DIST / "gametable-macos.zip"
+    # The zip holds GameTable.app itself; ditto keeps the bundle's attributes intact.
     run(["ditto", "-c", "-k", "--keepParent", bundle, zip_path])
     return zip_path
 
@@ -253,7 +253,7 @@ def main():
         DIST = arguments.dist.resolve()
     platform = platform_name()
     name, build, _ = read_version()
-    step(f"Packaging CardTable {name}+{build} for {platform}")
+    step(f"Packaging GameTable {name}+{build} for {platform}")
     if arguments.skip_build:
         if platform == "macos" and arguments.universal:
             binary = TARGET / "universal-gametable"

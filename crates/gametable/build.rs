@@ -40,11 +40,11 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "FileDescription", "CardTable"
+      VALUE "FileDescription", "GameTable"
       VALUE "FileVersion", "{tag}"
-      VALUE "InternalName", "CardTable.exe"
-      VALUE "OriginalFilename", "CardTable.exe"
-      VALUE "ProductName", "CardTable"
+      VALUE "InternalName", "GameTable.exe"
+      VALUE "OriginalFilename", "GameTable.exe"
+      VALUE "ProductName", "GameTable"
       VALUE "ProductVersion", "{tag}"
     END
   END
@@ -57,8 +57,8 @@ END
         icon = icon.to_string_lossy().trim_start_matches(r"\\?\").replace('\\', "\\\\"),
     );
     let out_folder = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let script_path = out_folder.join("cardtable.rc");
-    let resource_path = out_folder.join("cardtable.res");
+    let script_path = out_folder.join("gametable.rc");
+    let resource_path = out_folder.join("gametable.res");
     std::fs::write(&script_path, script).unwrap();
     let status = std::process::Command::new(&resource_compiler)
         .arg("/nologo")

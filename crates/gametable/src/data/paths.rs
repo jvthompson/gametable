@@ -1,18 +1,19 @@
 //! Well-known folders. Port of `src/data/paths.lua`.
 //!
-//! The save folder is the original's: SDL's per-user preference folder for the app identity
-//! (`%APPDATA%\cardtable` on Windows, as a fused LÖVE build used), so both apps share
-//! `settings.json`, the avatar and the server caches.
+//! The save folder is SDL's per-user preference folder for the app identity (`%APPDATA%\gametable`
+//! on Windows). The files in it keep the original's formats; on first launch the original
+//! CardTable app's folder (or the older CardFlux one) is copied in.
 
 use std::path::{Path, PathBuf};
 
 use super::file_system::copy_tree;
 use super::settings::{Settings, keys};
 
-/// The original's LÖVE identity.
-pub const DEFAULT_IDENTITY: &str = "cardtable";
-/// The identity before the app was renamed; its save folder is copied over once.
-pub const LEGACY_IDENTITY: &str = "cardflux";
+/// The app's identity: its save folder's name.
+pub const DEFAULT_IDENTITY: &str = "gametable";
+/// Identities from before the app was renamed, newest first. The first one that has a save folder
+/// is copied over once: `cardtable` (the LÖVE CardTable app), then `cardflux` (its earlier name).
+pub const LEGACY_IDENTITIES: [&str; 2] = ["cardtable", "cardflux"];
 
 /// The app's own folder and its per-user save folder.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,16 +69,29 @@ impl AppPaths {
         self.save_folder().join("avatar")
     }
 
-    /// One-time carry-over from a previous identity: copies its save folder into this one unless
-    /// this one already has a `settings.json`. Never deletes the old folder.
-    pub fn migrate_legacy_identity(&self, old_identity: &str) {
+    /// One-time carry-over from a previous identity: copies the save folder of the first old
+    /// identity that has one into this one, unless this one already has a `settings.json`. The
+    /// saved avatar path is pointed at the copied avatar. Never deletes the old folder.
+    pub fn migrate_legacy_identity(&self, old_identities: &[&str]) {
         let new_folder = self.save_folder();
         if new_folder.join(super::settings::SETTINGS_FILE_NAME).exists() {
             return;
         }
-        let Some(old_folder) = new_folder.parent().map(|parent| parent.join(old_identity)) else { return };
-        if old_folder.exists() {
-            let _ = copy_tree(&old_folder, new_folder);
+        let Some(parent) = new_folder.parent() else { return };
+        let Some(old_folder) = old_identities.iter().map(|identity| parent.join(identity)).find(|folder| folder.exists())
+        else {
+            return;
+        };
+        if copy_tree(&old_folder, new_folder).is_err() {
+            return;
+        }
+        let mut settings = Settings::load_from_folder(new_folder);
+        let old_prefix = old_folder.to_string_lossy().to_string();
+        if let Some(avatar) = settings.text(keys::PLAYER_AVATAR_PATH)
+            && let Some(rest) = avatar.strip_prefix(&old_prefix)
+        {
+            let moved = format!("{}{rest}", new_folder.to_string_lossy());
+            settings.set(keys::PLAYER_AVATAR_PATH, moved);
         }
     }
 }
@@ -164,18 +178,44 @@ mod tests {
     #[test]
     fn legacy_identity_is_copied_once() {
         let (paths, root) = test_paths();
-        let legacy = root.join("saves").join(LEGACY_IDENTITY);
+        let legacy = root.join("saves").join("cardflux");
         std::fs::create_dir_all(legacy.join("avatar")).unwrap();
         std::fs::write(legacy.join("settings.json"), "{\"a\": 1}").unwrap();
         std::fs::write(legacy.join("avatar").join("avatar.png"), "png").unwrap();
-        paths.migrate_legacy_identity(LEGACY_IDENTITY);
-        assert_eq!(std::fs::read_to_string(paths.save_folder.join("settings.json")).unwrap(), "{\"a\": 1}");
+        paths.migrate_legacy_identity(&LEGACY_IDENTITIES);
+        let settings = Settings::load_from_folder(&paths.save_folder);
+        assert_eq!(settings.number("a"), Some(1.0));
         assert!(paths.save_folder.join("avatar").join("avatar.png").exists());
         // Once the new folder has settings, nothing is copied again.
         std::fs::write(legacy.join("settings.json"), "{\"a\": 2}").unwrap();
-        paths.migrate_legacy_identity(LEGACY_IDENTITY);
-        assert_eq!(std::fs::read_to_string(paths.save_folder.join("settings.json")).unwrap(), "{\"a\": 1}");
+        paths.migrate_legacy_identity(&LEGACY_IDENTITIES);
+        assert_eq!(Settings::load_from_folder(&paths.save_folder).number("a"), Some(1.0));
         assert!(legacy.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_newest_legacy_identity_wins_and_the_avatar_path_moves() {
+        let (paths, root) = test_paths();
+        let cardtable = root.join("saves").join("cardtable");
+        let cardflux = root.join("saves").join("cardflux");
+        std::fs::create_dir_all(cardtable.join("avatar")).unwrap();
+        std::fs::create_dir_all(&cardflux).unwrap();
+        std::fs::write(cardtable.join("avatar").join("avatar.png"), "png").unwrap();
+        let old_avatar = cardtable.join("avatar").join("avatar.png");
+        let mut old_settings = Settings::load_from_folder(&cardtable);
+        old_settings.set(keys::PLAYER_AVATAR_PATH, old_avatar.to_string_lossy().as_ref());
+        old_settings.set("from", "cardtable");
+        std::fs::write(cardflux.join("settings.json"), "{\"from\": \"cardflux\"}").unwrap();
+
+        paths.migrate_legacy_identity(&LEGACY_IDENTITIES);
+        let settings = Settings::load_from_folder(&paths.save_folder);
+        assert_eq!(settings.text("from"), Some("cardtable"));
+        let new_avatar = paths.save_folder.join("avatar").join("avatar.png");
+        assert_eq!(settings.text(keys::PLAYER_AVATAR_PATH), Some(new_avatar.to_string_lossy().as_ref()));
+        assert!(new_avatar.exists());
+        // The old app's own settings are untouched.
+        assert_eq!(Settings::load_from_folder(&cardtable).text(keys::PLAYER_AVATAR_PATH), Some(old_avatar.to_string_lossy().as_ref()));
         std::fs::remove_dir_all(root).unwrap();
     }
 

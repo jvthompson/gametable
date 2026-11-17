@@ -248,7 +248,8 @@ pub struct ServerSettings {
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
-            server_name: "Cardflux Server".to_string(),
+            // The Go server's default was "Cardflux Server"; existing databases keep their name.
+            server_name: "GameTable Server".to_string(),
             motd: String::new(),
             registration_open: true,
             mode: "free".to_string(),

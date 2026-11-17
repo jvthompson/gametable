@@ -1,4 +1,4 @@
-//! The CardTable server screens: sign-in, the lobby, a room before it starts, the collection,
+//! The GameTable server screens: sign-in, the lobby, a room before it starts, the collection,
 //! the card shop, trading and administration. Shared helpers are ports of
 //! `src/ui/screens/server/common.lua`: game downloads with a progress dialog, choosing a game,
 //! entering rooms and opening the table.

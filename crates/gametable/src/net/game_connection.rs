@@ -1,5 +1,5 @@
 //! What the joined player's game screen talks to: a peer host connection ([`GameClient`]) or a
-//! CardTable server's game channel ([`ServerGameChannel`](super::server_client::ServerGameChannel)),
+//! GameTable server's game channel ([`ServerGameChannel`](super::server_client::ServerGameChannel)),
 //! the way the original's ClientGame took either object.
 
 use gametable_core::json::JsonValue;

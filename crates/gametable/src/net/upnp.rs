@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(resolve_url("http://a:1/x/y.xml", "/ctl"), "http://a:1/ctl");
         assert_eq!(resolve_url("http://a:1", "ctl"), "http://a:1/ctl");
         assert!(
-            add_fields(51234, "192.168.1.5", "Cardtable")
+            add_fields(51234, "192.168.1.5", "GameTable")
                 .contains("<NewInternalClient>192.168.1.5</NewInternalClient>")
         );
     }
