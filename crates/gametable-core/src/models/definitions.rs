@@ -752,16 +752,46 @@ impl Scenario {
 // PlaymatDefinition
 // ---------------------------------------------------------------------------
 
-/// A playmat image (relative to `_playmats/`) and its scale.
+/// A zone drawn on a playmat instead of in the player area or a sidebar (a GameTable addition;
+/// the original CardTable ignores it). `x` and `y` are the zone's centre as fractions (0..1) of
+/// the mat, seen the right way up by the mat's owner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaymatZonePlacement {
+    pub zone_id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl PlaymatZonePlacement {
+    pub fn new(zone_id: impl Into<String>, x: f64, y: f64) -> Self {
+        Self { zone_id: zone_id.into(), x, y }
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
+        let fields = FieldReader::new(value, "PlaymatZonePlacement")?;
+        Ok(Self {
+            zone_id: fields.required_string("zoneId")?,
+            x: fields.required_number("x")?,
+            y: fields.required_number("y")?,
+        })
+    }
+
+    pub fn to_json(&self) -> JsonValue {
+        SparseObjectWriter::new().field("zoneId", &self.zone_id).field("x", self.x).field("y", self.y).finish_value()
+    }
+}
+
+/// A playmat image (relative to `_playmats/`), its scale, and the zones placed on it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaymatDefinition {
     pub image_path: String,
     pub scale: f64,
+    pub zone_placements: Vec<PlaymatZonePlacement>,
 }
 
 impl PlaymatDefinition {
     pub fn new(image_path: impl Into<String>) -> Self {
-        Self { image_path: image_path.into(), scale: 1.0 }
+        Self { image_path: image_path.into(), scale: 1.0, zone_placements: Vec::new() }
     }
 
     pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
@@ -769,6 +799,7 @@ impl PlaymatDefinition {
         Ok(Self {
             image_path: fields.required_string("imagePath")?,
             scale: fields.optional_number("scale")?.unwrap_or(1.0),
+            zone_placements: fields.list_of("zonePlacements", PlaymatZonePlacement::from_json)?,
         })
     }
 
@@ -776,7 +807,21 @@ impl PlaymatDefinition {
         SparseObjectWriter::new()
             .field("imagePath", &self.image_path)
             .unless_default("scale", self.scale, 1.0)
+            .non_empty_list("zonePlacements", &self.zone_placements, PlaymatZonePlacement::to_json)
             .finish_value()
+    }
+
+    pub fn placement_for(&self, zone_id: &str) -> Option<&PlaymatZonePlacement> {
+        self.zone_placements.iter().find(|placement| placement.zone_id == zone_id)
+    }
+}
+
+/// Whether a zone may sit on this kind of playmat: individual mats hold each player's own
+/// zones, the shared mat holds shared zones (scenario zones are always shared).
+pub fn zone_fits_playmat_type(zone: &ZoneDefinition, playmat_type: PlaymatType) -> bool {
+    match playmat_type {
+        PlaymatType::Individual => !zone.shared,
+        PlaymatType::Shared => zone.shared,
     }
 }
 

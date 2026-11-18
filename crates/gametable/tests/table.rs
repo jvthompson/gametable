@@ -200,3 +200,33 @@ fn box_selection_moves_piles_together() {
     // Escape clears the selection rather than opening the menu.
     key(&mut harness, &mut table, "escape");
 }
+
+#[test]
+fn the_table_shows_through_the_hand_area_but_cannot_be_touched_there() {
+    let mut harness = UiHarness::new();
+    let mut table = practice_table();
+    frame(&mut harness, &mut table);
+    frame(&mut harness, &mut table);
+    hover(&mut harness, &mut table, DECK);
+    key(&mut harness, &mut table, "1");
+    drag(&mut harness, &mut table, HAND_CARD, TABLE_SPOT);
+    let card = cards_in(&table, CardZone::Table)[0].clone();
+
+    // Put the card on the bottom edge of the table area, so half of it is behind the local hand
+    // area. At 1280×720 and zoom 1 the table area is x 110..1280, y 140..580 (between two
+    // 140-tall hand areas) with the world's centre (1280, 720) at its centre (695, 360); world
+    // y 940 (0.6528 of 1440) is screen y 580.
+    table.backend_mut().session_mut().move_card(&card.instance_id, 0.5, 940.0 / 1440.0, "seat1").unwrap();
+    frame(&mut harness, &mut table);
+    let face_up = cards_in(&table, CardZone::Table)[0].face_up;
+
+    // Behind the hand area: F does nothing.
+    hover(&mut harness, &mut table, (695.0, 600.0));
+    key(&mut harness, &mut table, "f");
+    assert_eq!(cards_in(&table, CardZone::Table)[0].face_up, face_up, "the hand area blocks the table");
+
+    // The half above it, on the table, still flips.
+    hover(&mut harness, &mut table, (695.0, 560.0));
+    key(&mut harness, &mut table, "f");
+    assert_eq!(cards_in(&table, CardZone::Table)[0].face_up, !face_up, "the table part still works");
+}

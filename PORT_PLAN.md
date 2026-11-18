@@ -130,7 +130,8 @@ Source paths are relative to `F:\Projects\cardflux-love`. A phase is done when i
       Rust and diffs them — all 53 files (11 games, built-in decks, saves, library decks) byte-identical
 
 ### Phase 2 — `gametable-server`
-- [ ] `proto` (framing, heartbeat, send queue limits)
+- [x] `proto` (framing, heartbeat, send queue limits) — `connection.rs` (one JSON message per line, bounded send
+      queue, heartbeat pings)
 - [x] `store` (schema, settings, users, sessions, decks, collections, token ledger, chat) — same schema as the Go
       server; 6 unit tests. Checked both ways: the Rust server reads a Go-written `cardflux.db` (logins, admin flag,
       tokens, decks, collections, settings, chat) and the Go server reads a Rust-written one; it also opens a copy of
@@ -359,7 +360,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
     LCG's scenario load (7 zones, 11 widgets), token bag draw-by-click and return-by-click, and the token picker.
   - Deck Editor and Game Definition Editor controls (add/remove clicks, Ctrl+R), window chrome (hit-test drag,
     double-click maximize, click-through, F6) checked against the code. The unused `NotPortedYet` stand-in was removed.
-  - Still only testable by hand: Discord OAuth/friends/invites, running on a Mac, the release packaging jobs.
+  - Still only testable by hand: Discord OAuth/friends/invites and running on a Mac (the rest was confirmed by the
+    user on 2026-11-17, see the session log).
 
 ### Beyond the port — new GameTable features
 - [x] Card View **Suggest Title** (`data/title_suggestion/`, `screens/gamedef/title_suggestion_dialogs.rs`): a
@@ -370,8 +372,40 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   card is filled in directly; many run in the background (Claude 4 at a time) and end in a review list (old → new,
   editable, per-row checkbox). Tests: unit tests per engine, `tests/title_suggestion.rs` through real frames.
   - Local OCR on samples: Middle Earth and Lorcana titles read correctly (Lorcana only the first line), stylised
-    .hack and Spellfire titles mostly misread — Claude is the accurate option. Not done: a per-game "title area"
-    box for OCR; a real Claude call (needs the user's key).
+    .hack and Spellfire titles mostly misread — Claude is the accurate option. A real Claude call was tested by
+    the user.
+  - **Title area** (`screens/gamedef/title_area_picker.rs`). It is chosen per run rather than per game, because
+    some games move the title between card layouts.
+    - With "Image (local)" or "Image (Claude)" picked, the dialog shows the first card in the chosen scope: the
+      card open in the form, the first selected, the first untitled, or the first card. Dragging over the
+      picture boxes the title; Clear removes the box, and a plain click keeps it.
+    - The box is kept as fractions of the image (`TitleArea`) and read in the same place on every card in the
+      run.
+    - Local OCR crops to the box. Crops under 1000 px are enlarged up to 4× first, so small subtitles read. It
+      then joins every wordy line inside the box, top to bottom, with each line in capitals title-cased. On
+      Lorcana, a box over the name reads "Ariel On Human Legs" and "Ursula Power Hungry".
+    - Claude gets only the cropped picture, with a prompt saying it is the title area.
+    - Without a box, both engines read the whole card as before.
+    - `ImageCache::put_ready_texture` lets UI tests stand in a texture without a GPU.
+  - **Title style** (`data/title_suggestion/title_style.rs`).
+    - **Joining a name and subtitle:** with an image engine picked, "Name and subtitle joined with" offers
+      Space, Comma, Dash or Colon.
+      - It is learned from the game's real titles (placeholders skipped). Only titles that contain a separator
+        are counted, since whole sets are often titled from IDs. The winner needs at least 3 uses and twice the
+        runner-up.
+      - Your choice is remembered per game (`suggest_title_separator_<game id>`) once you run with it.
+      - Local OCR joins the lines of a title area with it: "Ariel, On Human Legs" on the real card.
+      - Claude is told the separator, with an example.
+      - The user's Lorcana library is mixed: The First Chapter uses commas, Hyperia City uses " - " (207 titles)
+        and sets 2–13 use none. So it learns Dash there.
+    - **Capitals:** `title_case_if_all_caps` turns all-capital titles into title case ("THE BIG BANG" → "The
+      Big Bang"). Small words like "of" stay lower case except at the start of a title or subtitle. Mixed-case
+      titles are kept, so "The BIG Bang" stays.
+      - It is used for every OCR line, and on Claude's answer as a backstop.
+      - Claude's prompt states the same rule and gets up to five of the game's titles as style examples, those
+        with the separator first.
+    - Tests: `TitleArea` maths, line joining, the Claude prompt, and a dialog harness test that draws, keeps and
+      clears a box. The ignored `real_card_title` takes `GAMETABLE_OCR_AREA=x,y,width,height`.
 - [x] **UI scale and Text size sliders** (Settings → Display). UI scale is a slider from 50% to 200% in 5% steps
   (the original's dropdown had fixed choices), applied when the slider is released. Text size (`text_scale`,
   75%–150%) enlarges interface text only: `FontLibrary::set_text_scale` multiplies the size of fonts whose
@@ -385,6 +419,49 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   (`deck_editor_card_zoom`, `card_view_card_zoom`), saved when the slider is released. `card_pool_grid` takes the
   zoom and hands each tile its card size, card scale and name position; the other grids (scenario, collection,
   trade, multi-select preview) pass 1.
+- [x] **Zones on playmats** (`screens/gamedef/playmat_zone_placement.rs`, `table/playmat_zones.rs`). In the
+  Playmats tab, a "Zones on This Mat" row of chips places a zone in the middle of the selected mat. In the table
+  preview it can then be dragged around, dragged off the mat, or taken off with its × button. Placed zones are
+  drawn as a card back (scenario zones use the scenario back) or as their counter or token bag, with the name as
+  a small label above. The label only appears in the editor; at the table the name is the hover tooltip.
+  - Each playmat stores its own placements: `PlaymatDefinition.zone_placements`, JSON `"zonePlacements":
+    [{"zoneId","x","y"}]`. `x`/`y` are the zone's centre as fractions of the mat, seen the right way up. The key
+    is written only when the list isn't empty; the original CardTable ignores it (and drops it if it saves the
+    file).
+  - Ownership rule (`zone_fits_playmat_type`): individual mats take player-owned zones, and each player's mat
+    shows that player's own copy. The shared mat takes shared and scenario zones; a scenario zone appears once
+    its scenario is loaded. Placements that no longer fit (the type was switched, or the zone was deleted) are
+    shown dimmed with a warning in the editor and ignored at the table.
+  - At the table, a placed zone moves from its hand-band or sidebar slot onto the mat and is drawn at the
+    table's zoom. It falls back to the slot when the mat is turned off (F12) or a mat without it is chosen. An
+    opponent's mat is turned 180° and its zones with it; their zones only show a tooltip, as in the band.
+  - Mat rects now come from one function (`TableScreen::active_playmats`). The band, the sidebars and the mats
+    all draw zones through `draw_zone_pile`.
+  - Mat zones have their own drop lists (`playmat_drop_zones`, `playmat_bag_drop_zones`). They are checked
+    after the docked zones and only over the table.
+  - Tests: model round-trip; placeable zones; `zones_on_playmat`; an editor harness test (place, drag, drag
+    off); `tests/table_playmat_zones.rs` (the discard pile on a shared mat leaves the sidebar, takes a drop,
+    and returns after F12 turns the mat off).
+  - Dev hooks: `GAMETABLE_TABLE_SETUP=playmats` turns on every seat's first mat. `GAMETABLE_GAMEDEF_TAB=
+    playmats,select` selects the first playmat.
+  - **Hand areas are see-through.** The hand area has no background, and the zone and avatar area at its end is
+    tinted only while some zones are still docked there. The table (mats included) is drawn under both hand
+    areas, but an `ItemKind::HandArea` blocker keeps it from being clicked, hovered or hotkeyed there
+    (`tests/table.rs`).
+  - **Ctrl + drag moves a zone on a playmat at the table.** Players move zones on their own individual mat; on
+    the shared mat only the host can (`can_load_scenario` on the client, `owner_id` in `HostEngine`). It works
+    for card zones, counters and token bags.
+    - Synced to everyone. New request `requestSetPlaymatZonePositions {playmatIndex, positions: [{zoneId, x,
+      y}]}` replaces one mat's positions, clamped to 0..1. They are stored as `PlayerInfo.playmatZonePositions`
+      or `TableState.sharedPlaymatZonePositions`, `[{playmatIndex, zoneId, x, y}]`, and written only when
+      non-empty, so saved games keep them.
+    - An original CardTable host or Go server ignores the new request, so there the zones stay where the
+      designer put them.
+    - Remembered on this computer per game and mat (`playmat_zone_positions_<game>_<index>` in settings) and
+      sent again when that mat is picked (F12 or the seed at start).
+    - "Reset Zone Positions" in a moved zone's context menu puts back the designer's layout.
+    - Tests: `gametable-core/tests/playmat_zone_positions.rs`, plus a Ctrl-drag test in
+      `tests/table_playmat_zones.rs`.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -681,3 +758,18 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - 2026-11-17: Tried scaling the whole UI with monitor resolution on a branch; the user found text too small at
   1080p, so the branch was deleted. Instead: a UI scale slider and a separate Text size slider (see "Beyond the
   port"), checked with screenshots at 100% and 150% text size.
+- 2026-11-17: **Zones on playmats** (see "Beyond the port"). Placed in the Playmats tab and drawn on the mat at
+  the table instead of the band or sidebar. Checked by screenshot with a scratch copy of Lorcana: the editor
+  preview, and a 2-player practice table with both mats on.
+- 2026-11-17: Hand areas made see-through (the table shows under them but can't be clicked there), and players can
+  Ctrl-drag zones on their playmats, synced, remembered per game and mat (see "Beyond the port").
+- 2026-11-17: Playmat hotkeys simplified: F11 (on/off) removed; F12 cycles off → each playmat → off
+  (`assets/CONTROLS.md` updated). A mat that was off with a remembered index starts the cycle from "off".
+- 2026-11-17: Hand checks confirmed by the user: installing from the published Windows zip and the in-app updater,
+  signing in to the live Rust server, the GUI paths (token bags, file picker, folder change), sound playback, and
+  dragging/resizing the borderless window on Linux. `proto` ticked (done long ago in `connection.rs`). Left to
+  hand-test: Discord sign-in/invites and a Mac.
+- 2026-11-17: **Title area for Suggest Title** (see "Beyond the port"). Drawn over the first card of the run and
+  used for every card. Checked by screenshot (the dialog on Lorcana) and by real local OCR on two Lorcana cards.
+- 2026-11-17: Suggest Title learns the game's name/subtitle separator (remembered per game once chosen), fixes
+  all-capital titles to title case, and gives Claude the game's style and example titles.

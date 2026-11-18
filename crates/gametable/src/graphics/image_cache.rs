@@ -200,6 +200,15 @@ impl ImageCache {
         self.ready_to_upload.push((key.to_string(), image));
     }
 
+    /// Registers a texture that is already on the GPU (or, in UI tests without a GPU, a stand-in
+    /// of the right size) under `key`, so `get` returns it at once.
+    pub fn put_ready_texture(&mut self, key: &str, texture: TextureInfo) {
+        self.invalidate(key);
+        let bytes = estimated_bytes(&texture);
+        self.used_bytes += bytes;
+        self.entries.insert(key.to_string(), Entry { state: EntryState::Ready(texture), bytes, last_used: self.frame });
+    }
+
     /// The texture under `key` if it is uploaded, without starting a load for unknown keys.
     pub fn uploaded(&mut self, key: &str) -> Option<TextureInfo> {
         let entry = self.entries.get_mut(key)?;

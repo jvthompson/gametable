@@ -5,6 +5,7 @@
 pub mod claude_vision;
 pub mod from_id;
 pub mod local_ocr;
+pub mod title_style;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +15,9 @@ use std::sync::{Arc, Mutex};
 use gametable_core::models::CardDefinition;
 
 use claude_vision::{ClaudeCardRequest, ClaudeModel, suggest_title_with_claude};
+
+use crate::graphics::image_data::RgbaImage;
+use title_style::TitleStyle;
 
 /// Where a suggestion comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,11 +72,59 @@ pub fn is_untitled(card: &CardDefinition) -> bool {
     })
 }
 
+/// Where the title is printed, drawn by the user over one card and used for every card in the
+/// run: fractions (0..1) of the card image, so cards with bigger or smaller images line up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TitleArea {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl TitleArea {
+    /// The area between two corners (in either order), clamped to the image; `None` when it is
+    /// too small to hold any text (a click rather than a drag).
+    pub fn between(corner: (f32, f32), other_corner: (f32, f32)) -> Option<TitleArea> {
+        let left = corner.0.min(other_corner.0).clamp(0.0, 1.0);
+        let right = corner.0.max(other_corner.0).clamp(0.0, 1.0);
+        let top = corner.1.min(other_corner.1).clamp(0.0, 1.0);
+        let bottom = corner.1.max(other_corner.1).clamp(0.0, 1.0);
+        let area = TitleArea { x: left, y: top, width: right - left, height: bottom - top };
+        (area.width >= 0.02 && area.height >= 0.01).then_some(area)
+    }
+
+    /// The area in an image of this size, in whole pixels: (x, y, width, height).
+    pub fn pixels_in(&self, image_width: u32, image_height: u32) -> (u32, u32, u32, u32) {
+        let to_pixels = |fraction: f32, size: u32| ((fraction * size as f32).round() as u32).min(size);
+        let (left, top) = (to_pixels(self.x, image_width), to_pixels(self.y, image_height));
+        let right = to_pixels(self.x + self.width, image_width).max(left + 1).min(image_width);
+        let bottom = to_pixels(self.y + self.height, image_height).max(top + 1).min(image_height);
+        (left, top, right - left, bottom - top)
+    }
+}
+
+/// A card image, cut down to the title area when there is one.
+pub fn load_card_image(image_path: &str, title_area: Option<TitleArea>) -> Result<RgbaImage, String> {
+    let image = RgbaImage::load(std::path::Path::new(image_path))?;
+    Ok(match title_area {
+        Some(area) => {
+            let (x, y, width, height) = area.pixels_in(image.width, image.height);
+            image.cropped(x, y, width, height)
+        }
+        None => image,
+    })
+}
+
 /// Everything an engine needs besides the card.
 #[derive(Debug, Clone)]
 pub struct SuggestionContext {
     pub game_name: String,
     pub claude: Option<ClaudeAccess>,
+    /// Only this part of each card's image is read, when set.
+    pub title_area: Option<TitleArea>,
+    /// How the game writes titles (name/subtitle separator, examples for Claude).
+    pub title_style: TitleStyle,
     /// Where the local text recognition models are (or get downloaded to).
     pub ocr_models_folder: std::path::PathBuf,
 }
@@ -98,11 +150,16 @@ pub fn suggest_title(
                         game_name: context.game_name.clone(),
                         card_id: item.card.id.clone(),
                         image_path: image_path.clone(),
+                        title_area: context.title_area,
+                        title_style: context.title_style.clone(),
                     })
                 }
-                ImageEngine::LocalOcr => {
-                    local_ocr::suggest_title_with_local_ocr(image_path, &context.ocr_models_folder)
-                }
+                ImageEngine::LocalOcr => local_ocr::suggest_title_with_local_ocr(
+                    image_path,
+                    context.title_area,
+                    context.title_style.line_separator,
+                    &context.ocr_models_folder,
+                ),
             }
         }
     }
@@ -211,8 +268,13 @@ mod tests {
                 image_path: None,
             })
             .collect();
-        let context =
-            SuggestionContext { game_name: "Test".into(), claude: None, ocr_models_folder: std::env::temp_dir() };
+        let context = SuggestionContext {
+            game_name: "Test".into(),
+            claude: None,
+            title_area: None,
+            title_style: TitleStyle::default(),
+            ocr_models_folder: std::env::temp_dir(),
+        };
         let mut job = SuggestionJob::start(cards, TitleSource::FromId, context);
         while !job.poll() {
             std::thread::yield_now();
@@ -227,10 +289,27 @@ mod tests {
     }
 
     #[test]
+    fn a_title_area_is_made_from_two_corners_and_cuts_images_in_proportion() {
+        let area = TitleArea::between((0.9, 0.15), (0.1, 0.05)).unwrap();
+        assert!((area.x - 0.1).abs() < 1e-6 && (area.y - 0.05).abs() < 1e-6);
+        assert!((area.width - 0.8).abs() < 1e-6 && (area.height - 0.1).abs() < 1e-6);
+        assert_eq!(area.pixels_in(500, 700), (50, 35, 400, 70));
+        assert_eq!(area.pixels_in(1000, 1400), (100, 70, 800, 140));
+        assert_eq!(TitleArea::between((0.5, 0.5), (0.505, 0.505)), None, "a click, not a drag");
+        let clamped = TitleArea::between((-0.2, 0.9), (0.3, 1.5)).unwrap();
+        assert_eq!(clamped.pixels_in(10, 10), (0, 9, 3, 1));
+    }
+
+    #[test]
     fn claude_without_a_key_or_image_reports_why() {
         let item = CardToSuggest { key: 1, card: CardDefinition::new("a", "a"), image_path: Some("a.png".into()) };
-        let context =
-            SuggestionContext { game_name: "Test".into(), claude: None, ocr_models_folder: std::env::temp_dir() };
+        let context = SuggestionContext {
+            game_name: "Test".into(),
+            claude: None,
+            title_area: None,
+            title_style: TitleStyle::default(),
+            ocr_models_folder: std::env::temp_dir(),
+        };
         assert!(suggest_title(&item, TitleSource::FromImage(ImageEngine::Claude), &context).is_err());
         let no_image = CardToSuggest { image_path: None, ..item };
         assert_eq!(suggest_title(&no_image, TitleSource::FromImage(ImageEngine::Claude), &context), Ok(None));

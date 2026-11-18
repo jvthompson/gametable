@@ -1,7 +1,8 @@
 //! The Playmats tab: the playmat images and whether the game uses one shared centrepiece mat or
 //! one mat per player. A mode switch above a list + detail split, with a table preview showing
 //! the selected playmat at its authored scale and a draggable reference card for comparison.
-//! Port of `src/ui/screens/gamedef/playmat_tab.lua`.
+//! Port of `src/ui/screens/gamedef/playmat_tab.lua`, plus GameTable's zones placed on playmats
+//! (`playmat_zone_placement.rs`).
 
 use gametable_core::geometry::{WORLD_HEIGHT, WORLD_WIDTH};
 use gametable_core::models::{CardDefinition, PlaymatDefinition, PlaymatType};
@@ -13,6 +14,7 @@ use crate::graphics::draw_list::{Color, StencilCompare};
 use crate::graphics::tessellation::DrawMode;
 use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::{PAD, SectionAction, StableKeys, column};
+use crate::screens::gamedef::playmat_zone_placement::{MatScreenRect, ZonePlacementEditor};
 use crate::screens::token_choosers::{ChooserResponse, TokenChooser};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw};
 use crate::ui::components::{Reorder, argb_color, move_item};
@@ -51,6 +53,7 @@ pub struct PlaymatTab {
     card_fraction: (f32, f32),
     chooser: Option<(TokenChooser, ChooserTarget)>,
     pending_remove: Option<usize>,
+    zone_placement: ZonePlacementEditor,
 }
 
 impl Default for PlaymatTab {
@@ -67,6 +70,15 @@ impl PlaymatTab {
             card_fraction: (0.5, 0.72),
             chooser: None,
             pending_remove: None,
+            zone_placement: ZonePlacementEditor::default(),
+        }
+    }
+
+    /// Development hook: selects the first playmat.
+    pub fn select_first(&mut self, model: &EditorModel) {
+        self.keys.sync(model.game.playmats.len());
+        if !model.game.playmats.is_empty() {
+            self.selected = Some(self.keys.key(0));
         }
     }
 
@@ -157,7 +169,8 @@ impl PlaymatTab {
     }
 
     /// `T:drawTablePreview`: the playmat's size on the table (centred for a shared mat, near the
-    /// viewer's edge for individual mats) and the draggable reference card.
+    /// viewer's edge for individual mats) and the draggable reference card. Returns where the mat
+    /// was drawn, for the zones placed on it.
     #[allow(clippy::too_many_arguments)]
     fn draw_table_preview(
         &mut self,
@@ -168,7 +181,7 @@ impl PlaymatTab {
         y: f32,
         width: f32,
         height: f32,
-    ) {
+    ) -> MatScreenRect {
         let game = &model.game;
         let (canvas_x, canvas_y, canvas_width, canvas_height, scale) = PlaymatTab::canvas_rect(x, y, width, height);
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
@@ -254,6 +267,7 @@ impl PlaymatTab {
         }
         let card = reference_card();
         frame.draw_card(&CardDraw::new(Some(&card), true, center.0, center.1, &[], None).scale(scale));
+        MatScreenRect { x: mat_x, y: mat_y, width: mat_screen_width, height: mat_screen_height, preview_scale: scale }
     }
 
     /// `T:drawDetail`: no scroll here; the preview fills whatever space is left.
@@ -324,12 +338,14 @@ impl PlaymatTab {
             model.game.playmats[index].scale = scale as f64;
         }
         row_y += 64.0 + 16.0;
+        row_y += self.zone_placement.draw_zone_chips(frame, model, index, column_x, row_y, column_width) + 16.0;
         frame.group_label("Table Preview", column_x, row_y, column_width);
         row_y += 24.0;
         // The preview spans the whole pane and fills the height down to the gutter.
         let preview_height = (y + height - PAD - row_y).max(100.0);
         let playmat = model.game.playmats[index].clone();
-        self.draw_table_preview(frame, model, &playmat, x + PAD, row_y, width - 2.0 * PAD, preview_height);
+        let mat = self.draw_table_preview(frame, model, &playmat, x + PAD, row_y, width - 2.0 * PAD, preview_height);
+        self.zone_placement.draw_placed_zones(frame, model, index, mat);
     }
 
     pub fn draw(&mut self, frame: &mut Frame, model: &mut EditorModel, x: f32, y: f32, width: f32, height: f32) {
@@ -392,5 +408,62 @@ impl PlaymatTab {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::harness::UiHarness;
+    use gametable_core::models::{GameDefinition, PlaymatZonePlacement, ZoneDefinition};
+
+    fn model_with_one_mat() -> EditorModel {
+        let mut game = GameDefinition::new("game", "Game");
+        game.playmat_type = PlaymatType::Individual;
+        game.zones.push(ZoneDefinition::new("deck", "Deck"));
+        game.zones.push(ZoneDefinition { shared: true, ..ZoneDefinition::new("market", "Market") });
+        game.playmats.push(PlaymatDefinition::new("missing.png"));
+        EditorModel { folder_path: String::new(), game, card_keys: StableKeys::default() }
+    }
+
+    #[test]
+    fn place_a_zone_on_the_mat_then_drag_it_off() {
+        let mut harness = UiHarness::new();
+        let mut model = model_with_one_mat();
+        let mut tab = PlaymatTab::new();
+        tab.keys.sync(1);
+        tab.selected = Some(tab.keys.key(0));
+        let mut draw = |frame: &mut Frame| tab.draw(frame, &mut model, 0.0, 0.0, 1280.0, 800.0);
+
+        // Only the player zone is offered for an individual mat; clicking it places it centred.
+        harness.frame(|frame| draw(frame));
+        assert!(harness.region_center("pt:place:market").is_none());
+        harness.click_region("pt:place:deck", &mut draw);
+        harness.frame(|frame| draw(frame));
+        let (zone_x, zone_y) = harness.region_center("pt:zone:deck").expect("placed zone drawn on the mat");
+        assert_eq!(model.game.playmats[0].zone_placements, vec![PlaymatZonePlacement::new("deck", 0.5, 0.5)]);
+
+        // Dragging it a little moves it; dragging it off the mat takes it off.
+        let mut draw = |frame: &mut Frame| tab.draw(frame, &mut model, 0.0, 0.0, 1280.0, 800.0);
+        let drag_to = |harness: &mut UiHarness, draw: &mut dyn FnMut(&mut Frame), from: (f32, f32), to: (f32, f32)| {
+            harness.move_mouse(from.0, from.1);
+            harness.frame(|frame| draw(frame));
+            harness.press(from.0, from.1, 1, 1);
+            harness.frame(|frame| draw(frame));
+            harness.move_mouse(to.0, to.1);
+            harness.frame(|frame| draw(frame));
+            harness.release(to.0, to.1, 1);
+            harness.frame(|frame| draw(frame));
+            harness.frame(|frame| draw(frame));
+        };
+        drag_to(&mut harness, &mut draw, (zone_x, zone_y), (zone_x + 30.0, zone_y));
+        let moved = &model.game.playmats[0].zone_placements[0];
+        assert!(moved.x > 0.5 && (moved.y - 0.5).abs() < 1e-3, "{moved:?}");
+
+        let mut draw = |frame: &mut Frame| tab.draw(frame, &mut model, 0.0, 0.0, 1280.0, 800.0);
+        harness.frame(|frame| draw(frame));
+        let (zone_x, zone_y) = harness.region_center("pt:zone:deck").unwrap();
+        drag_to(&mut harness, &mut draw, (zone_x, zone_y), (5.0, 5.0));
+        assert!(model.game.playmats[0].zone_placements.is_empty());
     }
 }

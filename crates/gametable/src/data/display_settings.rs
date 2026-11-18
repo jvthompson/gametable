@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use gametable_core::color::{ArgbColor, color_from_hex};
-use gametable_core::json::format_like_c_percent_g;
+use gametable_core::json::{JsonObject, JsonValue, format_like_c_percent_g};
+use gametable_core::models::PlaymatZonePosition;
 
 use super::settings::{Settings, keys};
 
@@ -275,13 +276,58 @@ pub fn set_felt_texture_enabled(settings: &mut Settings, enabled: bool) {
 // Playmat seeds and rulebook scroll positions (per game id)
 // ---------------------------------------------------------------------------
 
-/// The local seed for the F11 (on/off) + F12 (cycle) playmat choice of a game.
+/// The local seed for the F12 playmat choice of a game (off, or which playmat).
 pub fn playmat_on(settings: &Settings, game_id: &str) -> bool {
     settings.flag(&format!("playmat_on_{game_id}")) == Some(true)
 }
 
 pub fn playmat_index(settings: &Settings, game_id: &str) -> f64 {
     settings.number(&format!("playmat_index_{game_id}")).unwrap_or(0.0)
+}
+
+fn playmat_zone_positions_key(game_id: &str, playmat_index: i64) -> String {
+    format!("playmat_zone_positions_{game_id}_{playmat_index}")
+}
+
+/// Where this computer's player last moved zones on one of a game's playmats (1-based index):
+/// `[{zoneId, x, y}]`, sent again whenever they pick that mat.
+pub fn playmat_zone_positions(settings: &Settings, game_id: &str, playmat_index: i64) -> Vec<PlaymatZonePosition> {
+    let Some(JsonValue::Array(entries)) = settings.get(&playmat_zone_positions_key(game_id, playmat_index)) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let zone_id = entry.get("zoneId")?.as_str()?;
+            let (x, y) = (entry.get("x")?.as_f64()?, entry.get("y")?.as_f64()?);
+            Some(PlaymatZonePosition::new(playmat_index, zone_id, x, y))
+        })
+        .collect()
+}
+
+/// Remembers (or, for an empty list, forgets) where zones were moved on one playmat.
+pub fn set_playmat_zone_positions(
+    settings: &mut Settings,
+    game_id: &str,
+    playmat_index: i64,
+    positions: &[PlaymatZonePosition],
+) {
+    let key = playmat_zone_positions_key(game_id, playmat_index);
+    if positions.is_empty() {
+        settings.remove(&key);
+        return;
+    }
+    let entries: Vec<JsonValue> = positions
+        .iter()
+        .map(|position| {
+            let mut entry = JsonObject::new();
+            entry.insert("zoneId", position.zone_id.as_str());
+            entry.insert("x", position.x);
+            entry.insert("y", position.y);
+            JsonValue::Object(entry)
+        })
+        .collect();
+    settings.set(&key, JsonValue::Array(entries));
 }
 
 pub fn set_playmat(settings: &mut Settings, game_id: &str, on: bool, index: Option<f64>) {

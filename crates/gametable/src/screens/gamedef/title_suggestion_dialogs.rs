@@ -1,16 +1,21 @@
-//! Card View's "Suggest Title" dialogs: choose the source and which cards, watch the progress,
-//! then review the suggestions before any title changes (one card's title is filled in directly).
+//! Card View's "Suggest Title" dialogs: choose the source and which cards (and, for the image
+//! engines, optionally box the title on the first card), watch the progress, then review the
+//! suggestions before any title changes (one card's title is filled in directly).
 
 use crate::app::Frame;
 use crate::data::image_resolver::resolve_bare_image_path;
 use crate::data::settings::keys;
 use crate::data::title_suggestion::claude_vision::ClaudeModel;
 use crate::data::title_suggestion::local_ocr;
+use crate::data::title_suggestion::title_style::{
+    LineSeparator, TitleStyle, detect_line_separator, pick_example_titles,
+};
 use crate::data::title_suggestion::{
     CardToSuggest, ClaudeAccess, ImageEngine, SuggestionContext, SuggestionJob, TitleSource, is_untitled, suggest_title,
 };
 use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::display_card;
+use crate::screens::gamedef::title_area_picker::TitleAreaPicker;
 use crate::table::card_render::{CARD_HEIGHT, CardDraw};
 use crate::ui::draw::TextOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
@@ -86,6 +91,10 @@ pub struct SuggestTitleFlow {
     current_card: Option<u64>,
     /// The pool's selection when opened (two or more cards).
     selected_cards: Vec<u64>,
+    /// Where the title is on the cards, drawn over the first card in the scope.
+    title_area: TitleAreaPicker,
+    /// What joins a name and its subtitle; learned from the game's titles when first shown.
+    line_separator: Option<LineSeparator>,
 }
 
 /// The saved Claude key: settings first, then the `ANTHROPIC_API_KEY` environment variable.
@@ -107,7 +116,13 @@ impl SuggestTitleFlow {
             source = SourceChoice::FromId;
         }
         let scope = if selected_cards.len() > 1 { SuggestScope::SelectedCards } else { SuggestScope::ThisCard };
-        SuggestTitleFlow { stage: Stage::Choosing { source, scope }, current_card, selected_cards }
+        SuggestTitleFlow {
+            stage: Stage::Choosing { source, scope },
+            current_card,
+            selected_cards,
+            title_area: TitleAreaPicker::default(),
+            line_separator: None,
+        }
     }
 
     /// Draws the current step; returns false once the flow has closed.
@@ -137,6 +152,12 @@ impl SuggestTitleFlow {
         let models_missing = local_ocr::models_missing(&local_ocr::models_folder(&frame.paths.app_folder));
         let Stage::Choosing { source, scope } = &mut self.stage else { return true };
         let card_count = indexes_in_scope(model, *scope, self.current_card, &self.selected_cards).len();
+        let title_area = &mut self.title_area;
+        let learned_separator = learned_line_separator(model);
+        let remembered_separator =
+            frame.settings.text(&separator_setting_key(&model.game.id)).and_then(LineSeparator::from_setting_value);
+        let line_separator = self.line_separator.get_or_insert(remembered_separator.unwrap_or(learned_separator));
+        let (current_card, selected_cards) = (self.current_card, &self.selected_cards);
         let start_label = if card_count == 1 { "Suggest".to_string() } else { format!("Suggest {card_count} Titles") };
         let actions = [DialogAction::text("Cancel"), DialogAction::filled(&start_label).disabled(card_count == 0)];
         let spec =
@@ -199,12 +220,55 @@ impl SuggestTitleFlow {
                 count => format!("{count} cards. You'll review the suggestions before anything changes."),
             };
             frame.text(&count_text, x, row_y, note_options);
-            row_y + 18.0 - y
+            row_y += 18.0;
+            // The image engines can read just where the title is, boxed on the first card.
+            if *source != SourceChoice::FromId
+                && let Some(&first) = indexes_in_scope(model, *scope, current_card, selected_cards).first()
+            {
+                let card = &model.game.cards()[first];
+                let image_path = card
+                    .image_path
+                    .as_deref()
+                    .map(|image| resolve_bare_image_path(&model.folder_path, image, card.set_id.as_deref()));
+                let card_name =
+                    if card.card_title.trim().is_empty() { card.id.as_str() } else { card.card_title.as_str() };
+                row_y += 16.0;
+                frame.text("Name and subtitle joined with", x, row_y, label);
+                row_y += 24.0;
+                let separator_choices: Vec<Choice<LineSeparator>> =
+                    LineSeparator::ALL.iter().map(|&separator| Choice::new(separator, separator.label())).collect();
+                *line_separator = frame.segmented(
+                    "suggesttitle:separator",
+                    x,
+                    row_y,
+                    width,
+                    &separator_choices,
+                    *line_separator,
+                    None,
+                    false,
+                );
+                row_y += 40.0 + 4.0;
+                let separator_note = match learned_separator {
+                    LineSeparator::Space => "For titles on two lines (a name and a subtitle).".to_string(),
+                    learned => format!(
+                        "For titles on two lines (a name and a subtitle). This game's titles with a subtitle mostly use a {}.",
+                        learned.label().to_lowercase()
+                    ),
+                };
+                frame.text(&separator_note, x, row_y, note_options);
+                row_y += 18.0 + 16.0;
+                row_y += title_area.draw(frame, "suggesttitle:area", image_path.as_deref(), card_name, x, row_y, width);
+            }
+            row_y - y
         });
         match response {
             DialogResponse::Action(1) => {
                 let (source, scope) = (*source, *scope);
                 frame.settings.set(keys::SUGGEST_TITLE_SOURCE, source.setting_value());
+                if source != SourceChoice::FromId {
+                    let separator = self.line_separator.unwrap_or_default();
+                    frame.settings.set(&separator_setting_key(&model.game.id), separator.setting_value());
+                }
                 self.start(frame, model, source, scope);
                 true
             }
@@ -217,6 +281,8 @@ impl SuggestTitleFlow {
         let cards = cards_in_scope(model, scope, self.current_card, &self.selected_cards);
         let context = SuggestionContext {
             game_name: model.game.name.clone(),
+            title_area: if source == SourceChoice::FromId { None } else { self.title_area.area },
+            title_style: title_style_for(model, self.line_separator.unwrap_or_default()),
             claude: claude_api_key(frame).map(|api_key| ClaudeAccess {
                 api_key,
                 model: ClaudeModel::from_setting_value(frame.settings.text(keys::CLAUDE_TITLE_MODEL)),
@@ -421,6 +487,24 @@ impl SuggestTitleFlow {
             _ => false,
         }
     }
+}
+
+/// The titles the game's cards already have (not placeholders like their ID or file name).
+fn real_titles(model: &EditorModel) -> impl Iterator<Item = &str> {
+    model.game.cards().iter().filter(|card| !is_untitled(card)).map(|card| card.card_title.as_str())
+}
+
+fn separator_setting_key(game_id: &str) -> String {
+    format!("{}_{game_id}", keys::SUGGEST_TITLE_SEPARATOR_PREFIX)
+}
+
+/// The name/subtitle separator most of the game's titles use.
+fn learned_line_separator(model: &EditorModel) -> LineSeparator {
+    detect_line_separator(real_titles(model))
+}
+
+fn title_style_for(model: &EditorModel, line_separator: LineSeparator) -> TitleStyle {
+    TitleStyle { line_separator, examples: pick_example_titles(real_titles(model), line_separator) }
 }
 
 /// Fills in one card's title, or explains why not.

@@ -56,8 +56,7 @@ Hotkeys act on the card (or token, for Q / E; a card token also responds to Z) u
 | Home or H | Reset camera pan and zoom | |
 | F1 | Show/hide the ownership border on every card | This session only |
 | F2 | Toggle zone/hand backgrounds between player-color tint and black | This session only |
-| F11 | Toggle the game's playmat(s) on/off. For a shared playmat, host only; for individual playmats, each player controls their own | Persists across sessions |
-| F12 | Cycle through the playmats defined on the game's Playmats tab. For a shared playmat, host only; for individual playmats, each player controls their own | Persists across sessions |
+| F12 | Cycle the playmat: off, then each playmat defined on the game's Playmats tab in turn, then off again. For a shared playmat, host only; for individual playmats, each player controls their own | Persists across sessions |
 | L | Open/close the Game Log (with a Save Log button) | |
 | C | Open/close the chat panel (server games, and practice games for /flip and /roll -- see Chat commands below; not in LAN host/join games) | |
 | Ctrl + R | Open/close the Documents viewer (if the game has any PDF/Markdown file in its _documents folder), with a document picker and a collapsible table-of-contents sidebar. Also works in the Deck Editor and the Game Definition Editor. | |

@@ -101,6 +101,30 @@ fn zone_definition_defaults_and_field_order() {
 }
 
 #[test]
+fn playmat_zone_placements_round_trip_and_are_omitted_when_empty() {
+    let plain = PlaymatDefinition::from_json(&decode(r#"{"imagePath":"mat.png"}"#)).unwrap();
+    assert!(plain.zone_placements.is_empty());
+    assert_eq!(compact(&plain.to_json()), r#"{"imagePath":"mat.png"}"#);
+
+    let text = r#"{"imagePath":"mat.png","scale":0.5,"zonePlacements":[{"zoneId":"deck","x":0.25,"y":0.75}]}"#;
+    let placed = PlaymatDefinition::from_json(&decode(text)).unwrap();
+    assert_eq!(placed.zone_placements, vec![PlaymatZonePlacement::new("deck", 0.25, 0.75)]);
+    assert_eq!(placed.placement_for("deck").map(|placement| placement.x), Some(0.25));
+    assert!(placed.placement_for("discard").is_none());
+    assert_eq!(compact(&placed.to_json()), text);
+}
+
+#[test]
+fn zones_fit_playmat_types_by_ownership() {
+    let owned = ZoneDefinition::new("deck", "Deck");
+    let shared = ZoneDefinition { shared: true, ..owned.clone() };
+    assert!(zone_fits_playmat_type(&owned, PlaymatType::Individual));
+    assert!(!zone_fits_playmat_type(&owned, PlaymatType::Shared));
+    assert!(zone_fits_playmat_type(&shared, PlaymatType::Shared));
+    assert!(!zone_fits_playmat_type(&shared, PlaymatType::Individual));
+}
+
+#[test]
 fn scenario_placements_omit_defaults() {
     let placement = ScenarioPlacement::new("c1", 0.25, 0.75);
     assert_eq!(compact(&placement.to_json()), r#"{"definitionId":"c1","x":0.25,"y":0.75}"#);

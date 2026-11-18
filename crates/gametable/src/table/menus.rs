@@ -43,31 +43,59 @@ pub enum Placement {
 /// What a table menu item does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuAction {
-    CardsToHand { instance_ids: Vec<String>, play_sound: bool },
-    CardsToZone { instance_ids: Vec<String>, zone_id: String, placement: Placement },
+    CardsToHand {
+        instance_ids: Vec<String>,
+        play_sound: bool,
+    },
+    CardsToZone {
+        instance_ids: Vec<String>,
+        zone_id: String,
+        placement: Placement,
+    },
     SearchPile(String),
     SearchZone(String),
+    /// Puts the zones moved on this player's playmat back where the game places them.
+    ResetPlaymatZonePositions,
     FlipCards(Vec<String>),
-    RotateRoots { root_ids: Vec<String>, clockwise: bool },
-    GiveCards { instance_ids: Vec<String>, new_owner_id: Option<String> },
+    RotateRoots {
+        root_ids: Vec<String>,
+        clockwise: bool,
+    },
+    GiveCards {
+        instance_ids: Vec<String>,
+        new_owner_id: Option<String>,
+    },
     CreatePileAt(f32, f32),
     OpenTokenPicker,
-    CreateWidget { kind: BoardWidgetKind, x: f64, y: f64 },
+    CreateWidget {
+        kind: BoardWidgetKind,
+        x: f64,
+        y: f64,
+    },
     OpenLibrary,
     PassTurn(String),
-    CounterStep { widget_id: String, value: f64 },
+    CounterStep {
+        widget_id: String,
+        value: f64,
+    },
     SetValue(BoardWidgetInstance),
     SetColors(BoardWidgetInstance),
     SetTokenColor(BoardWidgetInstance),
     UpdateText(BoardWidgetInstance),
-    TokenSize { widget_id: String, size: Option<f64> },
+    TokenSize {
+        widget_id: String,
+        size: Option<f64>,
+    },
     FlipWidget(String),
     DeleteWidget(String),
     GeneratePack(String),
     LoadDeck(ZoneDefinition),
     ChangeTokens(BoardWidgetInstance),
     ResetBag(String),
-    ReturnBagToken { widget_id: String, slot_id: String },
+    ReturnBagToken {
+        widget_id: String,
+        slot_id: String,
+    },
 }
 
 /// An open context menu.
@@ -399,6 +427,9 @@ impl TableScreen {
                 if !shared && !deck_widget && zone.deals_built_deck && cards.is_empty() {
                     items.push(MenuItem::new("Load Deck...", MenuAction::LoadDeck(zone.clone())));
                 }
+                if self.movable_playmat_zone(item).is_some() && self.has_moved_playmat_zones() {
+                    items.push(MenuItem::new("Reset Zone Positions", MenuAction::ResetPlaymatZonePositions));
+                }
                 self.open_menu(x, y, items);
                 true
             }
@@ -540,6 +571,7 @@ impl TableScreen {
             MenuAction::DeleteWidget(instance_id) => self.perform(TableAction::DeleteWidget { instance_id }),
             MenuAction::GeneratePack(set_id) => self.perform(TableAction::GeneratePack { set_id }),
             MenuAction::LoadDeck(zone) => self.prompt_load_deck(frame, zone),
+            MenuAction::ResetPlaymatZonePositions => self.reset_playmat_zone_positions(frame),
             MenuAction::ChangeTokens(widget) => self.prompt_change_tokens(&widget),
             MenuAction::ResetBag(instance_id) => self.perform(TableAction::ResetBag { instance_id }),
             MenuAction::ReturnBagToken { widget_id, slot_id } => {

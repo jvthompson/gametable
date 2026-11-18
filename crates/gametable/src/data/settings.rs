@@ -43,6 +43,8 @@ pub mod keys {
     pub const CLAUDE_TITLE_MODEL: &str = "claude_title_model";
     /// The last "Suggest Title" choices: `"id"`, `"ocr"` or `"claude"`.
     pub const SUGGEST_TITLE_SOURCE: &str = "suggest_title_source";
+    /// Followed by `_<game id>`: the name/subtitle separator last used for that game's titles.
+    pub const SUGGEST_TITLE_SEPARATOR_PREFIX: &str = "suggest_title_separator";
 }
 
 /// The settings file, loaded into memory once and rewritten after every change.

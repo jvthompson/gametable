@@ -250,6 +250,60 @@ impl BoardWidgetInstance {
 // PlayerInfo / ActiveSearch / LogEntry
 // ---------------------------------------------------------------------------
 
+/// Where a player moved a zone on a playmat (a GameTable addition): the zone's centre as
+/// fractions of the mat (`playmat_index` is 1-based, like the playmat choice). It replaces the
+/// game designer's position while that mat is in use.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaymatZonePosition {
+    pub playmat_index: i64,
+    pub zone_id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl PlaymatZonePosition {
+    pub fn new(playmat_index: i64, zone_id: impl Into<String>, x: f64, y: f64) -> Self {
+        Self { playmat_index, zone_id: zone_id.into(), x, y }
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
+        let fields = FieldReader::new(value, "PlaymatZonePosition")?;
+        Ok(Self {
+            playmat_index: fields.optional_whole_number("playmatIndex")?.unwrap_or(0),
+            zone_id: fields.required_string("zoneId")?,
+            x: fields.required_number("x")?,
+            y: fields.required_number("y")?,
+        })
+    }
+
+    pub fn to_json(&self) -> JsonValue {
+        SparseObjectWriter::new()
+            .field("playmatIndex", self.playmat_index)
+            .field("zoneId", &self.zone_id)
+            .field("x", self.x)
+            .field("y", self.y)
+            .finish_value()
+    }
+}
+
+/// Replaces the moved zone positions for one playmat with `positions` (fractions clamped to the
+/// mat), keeping those for other mats.
+pub fn replace_playmat_zone_positions(
+    stored: &mut Vec<PlaymatZonePosition>,
+    playmat_index: i64,
+    positions: Vec<PlaymatZonePosition>,
+) {
+    stored.retain(|position| position.playmat_index != playmat_index);
+    stored.extend(positions.into_iter().filter(|position| position.x.is_finite() && position.y.is_finite()).map(
+        |position| PlaymatZonePosition {
+            playmat_index,
+            x: position.x.clamp(0.0, 1.0),
+            y: position.y.clamp(0.0, 1.0),
+            ..position
+        },
+    ));
+}
+
 /// A seat at the table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerInfo {
@@ -260,6 +314,8 @@ pub struct PlayerInfo {
     pub connected: bool,
     pub individual_playmat_on: bool,
     pub individual_playmat_index: i64,
+    /// Zones this player moved on their own playmats.
+    pub playmat_zone_positions: Vec<PlaymatZonePosition>,
 }
 
 impl PlayerInfo {
@@ -272,6 +328,7 @@ impl PlayerInfo {
             connected: true,
             individual_playmat_on: false,
             individual_playmat_index: 0,
+            playmat_zone_positions: Vec::new(),
         }
     }
 
@@ -285,6 +342,7 @@ impl PlayerInfo {
             connected: fields.bool_or_default("connected", true)?,
             individual_playmat_on: fields.flag_is_exactly_true("individualPlaymatOn"),
             individual_playmat_index: fields.optional_whole_number("individualPlaymatIndex")?.unwrap_or(0),
+            playmat_zone_positions: fields.list_of("playmatZonePositions", PlaymatZonePosition::from_json)?,
         })
     }
 
@@ -297,6 +355,7 @@ impl PlayerInfo {
             .field("connected", self.connected)
             .flag_when_true("individualPlaymatOn", self.individual_playmat_on)
             .unless_default("individualPlaymatIndex", self.individual_playmat_index, 0)
+            .non_empty_list("playmatZonePositions", &self.playmat_zone_positions, PlaymatZonePosition::to_json)
             .finish_value()
     }
 }
@@ -411,6 +470,8 @@ pub struct TableState {
     pub loaded_scenario_ids: Vec<String>,
     pub shared_playmat_on: bool,
     pub shared_playmat_index: i64,
+    /// Zones the host moved on the shared playmats.
+    pub shared_playmat_zone_positions: Vec<PlaymatZonePosition>,
     pub current_player_id: Option<String>,
 }
 
@@ -477,6 +538,8 @@ impl TableState {
             loaded_scenario_ids: fields.string_list("loadedScenarioIds")?,
             shared_playmat_on: fields.flag_is_exactly_true("sharedPlaymatOn"),
             shared_playmat_index: fields.optional_whole_number("sharedPlaymatIndex")?.unwrap_or(0),
+            shared_playmat_zone_positions: fields
+                .list_of("sharedPlaymatZonePositions", PlaymatZonePosition::from_json)?,
             current_player_id: fields.optional_string("currentPlayerId")?,
         })
     }
@@ -497,6 +560,11 @@ impl TableState {
             )
             .flag_when_true("sharedPlaymatOn", self.shared_playmat_on)
             .unless_default("sharedPlaymatIndex", self.shared_playmat_index, 0)
+            .non_empty_list(
+                "sharedPlaymatZonePositions",
+                &self.shared_playmat_zone_positions,
+                PlaymatZonePosition::to_json,
+            )
             .optional("currentPlayerId", self.current_player_id.as_ref())
             .finish_value()
     }

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use gametable_core::color::ArgbColor;
 use gametable_core::models::{
     BoardWidgetInstance, BoardWidgetKind, CardDefinition, CardInstance, CardZone, GameDefinition, PlayerInfo,
-    PlaymatType, Scenario, SearchTargetType, TableState, ZoneDefinition,
+    PlaymatType, PlaymatZonePosition, Scenario, SearchTargetType, TableState, ZoneDefinition,
 };
 use gametable_core::seat_utils::{compute_hand_row_layout, is_far_mirror_seat};
 use gametable_core::session::{ArrowDragPreview, CardDragPreview};
@@ -25,6 +25,7 @@ use crate::sound::SoundEffect;
 use crate::table::actions::{TableAction, TableBackend};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH};
 use crate::table::menus::{TableDialog, TableMenu};
+use crate::table::playmat_zones::{PlacedZone, placed_zone_fraction, placed_zones_by_owner};
 use crate::table::selection::half_extents;
 use crate::table::view::{DropZone, HitItem, ItemKind};
 use crate::ui::card_filter_bar::CardFilterState;
@@ -133,6 +134,17 @@ pub(super) struct Derived {
     pub pile_searched: HashSet<String>,
     pub top_row: Vec<PlayerInfo>,
     pub bottom_row: Vec<PlayerInfo>,
+    /// Owner id (or `__shared` for the shared mat) -> the zones placed on that mat right now.
+    /// These are drawn on the mat instead of in the player area or a sidebar.
+    pub placed_zones: HashMap<String, Vec<PlacedZone>>,
+}
+
+impl Derived {
+    /// Whether this owner's zone is drawn on their playmat (or the shared mat for `None`).
+    pub fn is_zone_on_playmat(&self, owner_id: Option<&str>, zone_id: &str) -> bool {
+        let owner_key = owner_id.unwrap_or(SHARED_OWNER_KEY);
+        self.placed_zones.get(owner_key).is_some_and(|zones| zones.iter().any(|placed| placed.zone.id == zone_id))
+    }
 }
 
 /// The highest z-index card of a pile (ties: the earlier card), as `stacks.topOf`.
@@ -223,6 +235,9 @@ pub struct TableScreen {
     pub(super) previous_items: Vec<HitItem>,
     pub(super) drop_zones: Vec<DropZone>,
     pub(super) bag_drop_zones: Vec<DropZone>,
+    /// Zones on playmats, checked after the docked ones and only over the table.
+    pub(super) playmat_drop_zones: Vec<DropZone>,
+    pub(super) playmat_bag_drop_zones: Vec<DropZone>,
     pub(super) hand_rect: Option<Rect>,
     pub(super) hand_card_centers: Vec<(String, f32)>,
     pub(super) hand_lift: HashMap<String, f32>,
@@ -275,6 +290,7 @@ pub struct TableScreen {
     pub(super) drag: Option<crate::table::input::Drag>,
     pub(super) pending: Option<crate::table::input::PendingPress>,
     pub(super) box_select: Option<crate::table::input::BoxSelect>,
+    pub(super) zone_move: Option<crate::table::input::ZoneMoveDrag>,
     pub(super) arrow_drag: Option<crate::table::input::ArrowDrag>,
     pub(super) middle_pan: Option<crate::table::input::MiddlePan>,
     pub(super) click_item: Option<HitItem>,
@@ -325,6 +341,8 @@ impl TableScreen {
             previous_items: Vec::new(),
             drop_zones: Vec::new(),
             bag_drop_zones: Vec::new(),
+            playmat_drop_zones: Vec::new(),
+            playmat_bag_drop_zones: Vec::new(),
             hand_rect: None,
             hand_card_centers: Vec::new(),
             hand_lift: HashMap::new(),
@@ -366,6 +384,7 @@ impl TableScreen {
             drag: None,
             pending: None,
             box_select: None,
+            zone_move: None,
             arrow_drag: None,
             middle_pan: None,
             click_item: None,
@@ -433,6 +452,16 @@ impl TableScreen {
                     self.log_animation = 1.0;
                 }
                 "tokens" => self.token_picker_open = true,
+                // Every seat's first playmat (or the shared one) on, showing any zones placed on it.
+                "playmats" => {
+                    let session = self.backend.session_mut();
+                    session.set_shared_playmat(true, 1);
+                    let player_ids: Vec<String> =
+                        session.state().players.iter().map(|player| player.id.clone()).collect();
+                    for player_id in player_ids {
+                        session.set_individual_playmat(&player_id, true, 1);
+                    }
+                }
                 "rulebook" => self.rulebook.open_for_development(),
                 "loaddeck" => self.development_load_deck = true,
                 "chat" => {
@@ -589,6 +618,7 @@ impl TableScreen {
         let rows = compute_hand_row_layout(&self.state.players, &self.local_player_id);
         derived.top_row = rows.top_row.into_iter().cloned().collect();
         derived.bottom_row = rows.bottom_row.into_iter().cloned().collect();
+        derived.placed_zones = placed_zones_by_owner(&self.game, &self.state);
         self.derived = derived;
     }
 
@@ -799,7 +829,7 @@ impl TableScreen {
     }
 
     // -----------------------------------------------------------------------
-    // Playmats (cycled with F12, toggled with F11)
+    // Playmats (F12 cycles: off, then each playmat in turn)
     // -----------------------------------------------------------------------
 
     /// The game's playmats as (resolved path, scale), in editor order.
@@ -827,9 +857,11 @@ impl TableScreen {
         if self.game.playmat_type == PlaymatType::Shared {
             if self.can_load_scenario {
                 self.perform(TableAction::SetSharedPlaymat { on, index });
+                self.send_remembered_zone_positions(frame, index);
             }
         } else if self.player_by_id(&self.acting_player_id).is_some() {
             self.perform(TableAction::SetIndividualPlaymat { on, index });
+            self.send_remembered_zone_positions(frame, index);
         }
     }
 
@@ -848,27 +880,131 @@ impl TableScreen {
             if self.can_load_scenario {
                 self.perform(TableAction::SetSharedPlaymat { on, index });
                 display_settings::set_playmat(frame.settings, &game_id, on, Some(index as f64));
+                self.send_remembered_zone_positions(frame, index);
             }
         } else if self.player_by_id(&self.acting_player_id).is_some() {
             self.perform(TableAction::SetIndividualPlaymat { on, index });
             display_settings::set_playmat(frame.settings, &game_id, on, Some(index as f64));
+            self.send_remembered_zone_positions(frame, index);
         }
     }
 
-    /// F11.
-    pub(super) fn toggle_playmats_on(&mut self, frame: &mut Frame) {
-        let (on, index) = self.playmat_on_index();
-        self.set_playmat(frame, !on, index);
+    // -----------------------------------------------------------------------
+    // Moving zones on playmats (Ctrl + drag)
+    // -----------------------------------------------------------------------
+
+    /// The playmat a zone owner key's zones sit on: (owner key, 1-based playmat index, moved
+    /// positions so far). Each player moves zones on their own individual mat; only the host
+    /// (who also picks the shared mat) moves zones on the shared one.
+    fn movable_playmat(&self) -> Option<(String, i64, Vec<PlaymatZonePosition>)> {
+        if self.game.playmat_type == PlaymatType::Shared {
+            if !self.can_load_scenario || !self.state.shared_playmat_on {
+                return None;
+            }
+            let index = self.state.shared_playmat_index;
+            return Some((SHARED_OWNER_KEY.to_string(), index, self.state.shared_playmat_zone_positions.clone()));
+        }
+        let me = self.player_by_id(&self.acting_player_id)?;
+        me.individual_playmat_on
+            .then(|| (me.id.clone(), me.individual_playmat_index, me.playmat_zone_positions.clone()))
     }
 
-    /// F12: the next playmat; past the last one turns them off (index 0).
+    /// The (owner key, zone id) of a hit item that is a zone on a playmat this player may move.
+    pub(super) fn movable_playmat_zone(&self, item: &HitItem) -> Option<(String, String)> {
+        let zone_id = match &item.kind {
+            ItemKind::Zone { zone_id, deck_widget: false, .. } => zone_id.clone(),
+            ItemKind::DockedCounter { widget } | ItemKind::TokenBagIdle { widget } => widget.zone_id.clone()?,
+            _ => return None,
+        };
+        let (owner_key, _, _) = self.movable_playmat()?;
+        let on_this_mat = self
+            .derived
+            .placed_zones
+            .get(&owner_key)
+            .is_some_and(|zones| zones.iter().any(|placed| placed.zone.id == zone_id));
+        on_this_mat.then_some((owner_key, zone_id))
+    }
+
+    /// Drops a zone being moved: its new spot on the mat is sent to everyone and remembered on
+    /// this computer for this game and mat.
+    pub(super) fn finish_zone_move(
+        &mut self,
+        frame: &mut Frame,
+        zone_move: &crate::table::input::ZoneMoveDrag,
+        mouse: (f32, f32),
+    ) {
+        let Some((owner_key, playmat_index, mut positions)) = self.movable_playmat() else { return };
+        if owner_key != zone_move.owner_key {
+            return;
+        }
+        let Some(mat) = self.active_playmats(frame).into_iter().find(|mat| mat.owner_key == owner_key) else {
+            return;
+        };
+        let center = (mouse.0 - zone_move.grab_offset.0, mouse.1 - zone_move.grab_offset.1);
+        let (world_x, world_y) = self.screen_to_world(center.0, center.1);
+        let (fraction_x, fraction_y) = placed_zone_fraction(mat.world_rect, mat.rotated, world_x, world_y);
+        positions.retain(|position| position.playmat_index == playmat_index && position.zone_id != zone_move.zone_id);
+        positions.push(PlaymatZonePosition::new(
+            playmat_index,
+            zone_move.zone_id.clone(),
+            f64::from(fraction_x),
+            f64::from(fraction_y),
+        ));
+        self.send_playmat_zone_positions(frame, playmat_index, positions);
+    }
+
+    /// Puts every zone on this player's mat (or, for the host, the shared mat) back where the
+    /// game places it, and forgets the moved positions.
+    pub(super) fn reset_playmat_zone_positions(&mut self, frame: &mut Frame) {
+        if let Some((_, playmat_index, _)) = self.movable_playmat() {
+            self.send_playmat_zone_positions(frame, playmat_index, Vec::new());
+        }
+    }
+
+    /// Whether any zone was moved on the playmat this player can move zones on.
+    pub(super) fn has_moved_playmat_zones(&self) -> bool {
+        self.movable_playmat().is_some_and(|(_, playmat_index, positions)| {
+            positions.iter().any(|position| position.playmat_index == playmat_index)
+        })
+    }
+
+    fn send_playmat_zone_positions(
+        &mut self,
+        frame: &mut Frame,
+        playmat_index: i64,
+        positions: Vec<PlaymatZonePosition>,
+    ) {
+        let game_id = self.game.id.clone();
+        display_settings::set_playmat_zone_positions(frame.settings, &game_id, playmat_index, &positions);
+        self.perform(TableAction::SetPlaymatZonePositions { playmat_index, positions });
+    }
+
+    /// After picking a playmat: sends where this player last moved zones on it, if anywhere.
+    fn send_remembered_zone_positions(&mut self, frame: &Frame, playmat_index: i64) {
+        let remembered = display_settings::playmat_zone_positions(frame.settings, &self.game.id, playmat_index);
+        if remembered.is_empty() {
+            return;
+        }
+        let already_there = self.movable_playmat().is_some_and(|(_, _, positions)| {
+            let on_this_mat: Vec<&PlaymatZonePosition> =
+                positions.iter().filter(|position| position.playmat_index == playmat_index).collect();
+            on_this_mat.len() == remembered.len() && remembered.iter().all(|position| on_this_mat.contains(&position))
+        });
+        if !already_there {
+            self.perform(TableAction::SetPlaymatZonePositions { playmat_index, positions: remembered });
+        }
+    }
+
+    /// F12: off → playmat 1 → playmat 2 → … → off. (GameTable dropped the original's separate
+    /// F11 on/off toggle; a mat that is off counts as "off" here whatever index it remembers.)
     pub(super) fn cycle_playmat(&mut self, frame: &mut Frame) {
         let count = self.game.playmats.len() as i64;
         if count == 0 {
             return;
         }
-        let (_, index) = self.playmat_on_index();
-        let next = if index + 1 > count { 0 } else { index + 1 };
+        let (on, index) = self.playmat_on_index();
+        let current = if on { index } else { 0 };
+        let next = if current + 1 > count { 0 } else { current + 1 };
         self.set_playmat(frame, next > 0, next);
     }
 
@@ -1034,7 +1170,8 @@ impl TableScreen {
     }
 
     fn start_discard_flight(&mut self, frame: &Frame, card: &CardInstance, zone_id: &str) {
-        if let Some(target) = self.drop_zones.iter().rev().find(|zone| zone.zone_id == zone_id) {
+        let mut zone_targets = self.drop_zones.iter().rev().chain(self.playmat_drop_zones.iter().rev());
+        if let Some(target) = zone_targets.find(|zone| zone.zone_id == zone_id) {
             let from = self.to_screen(card.x, card.y);
             let rect = target.rect;
             self.flight = Some(DiscardFlight {
@@ -1170,7 +1307,6 @@ impl TableScreen {
             }
             "f1" => self.borders_hidden = !self.borders_hidden,
             "f2" => self.color_tint_enabled = !self.color_tint_enabled,
-            "f11" => self.toggle_playmats_on(frame),
             "f12" => self.cycle_playmat(frame),
             "l" => self.toggle_log(),
             "r" if frame.keyboard.ctrl() => self.toggle_rulebook(frame),

@@ -141,6 +141,8 @@ pub mod game_requests {
     pub const SET_SHARED_PLAYMAT: &str = "requestSetSharedPlaymat";
     pub const SET_CURRENT_PLAYER: &str = "requestSetCurrentPlayer";
     pub const SET_INDIVIDUAL_PLAYMAT: &str = "requestSetIndividualPlaymat";
+    /// GameTable addition: `{playmatIndex, positions: [{zoneId, x, y}]}`.
+    pub const SET_PLAYMAT_ZONE_POSITIONS: &str = "requestSetPlaymatZonePositions";
     pub const CARD_DRAG_PREVIEW: &str = "cardDragPreview";
     pub const CARD_DRAG_PREVIEW_END: &str = "cardDragPreviewEnd";
     pub const ARROW_DRAG_PREVIEW: &str = "arrowDragPreview";

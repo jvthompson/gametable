@@ -19,7 +19,7 @@ use crate::table::screen::{
     top_card,
 };
 use crate::table::selection::{box_hits, half_extents, rect_from_points};
-use crate::table::view::{HitItem, ItemKind, ShuffleTarget};
+use crate::table::view::{DropZone, HitItem, ItemKind, ShuffleTarget};
 use crate::ui::context::Rect;
 
 /// A card (or pile) being dragged and how it was grabbed.
@@ -136,6 +136,15 @@ pub struct ArrowDrag {
     pub current: (f32, f32),
 }
 
+/// A zone being moved on its playmat with Ctrl + drag: whose mat (a player id, or `__shared`),
+/// which zone, and where on it the mouse grabbed (screen offset from its centre).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZoneMoveDrag {
+    pub owner_key: String,
+    pub zone_id: String,
+    pub grab_offset: (f32, f32),
+}
+
 /// A middle-button pan in progress.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MiddlePan {
@@ -189,13 +198,31 @@ impl TableScreen {
         in_rect(self.hand_rect, x, y)
     }
 
+    /// Zones docked in the player area, the sidebars and deck widgets (not those on playmats).
     pub(super) fn docked_zone_id_at(&self, x: f32, y: f32) -> Option<String> {
         self.drop_zones.iter().find(|zone| in_rect(Some(zone.rect), x, y)).map(|zone| zone.zone_id.clone())
     }
 
+    /// The zone a drop here goes into: a docked zone first, then a zone on a playmat (only over
+    /// the table, so a mat zone scrolled under the hand band doesn't catch drops).
+    pub(super) fn zone_drop_id_at(&self, x: f32, y: f32) -> Option<String> {
+        self.docked_zone_id_at(x, y).or_else(|| self.playmat_zone_id_at(&self.playmat_drop_zones, x, y))
+    }
+
+    fn playmat_zone_id_at(&self, zones: &[DropZone], x: f32, y: f32) -> Option<String> {
+        if !self.is_over_table(x, y) {
+            return None;
+        }
+        zones.iter().rev().find(|zone| in_rect(Some(zone.rect), x, y)).map(|zone| zone.zone_id.clone())
+    }
+
     /// Only Token Bag squares, so a dragged card is never put away in a bag.
     fn bag_zone_id_at(&self, x: f32, y: f32) -> Option<String> {
-        self.bag_drop_zones.iter().find(|zone| in_rect(Some(zone.rect), x, y)).map(|zone| zone.zone_id.clone())
+        self.bag_drop_zones
+            .iter()
+            .find(|zone| in_rect(Some(zone.rect), x, y))
+            .map(|zone| zone.zone_id.clone())
+            .or_else(|| self.playmat_zone_id_at(&self.playmat_bag_drop_zones, x, y))
     }
 
     /// Where among the other hand cards a drop at screen x lands.
@@ -418,7 +445,7 @@ impl TableScreen {
             }
         }
         // Zones dock on top of the hand band, so a drop on a zone's own box goes to the zone.
-        if let Some(zone_id) = self.docked_zone_id_at(x, y) {
+        if let Some(zone_id) = self.zone_drop_id_at(x, y) {
             self.perform(TableAction::ReturnToZone { instance_id: instance_id.to_string(), zone_id, to_bottom: alt });
             return;
         }
@@ -488,7 +515,7 @@ impl TableScreen {
         }
         let cards = self.selected_cards();
         let alt = frame.keyboard.alt();
-        if let Some(zone_id) = self.docked_zone_id_at(x, y) {
+        if let Some(zone_id) = self.zone_drop_id_at(x, y) {
             self.send_cards_to_zone(&cards, &zone_id, alt);
             return;
         }
@@ -542,7 +569,7 @@ impl TableScreen {
 
     fn handle_pile_drop(&mut self, frame: &mut Frame, root_id: &str, cards: &[CardInstance], x: f32, y: f32) {
         self.perform(TableAction::EndCardDragPreview);
-        if let Some(zone_id) = self.docked_zone_id_at(x, y) {
+        if let Some(zone_id) = self.zone_drop_id_at(x, y) {
             self.send_cards_to_zone(cards, &zone_id, frame.keyboard.alt());
             return;
         }
@@ -1143,6 +1170,16 @@ impl TableScreen {
             return;
         }
 
+        // A zone being moved on its playmat (Ctrl + drag).
+        if let Some(zone_move) = self.zone_move.clone() {
+            frame.ui.set_cursor("sizeall");
+            if frame.ui.mouse_released(1) || !frame.ui.mouse_down(1) {
+                self.zone_move = None;
+                self.finish_zone_move(frame, &zone_move, (mouse_x, mouse_y));
+            }
+            return;
+        }
+
         // A selection box being dragged out.
         if let Some(mut selection) = self.box_select {
             selection.current = Some(self.screen_to_world(mouse_x, mouse_y));
@@ -1191,6 +1228,14 @@ impl TableScreen {
         let Some(item) = item.filter(|_| free) else { return };
 
         if frame.ui.mouse_pressed(1) {
+            if frame.keyboard.ctrl()
+                && let Some((owner_key, zone_id)) = self.movable_playmat_zone(&item)
+            {
+                let center = (item.shape.x + item.shape.width / 2.0, item.shape.y + item.shape.height / 2.0);
+                let grab_offset = (mouse_x - center.0, mouse_y - center.1);
+                self.zone_move = Some(ZoneMoveDrag { owner_key, zone_id, grab_offset });
+                return;
+            }
             if self.tab_down && is_table_kind(&item.kind) && self.is_over_table(mouse_x, mouse_y) {
                 let start = self.screen_to_world(mouse_x, mouse_y);
                 self.arrow_drag = Some(ArrowDrag { start, current: start });

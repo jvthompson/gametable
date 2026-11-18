@@ -19,8 +19,8 @@ use crate::deck_widget_zones::{is_deck_widget_zone_id, parse_deck_widget_zone_id
 use crate::models::{
     BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardWidgetInstance, BoardWidgetKind, CardDefinition,
     CardInstance, CardZone, DeckConfig, DeckEntry, GameDefinition, LogEntry, MAIN_DECK_SUBDECK_NAME, PlayerInfo,
-    PlayerRole, SearchTargetType, TableState, WidgetSizeOverride, ZoneDefinition, ZoneKind, ZoneWidgetKind,
-    build_standard_deck_cards,
+    PlayerRole, PlaymatZonePosition, SearchTargetType, TableState, WidgetSizeOverride, ZoneDefinition, ZoneKind,
+    ZoneWidgetKind, build_standard_deck_cards, replace_playmat_zone_positions,
 };
 use crate::pack_generator::select_pack_cards;
 use crate::stack_utils::{root_id_of, stack_of};
@@ -1169,6 +1169,32 @@ impl Session {
     pub fn set_current_player(&mut self, player_id: Option<&str>) {
         if let Some(player_id) = player_id {
             self.state.current_player_id = Some(player_id.to_string());
+        }
+        self.state.revision += 1;
+        self.notify();
+    }
+
+    /// Replaces where zones were moved on one playmat: a player's own (`Some(player id)`) or the
+    /// shared mat (`None`, host-only, checked by the host engine).
+    pub fn set_playmat_zone_positions(
+        &mut self,
+        player_id: Option<&str>,
+        playmat_index: i64,
+        positions: Vec<PlaymatZonePosition>,
+    ) {
+        match player_id {
+            Some(player_id) => {
+                for player in self.state.players.iter_mut().filter(|player| player.id == player_id) {
+                    replace_playmat_zone_positions(
+                        &mut player.playmat_zone_positions,
+                        playmat_index,
+                        positions.clone(),
+                    );
+                }
+            }
+            None => {
+                replace_playmat_zone_positions(&mut self.state.shared_playmat_zone_positions, playmat_index, positions)
+            }
         }
         self.state.revision += 1;
         self.notify();

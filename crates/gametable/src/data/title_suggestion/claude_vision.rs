@@ -2,14 +2,14 @@
 //! and asks for the printed title. Needs the user's own API key (Settings → Claude API key); API
 //! use is billed to that key's account, separately from any Claude subscription.
 
-use std::path::Path;
 use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use gametable_core::json::{self, JsonObject, JsonValue, encode_compact};
 
-use crate::graphics::image_data::RgbaImage;
+use super::title_style::{LineSeparator, TitleStyle, title_case_if_all_caps};
+use super::{TitleArea, load_card_image};
 
 const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2026-10-21";
@@ -61,26 +61,92 @@ pub struct ClaudeCardRequest {
     pub game_name: String,
     pub card_id: String,
     pub image_path: String,
+    /// Only this part of the image is sent, when set.
+    pub title_area: Option<TitleArea>,
+    pub title_style: TitleStyle,
 }
 
 /// Reads one card's title from its picture. `Ok(None)` when Claude finds no title (or declines).
 pub fn suggest_title_with_claude(request: &ClaudeCardRequest) -> Result<Option<String>, String> {
-    let image = RgbaImage::load(Path::new(&request.image_path))?.downscaled_to_fit(MAX_IMAGE_SIDE);
+    let image = load_card_image(&request.image_path, request.title_area)?.downscaled_to_fit(MAX_IMAGE_SIDE);
     let png_base64 = BASE64.encode(image.encode_png()?);
-    let body = build_request_body(request.model, &png_base64, &request.game_name, &request.card_id);
+    let body = build_request_body(
+        request.model,
+        &png_base64,
+        &request.game_name,
+        &request.card_id,
+        request.title_area.is_some(),
+        &request.title_style,
+    );
     let body_text = encode_compact(&body).map_err(|_| "Could not build the request.".to_string())?;
     let response = post_with_retries(&request.api_key, request.model, &body_text)?;
-    parse_title_response(&response)
+    // Claude is asked for title case, but a title in capitals is fixed here too.
+    Ok(parse_title_response(&response)?.map(|title| title_case_if_all_caps(&title)))
 }
 
-/// The Messages API request body for one card.
-pub fn build_request_body(model: ClaudeModel, png_base64: &str, game_name: &str, card_id: &str) -> JsonValue {
-    let instructions = format!(
+/// The Messages API request body for one card. `title_area_only`: the picture is just the part
+/// of the card where the user said the title is. `style`: how the game writes its titles.
+pub fn build_request_body(
+    model: ClaudeModel,
+    png_base64: &str,
+    game_name: &str,
+    card_id: &str,
+    title_area_only: bool,
+    style: &TitleStyle,
+) -> JsonValue {
+    let mut instructions = if title_area_only {
+        format!(
+            "This picture is the title area cut from a card in the game \"{game_name}\" (its ID in the game \
+             files is \"{card_id}\"). Read the card's title printed in it exactly, keeping its punctuation; if \
+             the title is split over two lines (a name and a subtitle), give both. If there is no readable title, \
+             set found to false and title to an empty string."
+        )
+    } else {
+        whole_card_instructions(game_name, card_id)
+    };
+    instructions.push_str(&style_instructions(style));
+    build_body_with_instructions(model, png_base64, instructions)
+}
+
+/// The house-style part of the prompt: capitals, the name/subtitle separator, example titles.
+pub fn style_instructions(style: &TitleStyle) -> String {
+    let mut text = String::from(
+        " If the whole title is printed in capital letters, write it in title case: \"THE BIG BANG\" becomes \
+         \"The Big Bang\". A single word printed in capitals within an otherwise normally written title stays as \
+         printed: \"The BIG Bang\" is fine.",
+    );
+    if style.line_separator != LineSeparator::Space {
+        let joiner = style.line_separator.joiner();
+        let example = style
+            .examples
+            .iter()
+            .find(|title| title.contains(joiner))
+            .cloned()
+            .unwrap_or_else(|| format!("Name{joiner}Subtitle"));
+        text.push_str(&format!(
+            " When the card has a name and a subtitle, join them with \"{joiner}\", as in \"{example}\"."
+        ));
+    }
+    if !style.examples.is_empty() {
+        let quoted: Vec<String> = style.examples.iter().map(|title| format!("\"{title}\"")).collect();
+        text.push_str(&format!(
+            " For reference, other cards in this game are titled {}; match their style.",
+            quoted.join(", ")
+        ));
+    }
+    text
+}
+
+fn whole_card_instructions(game_name: &str, card_id: &str) -> String {
+    format!(
         "This picture is a card from the game \"{game_name}\" (its ID in the game files is \"{card_id}\"). \
-         Read the card's title exactly as it is printed on the card, keeping its capitalisation and punctuation. \
+         Read the card's title exactly as it is printed on the card, keeping its punctuation. \
          The title is usually the largest text near the top of the card. If the card has no readable title, \
          set found to false and title to an empty string."
-    );
+    )
+}
+
+fn build_body_with_instructions(model: ClaudeModel, png_base64: &str, instructions: String) -> JsonValue {
     let image_block = JsonObject::new().with("type", "image").with(
         "source",
         JsonObject::new().with("type", "base64").with("media_type", "image/png").with("data", png_base64),
@@ -216,7 +282,14 @@ mod tests {
 
     #[test]
     fn request_body_has_image_schema_and_model() {
-        let body = build_request_body(ClaudeModel::Haiku, "AAAA", "Spellfire", "booster_9_13245");
+        let body = build_request_body(
+            ClaudeModel::Haiku,
+            "AAAA",
+            "Spellfire",
+            "booster_9_13245",
+            false,
+            &TitleStyle::default(),
+        );
         assert_eq!(body.get("model").and_then(JsonValue::as_str), Some("claude-haiku-5-5"));
         assert!(body.get("fallbacks").is_none());
         let content = body.get("messages").and_then(JsonValue::as_array).unwrap()[0].get("content").unwrap();
@@ -226,9 +299,27 @@ mod tests {
         assert!(text.contains("Spellfire") && text.contains("booster_9_13245"));
         let format = body.get("output_config").and_then(|config| config.get("format")).unwrap();
         assert_eq!(format.get("type").and_then(JsonValue::as_str), Some("json_schema"));
-        let opus = build_request_body(ClaudeModel::Opus, "AAAA", "g", "c");
+        let opus = build_request_body(ClaudeModel::Opus, "AAAA", "g", "c", false, &TitleStyle::default());
         assert_eq!(opus.get("model").and_then(JsonValue::as_str), Some("claude-opus-5-5"));
         assert_eq!(opus.get("fallbacks").and_then(JsonValue::as_str), Some("default"));
+        let area = build_request_body(ClaudeModel::Haiku, "AAAA", "g", "c", true, &TitleStyle::default());
+        let content = area.get("messages").and_then(JsonValue::as_array).unwrap()[0].get("content").unwrap();
+        let text = content.as_array().unwrap()[1].get("text").and_then(JsonValue::as_str).unwrap();
+        assert!(text.contains("title area cut from a card"), "{text}");
+    }
+
+    #[test]
+    fn the_prompt_carries_the_games_title_style() {
+        let plain = style_instructions(&TitleStyle::default());
+        assert!(plain.contains("\"THE BIG BANG\" becomes") && plain.contains("\"The BIG Bang\" is fine"));
+        assert!(!plain.contains("subtitle"));
+        let lorcana = TitleStyle {
+            line_separator: LineSeparator::Comma,
+            examples: vec!["Be Our Guest".into(), "Ariel, On Human Legs".into()],
+        };
+        let text = style_instructions(&lorcana);
+        assert!(text.contains("join them with \", \", as in \"Ariel, On Human Legs\""), "{text}");
+        assert!(text.contains("titled \"Be Our Guest\", \"Ariel, On Human Legs\""), "{text}");
     }
 
     #[test]

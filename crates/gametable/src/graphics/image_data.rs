@@ -123,6 +123,48 @@ impl RgbaImage {
         RgbaImage { width: self.height, height: self.width, pixels }
     }
 
+    /// The pixels inside a rectangle (clamped to the image; at least 1×1).
+    pub fn cropped(&self, x: u32, y: u32, width: u32, height: u32) -> RgbaImage {
+        let x = x.min(self.width.saturating_sub(1));
+        let y = y.min(self.height.saturating_sub(1));
+        let width = width.clamp(1, self.width - x);
+        let height = height.clamp(1, self.height - y);
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for row in y..y + height {
+            let start = (row as usize * self.width as usize + x as usize) * 4;
+            pixels.extend_from_slice(&self.pixels[start..start + width as usize * 4]);
+        }
+        RgbaImage { width, height, pixels }
+    }
+
+    /// A bilinear enlargement by a whole-number factor (small crops read better when bigger).
+    pub fn upscaled(&self, factor: u32) -> RgbaImage {
+        if factor <= 1 {
+            return self.clone();
+        }
+        let (source_width, source_height) = (self.width as usize, self.height as usize);
+        let (width, height) = (source_width * factor as usize, source_height * factor as usize);
+        let mut pixels = vec![0u8; width * height * 4];
+        let sample = |x: usize, y: usize, channel: usize| f32::from(self.pixels[(y * source_width + x) * 4 + channel]);
+        for target_y in 0..height {
+            let source_y = ((target_y as f32 + 0.5) / factor as f32 - 0.5).clamp(0.0, (source_height - 1) as f32);
+            let (y0, blend_y) = (source_y.floor() as usize, source_y.fract());
+            let y1 = (y0 + 1).min(source_height - 1);
+            for target_x in 0..width {
+                let source_x = ((target_x as f32 + 0.5) / factor as f32 - 0.5).clamp(0.0, (source_width - 1) as f32);
+                let (x0, blend_x) = (source_x.floor() as usize, source_x.fract());
+                let x1 = (x0 + 1).min(source_width - 1);
+                for channel in 0..4 {
+                    let top = sample(x0, y0, channel) * (1.0 - blend_x) + sample(x1, y0, channel) * blend_x;
+                    let bottom = sample(x0, y1, channel) * (1.0 - blend_x) + sample(x1, y1, channel) * blend_x;
+                    pixels[(target_y * width + target_x) * 4 + channel] =
+                        (top * (1.0 - blend_y) + bottom * blend_y).round() as u8;
+                }
+            }
+        }
+        RgbaImage { width: width as u32, height: height as u32, pixels }
+    }
+
     /// Area-average downscale so the longer side is at most `max_dimension`; unchanged when it
     /// already fits. Port of `imageUtils.downscaleToFit` (same box boundaries and rounding).
     pub fn downscaled_to_fit(self, max_dimension: u32) -> RgbaImage {

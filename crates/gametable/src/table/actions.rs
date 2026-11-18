@@ -7,7 +7,7 @@
 
 use gametable_core::deck_widget_zones::parse_deck_widget_zone_id;
 use gametable_core::json::{JsonObject, JsonValue};
-use gametable_core::models::{BoardWidgetKind, DeckConfig, WidgetSizeOverride};
+use gametable_core::models::{BoardWidgetKind, DeckConfig, PlaymatType, PlaymatZonePosition, WidgetSizeOverride};
 use gametable_core::session::Session;
 use gametable_core::stack_utils::stack_of;
 
@@ -103,6 +103,12 @@ pub enum TableAction {
     SetIndividualPlaymat {
         on: bool,
         index: i64,
+    },
+    /// Where zones were moved on one playmat (the acting player's own, or the shared mat when the
+    /// game uses one), replacing the earlier positions for that mat.
+    SetPlaymatZonePositions {
+        playmat_index: i64,
+        positions: Vec<PlaymatZonePosition>,
     },
     StartSearchZone {
         zone_id: String,
@@ -318,6 +324,20 @@ pub fn request_message(action: &TableAction) -> (&'static str, JsonValue) {
         }
         TableAction::SetIndividualPlaymat { on, index } => {
             (requests::SET_INDIVIDUAL_PLAYMAT, object().with("on", *on).with("index", *index as f64))
+        }
+        TableAction::SetPlaymatZonePositions { playmat_index, positions } => {
+            let positions: Vec<JsonValue> = positions
+                .iter()
+                .map(|position| {
+                    JsonValue::Object(
+                        object().with("zoneId", position.zone_id.as_str()).with("x", position.x).with("y", position.y),
+                    )
+                })
+                .collect();
+            (
+                requests::SET_PLAYMAT_ZONE_POSITIONS,
+                object().with("playmatIndex", *playmat_index as f64).with("positions", JsonValue::Array(positions)),
+            )
         }
         TableAction::StartSearchZone { zone_id } => {
             (requests::START_SEARCH_ZONE, object().with("zoneId", zone_id.as_str()))
@@ -568,6 +588,10 @@ pub fn apply_as_host(session: &mut Session, action: TableAction) {
         TableAction::SetSharedPlaymat { on, index } => session.set_shared_playmat(on, index),
         TableAction::SetCurrentPlayer { player_id } => session.set_current_player(Some(&player_id)),
         TableAction::SetIndividualPlaymat { on, index } => session.set_individual_playmat(acting, on, index),
+        TableAction::SetPlaymatZonePositions { playmat_index, positions } => {
+            let owner = (session.game.playmat_type == PlaymatType::Individual).then_some(acting);
+            session.set_playmat_zone_positions(owner, playmat_index, positions);
+        }
         TableAction::StartSearchZone { zone_id } => {
             let owner = zone_owner_id(session, &zone_id);
             let _ = session.start_search_zone(&zone_id, owner.as_deref(), Some(acting));

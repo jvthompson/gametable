@@ -14,7 +14,8 @@ use std::collections::{BTreeSet, HashSet};
 use crate::deck_widget_zones::parse_deck_widget_zone_id;
 use crate::json::{JsonObject, JsonValue};
 use crate::models::{
-    BoardWidgetKind, DeckConfig, GameDefinition, PlayerInfo, PlayerRole, TableState, WidgetSizeOverride,
+    BoardWidgetKind, DeckConfig, GameDefinition, PlayerInfo, PlayerRole, PlaymatType, PlaymatZonePosition, TableState,
+    WidgetSizeOverride,
 };
 use crate::session::{ArrowDragPreview, CardDragPreview, Session, SessionError};
 use crate::stack_utils::stack_of;
@@ -586,6 +587,29 @@ impl HostEngine {
                 }
             }
             "requestSetCurrentPlayer" => self.session.set_current_player(p.text("playerId")),
+            // A player moves zones on their own mat; only the owner moves zones on the shared mat.
+            "requestSetPlaymatZonePositions" => {
+                if let Some(playmat_index) = p.whole_number_or("playmatIndex", 0) {
+                    let positions: Vec<PlaymatZonePosition> = p
+                        .list("positions")
+                        .iter()
+                        .filter_map(|position| {
+                            let mut position = PlaymatZonePosition::from_json(position).ok()?;
+                            position.playmat_index = playmat_index;
+                            Some(position)
+                        })
+                        .collect();
+                    match self.session.game.playmat_type {
+                        PlaymatType::Individual => {
+                            self.session.set_playmat_zone_positions(Some(client_id), playmat_index, positions)
+                        }
+                        PlaymatType::Shared if client_id == self.owner_id => {
+                            self.session.set_playmat_zone_positions(None, playmat_index, positions)
+                        }
+                        PlaymatType::Shared => {}
+                    }
+                }
+            }
             "requestSetIndividualPlaymat" => {
                 if let Some(index) = p.whole_number_or("index", 0) {
                     self.session.set_individual_playmat(client_id, p.is_true("on"), index);

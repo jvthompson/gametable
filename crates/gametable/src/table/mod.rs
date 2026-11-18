@@ -7,6 +7,7 @@
 //! - `menus`: context menus and dialogs.
 //! - `panels`: the Game Menu, log, chat, search, card library and token picker, the Space
 //!   preview, drag feedback and the per-frame `draw`.
+//! - `playmat_zones`: which zones are placed on the playmats in use, and where.
 //! - `card_render`, `selection`, `card_pool_grid`: shared drawing and geometry helpers.
 
 pub mod actions;
@@ -16,6 +17,7 @@ pub mod input;
 pub mod menus;
 pub mod network;
 pub mod panels;
+pub mod playmat_zones;
 pub mod screen;
 pub mod selection;
 pub mod view;
