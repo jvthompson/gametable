@@ -660,14 +660,14 @@ impl TableScreen {
     }
 
     pub(super) fn settings_dialog(&self) -> TableDialog {
-        TableDialog::Settings(SettingsDialog {
-            in_game: true,
-            game_colors: GameColors {
-                table_color: self.game.table_color.clone(),
-                playmat_border_color: self.game.playmat_border_color.clone(),
-                current_turn_color: self.game.current_turn_color.clone(),
-            },
-        })
+        let mut dialog = SettingsDialog::new();
+        dialog.in_game = true;
+        dialog.game_colors = GameColors {
+            table_color: self.game.table_color.clone(),
+            playmat_border_color: self.game.playmat_border_color.clone(),
+            current_turn_color: self.game.current_turn_color.clone(),
+        };
+        TableDialog::Settings(dialog)
     }
 
     /// Shows the open menu and dialogs and applies what they report.

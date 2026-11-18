@@ -949,6 +949,7 @@ impl ScenarioTab {
             width,
             y + height - row_y,
             12.0,
+            1.0,
             |frame, tile| {
                 let card = visible[tile.index];
                 let region = frame.ui.region(
@@ -1248,6 +1249,7 @@ impl ScenarioTab {
             width,
             y + height - row_y,
             12.0,
+            1.0,
             |frame, tile| {
                 let card = visible[tile.index];
                 let region = frame.ui.region(

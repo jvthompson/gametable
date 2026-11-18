@@ -295,7 +295,7 @@ impl TradeScreen {
         let mut hovered = None;
         let mut pressed = None;
         let grid_id = format!("tr:grid:{scope}");
-        frame.card_pool_grid(&grid_id, visible.len(), x, row_y, width, y + height - row_y, 0.0, |frame, tile| {
+        frame.card_pool_grid(&grid_id, visible.len(), x, row_y, width, y + height - row_y, 0.0, 1.0, |frame, tile| {
             let definition = visible[tile.index];
             let name_height = frame.card_pool_name_height();
             let count = owned.get(&definition.id).copied().unwrap_or(0);

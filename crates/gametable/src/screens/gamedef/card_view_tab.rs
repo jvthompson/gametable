@@ -17,13 +17,14 @@ use gametable_core::uuid::new_v4_uuid;
 use crate::app::Frame;
 use crate::data::file_system::join_path;
 use crate::data::image_resolver::resolve_card_back_image_path;
+use crate::data::settings::keys;
 use crate::graphics::draw_list::Color;
 use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::{
     FileImport, GAP, ImportResponse, display_card, display_card_backs, orientation_choices,
 };
 use crate::screens::gamedef::title_suggestion_dialogs::SuggestTitleFlow;
-use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE};
+use crate::table::card_pool_grid::{CardZoom, NAME_LINES, TILE_CARD_HEIGHT, TILE_SCALE};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw, orientation_turns};
 use crate::ui::card_filter_bar::{CardFilterState, LeadingButton};
 use crate::ui::components::{CHIP_HEIGHT, ChipOptions, Flow, TAB_BAR_HEIGHT};
@@ -94,6 +95,8 @@ pub struct CardViewTab {
     suggest_title: Option<SuggestTitleFlow>,
     /// Development hook: open Suggest Title on the next frame.
     open_suggest_title_next_frame: bool,
+    /// The card grid's zoom slider (GameTable addition).
+    card_zoom: CardZoom,
     /// Split handles: last mouse x while held.
     split_drag: HashMap<&'static str, f32>,
 }
@@ -115,6 +118,7 @@ impl CardViewTab {
             confirm_delete: None,
             suggest_title: None,
             open_suggest_title_next_frame: false,
+            card_zoom: CardZoom::new(keys::CARD_VIEW_CARD_ZOOM),
             split_drag: HashMap::new(),
         }
     }
@@ -294,53 +298,62 @@ impl CardViewTab {
     ) {
         let game = &model.game;
         let grid_y = y + 4.0;
-        let name_height = frame.card_pool_name_height();
+        let zoom = self.card_zoom.current(frame.settings);
         let mut clicked = None;
-        frame.card_pool_grid("cv:pool", visible.len(), x, grid_y, width, y + height - grid_y, 12.0, |frame, tile| {
-            let (index, key) = visible[tile.index];
-            let card = &game.cards()[index];
-            let region = frame.ui.region(
-                &format!("cv:card:{key}"),
-                tile.center_x - TILE_CARD_WIDTH / 2.0 - 4.0,
-                tile.y - 4.0,
-                TILE_CARD_WIDTH + 8.0,
-                TILE_CARD_HEIGHT + 8.0 + 2.0 + name_height,
-                RegionOptions::hand(),
-            );
-            let display = display_card(&model.folder_path, card);
-            let center_y = tile.y + TILE_CARD_HEIGHT / 2.0;
-            let draw = CardDraw::new(
-                Some(&display),
-                true,
-                tile.center_x,
-                center_y,
-                display_backs,
-                game.scenario_card_back_id.as_deref(),
-            )
-            .scale(TILE_SCALE)
-            .angle(orientation_turns(card.orientation) * 2.0 * PI);
-            frame.draw_card(&draw);
-            if self.selected_keys.contains(&key) {
-                // Match the card's footprint: turned cards are landscape around the same centre.
-                let turned = orientation_turns(card.orientation) != 0.0;
-                let (box_width, box_height) =
-                    if turned { (TILE_CARD_HEIGHT, TILE_CARD_WIDTH) } else { (TILE_CARD_WIDTH, TILE_CARD_HEIGHT) };
-                frame.outline_rect(
-                    tile.center_x - box_width / 2.0 - 4.0,
-                    center_y - box_height / 2.0 - 4.0,
-                    box_width + 8.0,
-                    box_height + 8.0,
-                    8.0,
-                    fixed::BLUE,
-                    2.0,
+        frame.card_pool_grid(
+            "cv:pool",
+            visible.len(),
+            x,
+            grid_y,
+            width,
+            y + height - grid_y,
+            12.0,
+            zoom,
+            |frame, tile| {
+                let (index, key) = visible[tile.index];
+                let card = &game.cards()[index];
+                let region = frame.ui.region(
+                    &format!("cv:card:{key}"),
+                    tile.center_x - tile.card_width / 2.0 - 4.0,
+                    tile.y - 4.0,
+                    tile.card_width + 8.0,
+                    tile.card_height + 8.0 + 2.0 + tile.name_height,
+                    RegionOptions::hand(),
                 );
-            }
-            let options = TextOptions::new().size(11.0).width(tile.width).centered().max_lines(NAME_LINES as usize);
-            frame.text(&card.card_title, tile.x, tile.y + TILE_CARD_HEIGHT + 6.0, options);
-            if region.clicked {
-                clicked = Some(key);
-            }
-        });
+                let display = display_card(&model.folder_path, card);
+                let center_y = tile.card_center_y();
+                let draw = CardDraw::new(
+                    Some(&display),
+                    true,
+                    tile.center_x,
+                    center_y,
+                    display_backs,
+                    game.scenario_card_back_id.as_deref(),
+                )
+                .scale(tile.card_scale)
+                .angle(orientation_turns(card.orientation) * 2.0 * PI);
+                frame.draw_card(&draw);
+                if self.selected_keys.contains(&key) {
+                    // Match the card's footprint: turned cards are landscape around the same centre.
+                    let turned = orientation_turns(card.orientation) != 0.0;
+                    let (box_width, box_height) =
+                        if turned { (tile.card_height, tile.card_width) } else { (tile.card_width, tile.card_height) };
+                    frame.outline_rect(
+                        tile.center_x - box_width / 2.0 - 4.0,
+                        center_y - box_height / 2.0 - 4.0,
+                        box_width + 8.0,
+                        box_height + 8.0,
+                        8.0,
+                        fixed::BLUE,
+                        2.0,
+                    );
+                }
+                frame.text(&card.card_title, tile.x, tile.name_y, tile.name_options());
+                if region.clicked {
+                    clicked = Some(key);
+                }
+            },
+        );
         if let Some(key) = clicked {
             self.handle_card_click(frame, key, visible);
             frame.ui.blur();
@@ -467,6 +480,7 @@ impl CardViewTab {
             width,
             height - 28.0,
             12.0,
+            1.0,
             |frame, tile| {
                 let card = &game.cards()[selected[tile.index]];
                 let display = display_card(&model.folder_path, card);
@@ -1267,16 +1281,19 @@ impl CardViewTab {
         let game = model.game.clone();
         let (filters_bottom, leading_clicked) =
             frame.card_filters("cv", &mut self.filters, &game, x + 12.0, y, width - 24.0, true, &leading);
+        // The search field shares its row with the card zoom control at the right.
+        let search_width = width - 24.0 - CardZoom::WIDTH - 12.0;
         let mut row_y = frame.card_search(
             "cv",
             &mut self.filters,
             &game,
             x + 12.0,
             filters_bottom + 12.0,
-            width - 24.0,
+            search_width,
             Some(palette.surface),
             None,
         );
+        self.card_zoom.control(frame, "cv:zoom", x + width - 12.0 - CardZoom::WIDTH, filters_bottom + 12.0);
         if leading_clicked.is_some() {
             self.add_blank_card(model);
         }

@@ -11,12 +11,13 @@ use gametable_core::models::{DeckConfig, DeckEntry, GameDefinition, SubDeck};
 
 use crate::app::{Frame, Screen, ScreenCommand};
 use crate::data::deck_store::{DeckStore, LocalDeckStore};
+use crate::data::settings::keys;
 use crate::graphics::draw_list::Color;
 use crate::graphics::tessellation::DrawMode;
 use crate::screens::deck_library_dialog::{DeckLibraryDialog, LoadDeckResponse, SaveDeckDialog, SaveDeckResponse};
 use crate::screens::game_picker::GamePicker;
 use crate::screens::rulebook_viewer::RulebookViewer;
-use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE};
+use crate::table::card_pool_grid::CardZoom;
 use crate::table::card_render::{CardDraw, definition_faces, orientation_turns};
 use crate::ui::card_filter_bar::CardFilterState;
 use crate::ui::components::{EDITOR_TOOLBAR_HEIGHT, ToolbarAction};
@@ -244,6 +245,8 @@ pub struct DeckEditor {
     /// For a GameTable server's decks (Phase 10); the local library otherwise.
     store: Option<Box<dyn DeckStore>>,
     filters: CardFilterState,
+    /// The card pool's zoom slider (GameTable addition).
+    card_zoom: CardZoom,
     rulebook: RulebookViewer,
     hovered_id: Option<String>,
     open_dialog: Option<DeckLibraryDialog>,
@@ -263,6 +266,7 @@ impl DeckEditor {
             builder: DeckBuilder::new(Rc::new(game), owned_quantities),
             store,
             filters,
+            card_zoom: CardZoom::new(keys::DECK_EDITOR_CARD_ZOOM),
             rulebook,
             hovered_id: None,
             open_dialog: None,
@@ -353,16 +357,19 @@ impl DeckEditor {
         let (filters_bottom, _) =
             frame.card_filters("de", &mut self.filters, &game, x + 12.0, y, width - 24.0, false, &[]);
         let surface = frame.palette().surface;
+        // The search field shares its row with the card zoom control at the right.
+        let search_width = width - 24.0 - CardZoom::WIDTH - 12.0;
         let row_y = frame.card_search(
             "de",
             &mut self.filters,
             &game,
             x + 12.0,
             filters_bottom + 12.0,
-            width - 24.0,
+            search_width,
             Some(surface),
             None,
         );
+        let zoom = self.card_zoom.control(frame, "de:zoom", x + width - 12.0 - CardZoom::WIDTH, filters_bottom + 12.0);
         let visible = self.builder.visible_card_ids(&self.filters);
         let (grid_y, grid_height) = (row_y, y + height - row_y);
         if visible.is_empty() && self.builder.owned_quantities.is_some() {
@@ -377,37 +384,30 @@ impl DeckEditor {
         let mut removed = None;
         let builder = &self.builder;
         let mut hovered = None;
-        frame.card_pool_grid("de:pool", visible.len(), x, grid_y, width, grid_height, 12.0, |frame, tile| {
+        frame.card_pool_grid("de:pool", visible.len(), x, grid_y, width, grid_height, 12.0, zoom, |frame, tile| {
             let Some(definition) = game.card_by_id(&visible[tile.index]) else { return };
-            let name_height = NAME_LINES * frame.fonts.height(crate::ui::theme::font(11.0, Weight::Regular));
             let region = frame.ui.region(
                 &format!("de:card:{}", definition.id),
-                tile.center_x - TILE_CARD_WIDTH / 2.0,
+                tile.center_x - tile.card_width / 2.0,
                 tile.y,
-                TILE_CARD_WIDTH,
-                TILE_CARD_HEIGHT + 6.0 + name_height,
+                tile.card_width,
+                tile.card_height + 6.0 + tile.name_height,
                 RegionOptions::hand(),
             );
             // Collection mode: a green badge counts the owned copies not yet in the deck, and the
             // card dims once they're all used.
             let limit = builder.owned_limit(&definition.id);
             let unused = limit.map(|limit| (limit - builder.copies_in_deck(&definition.id)).max(0));
-            let draw = CardDraw::new(
-                Some(definition),
-                true,
-                tile.center_x,
-                tile.y + TILE_CARD_HEIGHT / 2.0,
-                &game.card_backs,
-                None,
-            )
-            .scale(TILE_SCALE)
-            .alpha(if unused == Some(0) { 0.35 } else { 1.0 })
-            .angle(orientation_turns(definition.orientation) * 2.0 * PI);
+            let draw =
+                CardDraw::new(Some(definition), true, tile.center_x, tile.card_center_y(), &game.card_backs, None)
+                    .scale(tile.card_scale)
+                    .alpha(if unused == Some(0) { 0.35 } else { 1.0 })
+                    .angle(orientation_turns(definition.orientation) * 2.0 * PI);
             frame.draw_card(&draw);
             let in_deck = builder.active().quantity.get(&definition.id).copied();
             let count = in_deck.or(builder.owned_quantities.as_ref().map(|_| 0));
             if let Some(count) = count {
-                let (badge_x, badge_y) = (tile.center_x + TILE_CARD_WIDTH / 2.0 + 6.0 - 11.0, tile.y - 6.0 + 11.0);
+                let (badge_x, badge_y) = (tile.center_x + tile.card_width / 2.0 + 6.0 - 11.0, tile.y - 6.0 + 11.0);
                 DeckEditor::badge(
                     frame,
                     badge_x,
@@ -418,7 +418,7 @@ impl DeckEditor {
                 );
             }
             if let Some(unused) = unused {
-                let (badge_x, badge_y) = (tile.center_x - TILE_CARD_WIDTH / 2.0 - 6.0 + 11.0, tile.y - 6.0 + 11.0);
+                let (badge_x, badge_y) = (tile.center_x - tile.card_width / 2.0 - 6.0 + 11.0, tile.y - 6.0 + 11.0);
                 DeckEditor::badge(frame, badge_x, badge_y, NEON_CYAN, &unused.to_string(), fixed::BLACK);
             }
             let label = match limit {
@@ -427,8 +427,7 @@ impl DeckEditor {
                 }
                 None => definition.card_title.clone(),
             };
-            let options = TextOptions::new().size(11.0).width(tile.width).centered().max_lines(NAME_LINES as usize);
-            frame.text(&label, tile.x, tile.y + TILE_CARD_HEIGHT + 6.0, options);
+            frame.text(&label, tile.x, tile.name_y, tile.name_options());
             if region.hovered {
                 hovered = Some(definition.id.clone());
             }

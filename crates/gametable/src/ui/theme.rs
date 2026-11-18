@@ -138,14 +138,23 @@ pub enum Weight {
     Bold,
 }
 
-/// `theme.font(size, weight)`.
-pub fn font(size: f32, weight: Weight) -> FontKey {
-    let face = match weight {
+fn face_for(weight: Weight) -> FontFace {
+    match weight {
         Weight::Regular => FontFace::Regular,
         Weight::Medium => FontFace::Medium,
         Weight::Bold => FontFace::Bold,
-    };
-    FontKey::new(face, size)
+    }
+}
+
+/// `theme.font(size, weight)`: interface text, enlarged by the Text size setting.
+pub fn font(size: f32, weight: Weight) -> FontKey {
+    FontKey::new(face_for(weight), size)
+}
+
+/// Text drawn on the game table (card faces, counters, tokens, labels): keeps its designed size
+/// whatever the Text size setting, so it still fits the things it is drawn on.
+pub fn table_font(size: f32, weight: Weight) -> FontKey {
+    FontKey::fixed(face_for(weight), size)
 }
 
 /// `theme.iconFont(size)`.
@@ -231,6 +240,8 @@ pub fn icon_codepoint(name: &str) -> Option<char> {
         "layers" => 0xe53b,
         "widgets" => 0xe1bd,
         "image" => 0xe3f4,
+        "zoom_in" => 0xe8ff,
+        "zoom_out" => 0xe900,
         "send" => 0xe163,
         "shield" => 0xe9e0,
         "toll" => 0xe8e0,
@@ -271,6 +282,8 @@ mod tests {
         assert_eq!(mix(fixed::BLACK, fixed::WHITE, 0.5).red, 0.5);
         assert_eq!(with_alpha(fixed::WHITE, 0.5).alpha, 0.5);
         assert_eq!(glyph("close"), "\u{e5cd}");
-        assert_eq!(font(14.4, Weight::Medium), FontKey { face: FontFace::Medium, size: 14 });
+        assert_eq!(font(14.4, Weight::Medium), FontKey { face: FontFace::Medium, size: 14, follows_text_size: true });
+        assert!(!table_font(14.0, Weight::Bold).follows_text_size);
+        assert!(!icon_font(24.0).follows_text_size);
     }
 }

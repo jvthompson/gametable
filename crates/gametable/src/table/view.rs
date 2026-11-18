@@ -900,7 +900,7 @@ impl TableScreen {
                 TableScreen::argb(widget.background_color, alpha),
             );
         }
-        let font = theme::font(22.0, Weight::Bold);
+        let font = theme::table_font(22.0, Weight::Bold);
         let text = crate::table::panels::lua_number_text(widget.value);
         frame.ui.list().set_color(TableScreen::argb(widget.text_color, alpha));
         let text_width = frame.fonts.width(font, &text);
@@ -941,7 +941,7 @@ impl TableScreen {
             );
             list.set_stencil_test(None);
         } else {
-            let font = theme::font(11.0, Weight::Bold);
+            let font = theme::table_font(11.0, Weight::Bold);
             let scale = size / 80.0;
             let (_, lines) = frame.fonts.wrap(font, "Pack Generator", 72.0);
             let line_height = frame.fonts.height(font);
@@ -1024,7 +1024,7 @@ impl TableScreen {
             frame.circle(DrawMode::Line, center_x, center_y, size / 2.0, Color::rgba(0.0, 0.0, 0.0, 0.26 * alpha));
         }
         if !widget.text.is_empty() {
-            let font = theme::font(40.0, Weight::Bold);
+            let font = theme::table_font(40.0, Weight::Bold);
             frame.ui.list().set_color(TableScreen::argb(widget.text_color, alpha));
             let line_height = frame.fonts.height(font);
             let scale = (size * 0.8) / line_height;
@@ -1072,7 +1072,7 @@ impl TableScreen {
         if !widget.text.is_empty() {
             let padding = 6.0;
             let line_height = height * 0.8 / 3.0;
-            let font = theme::font(((line_height + 0.5).floor()).max(6.0), Weight::Bold);
+            let font = theme::table_font(((line_height + 0.5).floor()).max(6.0), Weight::Bold);
             let scale = line_height / frame.fonts.height(font);
             let wrap_width = ((width - padding * 2.0) / scale).max(1.0);
             let (_, lines) = frame.fonts.wrap(font, &widget.text, wrap_width);
@@ -1217,7 +1217,7 @@ impl TableScreen {
         frame.ui.list().set_color(Color::rgba(1.0, 1.0, 1.0, 0.7 * alpha));
         let icon_y = (DECK_HEADER - frame.fonts.height(icon_font)) / 2.0;
         frame.fonts.print(frame.ui.list(), icon_font, &theme::glyph("drag_indicator"), 0.0, icon_y);
-        let font = theme::font(11.0, Weight::Bold);
+        let font = theme::table_font(11.0, Weight::Bold);
         let shown = frame.ellipsize(&label, font, width / scale - DECK_PADDING * 2.0 - 18.0);
         frame.ui.list().set_color(Color::rgba(1.0, 1.0, 1.0, alpha));
         let label_y = (DECK_HEADER - frame.fonts.height(font)) / 2.0;
@@ -1291,7 +1291,7 @@ impl TableScreen {
                     Color::rgba(0.0, 0.0, 0.0, 0.06),
                 );
             }
-            let font = theme::font(14.0, Weight::Medium);
+            let font = theme::table_font(14.0, Weight::Medium);
             let color = if interactable { LIGHT.primary } else { LIGHT.disabled };
             frame.ui.list().set_color(with_alpha(color, alpha));
             let origin = (frame.fonts.width(font, "Save Deck") / 2.0, frame.fonts.height(font) / 2.0);
@@ -1822,7 +1822,7 @@ impl TableScreen {
         let is_local = player.id == self.local_player_id;
         let show_real = (is_practice && is_active) || (!is_practice && is_local);
         let alpha = if player.connected { 1.0 } else { 0.5 };
-        let name_font = theme::font(10.0, Weight::Regular);
+        let name_font = theme::table_font(10.0, Weight::Regular);
         let content_height = CARD_WIDTH + 4.0 + frame.fonts.height(name_font);
         let avatar_y = y + 8.0 + (CARD_HEIGHT + PILE_EXTRA - content_height) / 2.0;
         let avatar_x = x + (SLOT_WIDTH - CARD_WIDTH) / 2.0;

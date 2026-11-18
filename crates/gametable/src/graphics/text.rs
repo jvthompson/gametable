@@ -53,11 +53,20 @@ impl FontFace {
 pub struct FontKey {
     pub face: FontFace,
     pub size: u32,
+    /// Whether the user's Text size setting enlarges it. Interface text does; icons and text
+    /// drawn on the game table (card faces, counters, tokens) keep their designed size.
+    pub follows_text_size: bool,
 }
 
 impl FontKey {
+    /// Interface text (icons excepted) follows the Text size setting.
     pub fn new(face: FontFace, size: f32) -> FontKey {
-        FontKey { face, size: (size + 0.5).floor().max(1.0) as u32 }
+        FontKey { face, size: (size + 0.5).floor().max(1.0) as u32, follows_text_size: face != FontFace::Icons }
+    }
+
+    /// A font that ignores the Text size setting.
+    pub fn fixed(face: FontFace, size: f32) -> FontKey {
+        FontKey { follows_text_size: false, ..FontKey::new(face, size) }
     }
 }
 
@@ -276,6 +285,8 @@ pub struct FontLibrary {
     fonts_folder: PathBuf,
     tables: HashMap<FontFace, FontTables>,
     dpi_scale: f32,
+    /// The Text size setting: multiplies the size of fonts that follow it.
+    text_scale: f32,
     fonts: HashMap<FontKey, LoadedFont>,
     pages: Vec<AtlasPage>,
     /// Declared last so it is dropped (`TTF_Quit`) after every font is closed.
@@ -297,6 +308,7 @@ impl FontLibrary {
             fonts_folder: fonts_folder.to_path_buf(),
             tables,
             dpi_scale: 1.0,
+            text_scale: 1.0,
             fonts: HashMap::new(),
             pages: Vec::new(),
             _ttf_context: ttf_context,
@@ -313,6 +325,24 @@ impl FontLibrary {
             return;
         }
         self.dpi_scale = dpi_scale;
+        self.drop_rasterized_fonts();
+    }
+
+    pub fn text_scale(&self) -> f32 {
+        self.text_scale
+    }
+
+    /// Re-rasterizes interface text at a new Text size setting.
+    pub fn set_text_scale(&mut self, text_scale: f32) {
+        if text_scale == self.text_scale {
+            return;
+        }
+        self.text_scale = text_scale;
+        self.drop_rasterized_fonts();
+    }
+
+    /// Forgets every opened font and empties the glyph atlas, so text is rasterized again.
+    fn drop_rasterized_fonts(&mut self) {
         self.fonts.clear();
         // Pages already on the GPU are reused from empty; their textures stay allocated.
         for page in &mut self.pages {
@@ -327,7 +357,8 @@ impl FontLibrary {
 
     fn font(&mut self, key: FontKey) -> &mut LoadedFont {
         if !self.fonts.contains_key(&key) {
-            let pixel_size = pixel_size_for(key.size as f32, self.dpi_scale);
+            let text_scale = if key.follows_text_size { self.text_scale } else { 1.0 };
+            let pixel_size = pixel_size_for(key.size as f32 * text_scale, self.dpi_scale);
             let open = |face: FontFace| TtfFont::open(&self.fonts_folder.join(face.file_name()), pixel_size);
             let primary = open(key.face).unwrap_or_else(|error| panic!("{error}"));
             let fallback = key.face.fallback().and_then(|face| open(face).ok());

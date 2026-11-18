@@ -55,6 +55,41 @@ fn settings_store_the_claude_key_and_model() {
 }
 
 #[test]
+fn settings_sliders_set_the_ui_scale_and_text_size() {
+    let mut harness = UiHarness::new();
+    harness.height = 2400.0;
+    let mut dialog = SettingsDialog::new();
+    let mut draw = |frame: &mut Frame| {
+        dialog.show(frame);
+    };
+    harness.frame(|frame| draw(frame));
+    // A click in the middle of each track: UI scale 50%..200% and text size 75%..150%.
+    harness.click_region("settings:uiScale", &mut draw);
+    harness.frame(|frame| draw(frame));
+    assert_eq!(harness.settings.number(keys::UI_SCALE), Some(1.25));
+    harness.click_region("settings:textScale", &mut draw);
+    // 112.5% rounds to the 5% step above it, stored as a whole percentage.
+    assert_eq!(harness.settings.number(keys::TEXT_SCALE), Some(1.15));
+}
+
+#[test]
+fn card_view_zoom_buttons_resize_the_grid() {
+    let mut harness = UiHarness::new();
+    let mut model = model_with_cards(&["first", "second"]);
+    let mut tab = CardViewTab::new(&model.game);
+    let card_region = format!("cv:card:{}", model.card_keys.key(0));
+    let mut draw = |frame: &mut Frame| tab.draw(frame, &mut model, 0.0, 40.0, 1280.0, 680.0);
+    harness.frame(|frame| draw(frame));
+    let card_height_before = harness.ui.recorded_regions.as_ref().unwrap()[&card_region].3;
+    harness.click_region("cv:zoom:in", &mut draw);
+    harness.click_region("cv:zoom:in", &mut draw);
+    assert_eq!(harness.settings.number(keys::CARD_VIEW_CARD_ZOOM), Some(1.2));
+    harness.frame(|frame| draw(frame));
+    let card_height_after = harness.ui.recorded_regions.as_ref().unwrap()[&card_region].3;
+    assert!(card_height_after > card_height_before + 20.0, "{card_height_before} -> {card_height_after}");
+}
+
+#[test]
 fn suggest_title_fills_in_the_current_card() {
     let mut harness = UiHarness::new();
     let mut model = model_with_cards(&["059-ursula-power-hungry", "hack1033"]);

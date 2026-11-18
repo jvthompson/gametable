@@ -24,6 +24,12 @@ pub mod keys {
     pub const DARK_MODE: &str = "dark_mode_enabled";
     // Added by the LÖVE port:
     pub const UI_SCALE: &str = "ui_scale";
+    /// GameTable addition: multiplies interface text size only (1 = designed size).
+    pub const TEXT_SCALE: &str = "text_scale";
+    /// GameTable addition: the card grid zoom in the deck editor and the game definition
+    /// editor's Cards tab (1 = the original size).
+    pub const DECK_EDITOR_CARD_ZOOM: &str = "deck_editor_card_zoom";
+    pub const CARD_VIEW_CARD_ZOOM: &str = "card_view_card_zoom";
     pub const RECENT_SERVERS: &str = "recent_servers";
     pub const SELECTION_COLOR: &str = "selection_color";
     pub const FELT_COLOR: &str = "felt_color";

@@ -156,7 +156,7 @@ impl CollectionScreen {
         }
         // Same tile layout as the Deck Editor's card pool.
         let mut hovered = None;
-        frame.card_pool_grid("co:grid", visible.len(), x, row_y, width, y + height - row_y, 0.0, |frame, tile| {
+        frame.card_pool_grid("co:grid", visible.len(), x, row_y, width, y + height - row_y, 0.0, 1.0, |frame, tile| {
             let definition = visible[tile.index];
             let name_height = frame.card_pool_name_height();
             let count = owned.get(&definition.id).copied().unwrap_or(0);

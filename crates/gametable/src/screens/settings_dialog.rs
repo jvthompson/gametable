@@ -1,7 +1,10 @@
 //! The app Settings dialog, opened from Home and from the in-game menu. Port of
 //! `src/ui/screens/settings_dialog.lua`. New settings go here as sections: a heading, then rows.
 
-use crate::app::{Frame, UI_SCALE_OPTIONS, set_ui_scale_setting, ui_scale_setting};
+use crate::app::{
+    Frame, TEXT_SCALE_RANGE, TEXT_SCALE_STEP, UI_SCALE_RANGE, UI_SCALE_STEP, set_text_scale_setting,
+    set_ui_scale_setting, text_scale_setting, ui_scale_setting,
+};
 use crate::data::display_settings::{
     HAND_SETTINGS, TableColor, felt_texture_enabled, is_selection_color_default, reset_selection_color,
     selection_color, set_felt_texture_enabled, set_selection_color,
@@ -10,7 +13,6 @@ use crate::data::profile;
 use crate::data::settings::keys;
 use crate::data::title_suggestion::claude_vision::ClaudeModel;
 use crate::ui::draw::TextOptions;
-use crate::ui::dropdown::DropdownOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
 use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::Weight;
@@ -35,9 +37,17 @@ pub struct SettingsDialog {
     /// Opened over the game table (which always draws light).
     pub in_game: bool,
     pub game_colors: GameColors,
+    /// The UI scale while its slider is dragged: applied on release, because rescaling the
+    /// whole app under the mouse mid-drag would move the slider away from it.
+    ui_scale_being_dragged: Option<f32>,
 }
 
 const SUBTITLE_SIZE: f32 = 12.0;
+
+/// A slider value as a percentage, marking 100% as the default.
+fn percent_with_default(value: f32) -> String {
+    if (value - 1.0).abs() < 0.001 { "100% (Default)".to_string() } else { percent(value) }
+}
 
 impl SettingsDialog {
     pub fn new() -> SettingsDialog {
@@ -136,21 +146,49 @@ impl SettingsDialog {
             let mut row_y = y;
 
             row_y += Self::heading(frame, "Display", x, row_y);
-            let choices: Vec<Choice<f32>> = UI_SCALE_OPTIONS
-                .iter()
-                .map(|&value| {
-                    Choice::new(value, if value == 1.0 { "100% (Default)".to_string() } else { percent(value) })
-                })
-                .collect();
-            let current = ui_scale_setting(frame.settings);
-            let dropdown_options =
-                DropdownOptions { label: Some("UI scale"), label_background, ..DropdownOptions::default() };
-            let picked =
-                frame.dropdown("settings:uiScale", x, row_y + 6.0, width, &choices, current, &dropdown_options);
-            if picked != current {
-                set_ui_scale_setting(frame.settings, picked);
+            let format_percent = |value: f32| percent_with_default(value);
+            let (minimum, maximum) = UI_SCALE_RANGE;
+            let shown_ui_scale = self.ui_scale_being_dragged.unwrap_or_else(|| ui_scale_setting(frame.settings));
+            let slider_options = SliderOptions { step: Some(UI_SCALE_STEP), disabled: false };
+            let (new_ui_scale, held) = frame.slider_row(
+                "settings:uiScale",
+                "UI scale",
+                x,
+                row_y,
+                width,
+                shown_ui_scale,
+                minimum,
+                maximum,
+                &slider_options,
+                Some(&format_percent),
+            );
+            if held {
+                self.ui_scale_being_dragged = Some(new_ui_scale);
+            } else if let Some(released_at) = self.ui_scale_being_dragged.take() {
+                set_ui_scale_setting(frame.settings, released_at);
             }
-            row_y += 6.0 + 48.0 + 8.0;
+            row_y += 64.0;
+
+            let (minimum, maximum) = TEXT_SCALE_RANGE;
+            let current_text_scale = text_scale_setting(frame.settings);
+            let slider_options = SliderOptions { step: Some(TEXT_SCALE_STEP), disabled: false };
+            let (new_text_scale, _) = frame.slider_row(
+                "settings:textScale",
+                "Text size",
+                x,
+                row_y,
+                width,
+                current_text_scale,
+                minimum,
+                maximum,
+                &slider_options,
+                Some(&format_percent),
+            );
+            // Applied live (the app picks it up next frame): only text grows, so the slider stays put.
+            if (new_text_scale - current_text_scale).abs() > 0.001 {
+                set_text_scale_setting(frame.settings, new_text_scale);
+            }
+            row_y += 64.0;
             let (dpi, effective) = (frame.dpi_scale, frame.scale);
             let mut note =
                 format!("Windows display scaling: {}. Effective scale: {}.", percent(dpi), percent(effective));

@@ -43,8 +43,12 @@ use window_chrome::{ChromeState, TITLE_BAR_HEIGHT};
 /// Logical minimum window size; the layouts are designed for at least this.
 pub const MINIMUM_WIDTH: f32 = 960.0;
 pub const MINIMUM_HEIGHT: f32 = 600.0;
-/// The UI scale options offered in Settings.
-pub const UI_SCALE_OPTIONS: [f32; 8] = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+/// The UI scale slider's range and step in Settings (stored values are clamped to 0.5..3).
+pub const UI_SCALE_RANGE: (f32, f32) = (0.5, 2.0);
+pub const UI_SCALE_STEP: f32 = 0.05;
+/// The Text size slider's range and step in Settings.
+pub const TEXT_SCALE_RANGE: (f32, f32) = (0.75, 1.5);
+pub const TEXT_SCALE_STEP: f32 = 0.05;
 
 /// What a screen asks the shell to do after an event or frame.
 pub enum ScreenCommand {
@@ -220,7 +224,28 @@ pub fn set_ui_scale_setting(settings: &mut Settings, value: f32) {
     if value == 1.0 {
         settings.remove(keys::UI_SCALE);
     } else {
-        settings.set(keys::UI_SCALE, f64::from(value));
+        settings.set(keys::UI_SCALE, whole_percent(value));
+    }
+}
+
+/// A slider value rounded to a whole percentage for storing (`1.1499999` → `1.15`).
+fn whole_percent(value: f32) -> f64 {
+    (f64::from(value) * 100.0).round() / 100.0
+}
+
+/// The Text size setting (GameTable addition): multiplies interface text only, clamped to
+/// [`TEXT_SCALE_RANGE`].
+pub fn text_scale_setting(settings: &Settings) -> f32 {
+    let (minimum, maximum) = TEXT_SCALE_RANGE;
+    (settings.number(keys::TEXT_SCALE).unwrap_or(1.0) as f32).clamp(minimum, maximum)
+}
+
+/// 1 is the default and isn't stored.
+pub fn set_text_scale_setting(settings: &mut Settings, value: f32) {
+    if (value - 1.0).abs() < 0.001 {
+        settings.remove(keys::TEXT_SCALE);
+    } else {
+        settings.set(keys::TEXT_SCALE, whole_percent(value));
     }
 }
 
@@ -425,6 +450,7 @@ impl App {
 
     /// `applyScale`: updates fonts, the hit test and the minimum window size when the scale moves.
     fn apply_scale(&mut self, force: bool) {
+        self.fonts.set_text_scale(text_scale_setting(&self.settings));
         let scale = effective_scale(self.dpi_scale(), ui_scale_setting(&self.settings), self.desktop_size());
         if scale == self.applied_scale && !force {
             return;
@@ -896,6 +922,18 @@ mod tests {
         assert_eq!(effective_scale(1.0, 1.0, Some((2560.0, 1440.0))), 1.0);
         assert_eq!(effective_scale(1.5, 2.0, Some((2560.0, 1440.0))), 1440.0 / 640.0);
         assert_eq!(effective_scale(1.0, 0.1, None), 0.5);
+    }
+
+    #[test]
+    fn text_scale_setting_round_trip() {
+        let mut settings = Settings::in_memory();
+        assert_eq!(text_scale_setting(&settings), 1.0);
+        set_text_scale_setting(&mut settings, 1.25);
+        assert_eq!(text_scale_setting(&settings), 1.25);
+        settings.set(keys::TEXT_SCALE, 9.0);
+        assert_eq!(text_scale_setting(&settings), TEXT_SCALE_RANGE.1);
+        set_text_scale_setting(&mut settings, 1.0);
+        assert!(settings.get(keys::TEXT_SCALE).is_none());
     }
 
     #[test]

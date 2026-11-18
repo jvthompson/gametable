@@ -372,6 +372,19 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   - Local OCR on samples: Middle Earth and Lorcana titles read correctly (Lorcana only the first line), stylised
     .hack and Spellfire titles mostly misread — Claude is the accurate option. Not done: a per-game "title area"
     box for OCR; a real Claude call (needs the user's key).
+- [x] **UI scale and Text size sliders** (Settings → Display). UI scale is a slider from 50% to 200% in 5% steps
+  (the original's dropdown had fixed choices), applied when the slider is released. Text size (`text_scale`,
+  75%–150%) enlarges interface text only: `FontLibrary::set_text_scale` multiplies the size of fonts whose
+  `FontKey::follows_text_size` is set. `theme::font` follows it; `theme::icon_font` and `theme::table_font` (all
+  text drawn in the table scene: card faces, counters, tokens, avatar names) don't, so it still fits what it is
+  drawn on. Layout sizes stay the same, so at 150% some tight fields fill their boxes. (A trial that scaled
+  everything with monitor resolution, 2560x1440 = 100%, made text too small at 1080p and was dropped.)
+- [x] **Card grid zoom** in the deck editor and the game definition editor's Cards tab: a zoom-out button, slider
+  (60%–250%) and zoom-in button at the right of the search row (`table/card_pool_grid.rs::CardZoom`). It scales
+  each tile's card image and name text (names never below 9pt); each screen remembers its own zoom
+  (`deck_editor_card_zoom`, `card_view_card_zoom`), saved when the slider is released. `card_pool_grid` takes the
+  zoom and hands each tile its card size, card scale and name position; the other grids (scenario, collection,
+  trade, multi-select preview) pass 1.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -665,3 +678,6 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   with their own key and works.
 - 2026-11-17: **Release `v0.2.0+41`** (Suggest Title, colours, deploy script), the first release published to test
   the self-updater from an earlier GameTable install (`v0.2.0+40`).
+- 2026-11-17: Tried scaling the whole UI with monitor resolution on a branch; the user found text too small at
+  1080p, so the branch was deleted. Instead: a UI scale slider and a separate Text size slider (see "Beyond the
+  port"), checked with screenshots at 100% and 150% text size.

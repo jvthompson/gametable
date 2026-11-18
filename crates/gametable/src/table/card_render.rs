@@ -196,7 +196,7 @@ impl Frame<'_> {
         origin: (f32, f32),
         extra_scale: f32,
     ) {
-        let font = theme::font(size * text_scale, weight);
+        let font = theme::table_font(size * text_scale, weight);
         let scale = extra_scale / text_scale;
         self.print_transformed(text, font, x, y, 0.0, scale, scale, origin.0 * text_scale, origin.1 * text_scale);
     }
@@ -290,7 +290,7 @@ impl Frame<'_> {
         self.ui.list().pop();
         let center_text = glyph.unwrap_or(&definition.card_title).to_string();
         let size = if glyph.is_some() { 34.0 } else { 22.0 };
-        let base = theme::font(size, Weight::Bold);
+        let base = theme::table_font(size, Weight::Bold);
         self.ui.list().set_color(Color { alpha, ..color });
         let text_width = self.fonts.width(base, &center_text);
         let fit = ((CARD_WIDTH - 8.0) / text_width.max(1.0)).min(1.0);
@@ -495,7 +495,7 @@ impl Frame<'_> {
         let list = self.ui.list();
         list.set_color(Color::rgba(0.0, 0.0, 0.0, 0.87));
         list.circle(DrawMode::Fill, center_x, center_y, 12.0 * scale, None);
-        let font = theme::font(11.0, Weight::Regular);
+        let font = theme::table_font(11.0, Weight::Regular);
         let text = count.to_string();
         let origin = (self.fonts.width(font, &text) / 2.0, self.fonts.height(font) / 2.0);
         self.ui.list().set_color(Color::WHITE);
