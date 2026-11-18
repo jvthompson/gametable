@@ -773,3 +773,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   used for every card. Checked by screenshot (the dialog on Lorcana) and by real local OCR on two Lorcana cards.
 - 2026-11-17: Suggest Title learns the game's name/subtitle separator (remembered per game once chosen), fixes
   all-capital titles to title case, and gives Claude the game's style and example titles.
+- 2026-11-18: **Release `v0.2.0+42`** (playmat zones, Ctrl-drag zone positions, see-through hand areas, F12-only
+  playmats, Suggest Title areas and title style). The tag's CI run passed on all three platforms and attached the
+  Windows (18.8 MB), Linux (20.3 MB) and macOS (34.1 MB) zips. The live server was redeployed with the new
+  `requestSetPlaymatZonePositions` handling (dry run first; backup `~/backups/20261118-041542`). The library re-save
+  check matched apart from the user's own Lorcana `zonePlacements`, which the original Lua models drop.
