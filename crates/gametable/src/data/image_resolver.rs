@@ -4,7 +4,6 @@
 //! [`clear_existence_cache`] after the files change (editor saves, Refresh).
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
 use gametable_core::models::{
@@ -17,7 +16,7 @@ static FILE_EXISTS_CACHE: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new
 
 fn file_exists(path: &str) -> bool {
     let mut cache = FILE_EXISTS_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    *cache.entry(path.to_string()).or_insert_with(|| Path::new(path).is_file())
+    *cache.entry(path.to_string()).or_insert_with(|| crate::data::game_files::is_file(path))
 }
 
 /// `R.clearCache()`: forget every remembered existence check.

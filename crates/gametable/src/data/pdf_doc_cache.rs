@@ -53,7 +53,7 @@ pub struct PdfDocCache {
 
 /// The worker: owns the document for its whole life.
 fn run_worker(path: String, requests: Receiver<WorkerRequest>, replies: Sender<WorkerReply>) {
-    let opened = std::fs::read(&path).map_err(|error| error.to_string()).and_then(PdfDocument::open);
+    let opened = crate::data::game_files::read(&path).map_err(|error| error.to_string()).and_then(PdfDocument::open);
     let document = match opened {
         Ok(document) => {
             let sizes =

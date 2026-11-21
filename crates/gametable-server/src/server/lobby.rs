@@ -99,7 +99,7 @@ impl Server {
                 ("sets", JsonValue::Array(sets.collect())),
                 ("starterDecks", JsonValue::Array(starter_decks.collect())),
                 ("cardCount", game.cards.len().into()),
-                ("removable", game.folder.is_some().into()),
+                ("removable", game.is_removable().into()),
             ])
         });
         JsonValue::Array(games.collect())

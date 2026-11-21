@@ -139,8 +139,20 @@ pub fn load_game_definition_file(json_path: &str, folder_path: &str) -> Result<G
     Ok(game)
 }
 
+/// A `.gamedef` package's game for the editor's list: image paths left bare, and the folder path
+/// is the package (so the entry screen can offer to extract it).
+pub fn load_packaged_game_definition(package_path: &str) -> Result<GameDefinition, String> {
+    let archive = gametable_core::game_archive::open_game_archive(Path::new(package_path))?;
+    let bytes = archive.game_definition_bytes()?;
+    let raw = json::decode_bytes(&bytes).map_err(|error| error.to_string())?;
+    let mut game = GameDefinition::from_json(&raw).map_err(|error| error.to_string())?;
+    game.folder_path = Some(package_path.to_string());
+    Ok(game)
+}
+
 /// `O.scanGameLibrary`: every direct subfolder holding a loadable `gamedef.json`, by name ignoring
-/// case. Unloadable files are skipped.
+/// case. Unloadable files are skipped. GameTable addition: `.gamedef` packages are listed too,
+/// unless a folder with the same game id is already there to edit.
 pub fn scan_game_library(root: &str) -> Result<Vec<GameDefinition>, String> {
     let entries = match list_folder(Path::new(root)) {
         Some(entries) => entries,
@@ -148,14 +160,24 @@ pub fn scan_game_library(root: &str) -> Result<Vec<GameDefinition>, String> {
         None => return Err(format!("{root}: cannot be read")),
     };
     let mut games: Vec<GameDefinition> = entries
-        .into_iter()
-        .filter(|entry| entry.is_folder)
+        .iter()
+        .filter(|entry| entry.is_folder && !entry.name.starts_with('.'))
         .filter_map(|entry| {
             let folder = join_path(&[root, &entry.name]);
             let path = find_game_definition_file(&folder)?;
             load_game_definition_file(&path, &folder).ok()
         })
         .collect();
+    let packaged_games: Vec<GameDefinition> = entries
+        .iter()
+        .filter(|entry| !entry.is_folder && gametable_core::game_archive::is_game_package_path(&entry.name))
+        .filter_map(|entry| load_packaged_game_definition(&join_path(&[root, &entry.name])).ok())
+        .collect();
+    for packaged_game in packaged_games {
+        if !games.iter().any(|game| game.id == packaged_game.id) {
+            games.push(packaged_game);
+        }
+    }
     games.sort_by_key(|game| game.name.to_lowercase());
     Ok(games)
 }

@@ -4,6 +4,7 @@
 //! thread that first reuses identical copies already on this computer and downloads the rest over
 //! a second connection. Port of `src/net/asset_sync.lua` and `asset_worker.lua`.
 
+use gametable_core::game_archive::{is_game_package_path, open_game_archive};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -16,6 +17,7 @@ use gametable_core::models::GameDefinition;
 use sha2::{Digest, Sha256};
 
 use crate::data::file_system::{base_name, is_same_path, join_path, list_folder, parent_folder};
+use crate::data::game_files;
 use crate::data::game_loader::load_from_folder;
 use crate::data::image_resolver::clear_existence_cache;
 use crate::net::asset_channel::AssetChannel;
@@ -117,11 +119,24 @@ enum WorkerMessage {
     Error(String),
 }
 
-/// Local game folders whose `gamedef.json` has this game's id.
+/// Local game folders whose `gamedef.json` has this game's id, and `.gamedef` packages of it
+/// (read through `game_files`, so a package works as a folder here).
 fn local_game_folders(job: &DownloadJob) -> Vec<String> {
     let mut folders = Vec::new();
     for entry in list_folder(Path::new(&job.games_folder)).unwrap_or_default() {
         if !entry.is_folder {
+            let package = join_path(&[&job.games_folder, &entry.name]);
+            if is_game_package_path(&entry.name)
+                && open_game_archive(Path::new(&package))
+                    .ok()
+                    .and_then(|archive| archive.game_definition_bytes().ok())
+                    .and_then(|bytes| json::decode_bytes(&bytes).ok())
+                    .and_then(|value| value.get("id").and_then(JsonValue::as_str).map(str::to_string))
+                    .as_deref()
+                    == Some(job.game_id.as_str())
+            {
+                folders.push(package);
+            }
             continue;
         }
         let folder = join_path(&[&job.games_folder, &entry.name]);
@@ -147,7 +162,7 @@ fn source_folders(job: &DownloadJob) -> Vec<String> {
     let mut folders = Vec::new();
     let mut seen = HashSet::new();
     let mut add = |folder: String| {
-        if seen.insert(folder.to_lowercase()) && Path::new(&folder).is_dir() {
+        if seen.insert(folder.to_lowercase()) && game_files::is_dir(&folder) {
             folders.push(folder);
         }
     };
@@ -177,7 +192,7 @@ fn reuse_local(
         let source = local_path(folder, &file.path);
         let directory = parent_folder(&source);
         let listing = sizes.entry(directory.clone()).or_insert_with(|| {
-            list_folder(Path::new(&directory))
+            game_files::list_folder(&directory)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|entry| !entry.is_folder)
@@ -188,7 +203,7 @@ fn reuse_local(
         if file.size.is_some_and(|wanted| wanted != size) && size != 0 {
             continue;
         }
-        let Ok(data) = std::fs::read(&source) else { continue };
+        let Ok(data) = game_files::read(&source) else { continue };
         if sha256_hex(&data) != file.sha256 {
             continue;
         }

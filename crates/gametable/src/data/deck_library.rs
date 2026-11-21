@@ -9,7 +9,8 @@ use std::path::Path;
 use gametable_core::json::{self, JsonValue};
 use gametable_core::models::{DeckConfig, GameDefinition, ModelError};
 
-use super::file_system::{join_path, list_folder};
+use super::file_system::join_path;
+use super::game_files;
 
 /// A readable deck for the game.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,13 +59,13 @@ fn has_json_extension(name: &str) -> bool {
 
 /// Reads one deck file as the scan does: `None` when it isn't a JSON object.
 fn read_raw_object(path: &str) -> Option<JsonValue> {
-    let bytes = std::fs::read(path).unwrap_or_default();
+    let bytes = game_files::read(path).unwrap_or_default();
     json::decode_bytes(&bytes).ok().filter(|raw| matches!(raw, JsonValue::Object(_) | JsonValue::Array(_)))
 }
 
 fn scan_folder(folder: &str, game: &GameDefinition, is_built_in: bool) -> DeckScan {
     let mut scan = DeckScan::default();
-    for item in list_folder(Path::new(folder)).unwrap_or_default() {
+    for item in game_files::list_folder(folder).unwrap_or_default() {
         if item.is_folder || !has_json_extension(&item.name) {
             continue;
         }
@@ -103,7 +104,7 @@ pub fn load_decks_for_game(root_path: &str, game: &GameDefinition) -> DeckScan {
 /// A game's built-in decks folder: `_decks` when present, else `decks`.
 pub fn built_in_decks_folder(folder_path: &str) -> String {
     let preferred = join_path(&[folder_path, "_decks"]);
-    if Path::new(&preferred).is_dir() { preferred } else { join_path(&[folder_path, "decks"]) }
+    if game_files::is_dir(&preferred) { preferred } else { join_path(&[folder_path, "decks"]) }
 }
 
 pub fn load_built_in_decks_for_game(game: &GameDefinition) -> DeckScan {

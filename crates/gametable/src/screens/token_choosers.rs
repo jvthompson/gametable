@@ -2,14 +2,11 @@
 //! definition editor. Ports of `tokenFolderImages`, `imagePreviewBox`, `chooseTokenImage`,
 //! `chooseToken`, `chooseImage` and `stepper` from `src/ui/screens/gamedef/common.lua`.
 
-use std::path::Path;
-
 use gametable_core::models::GameDefinition;
 
 use crate::app::Frame;
-use crate::data::file_system::{
-    is_same_path, join_path, list_folder, lowercase_extension, parent_folder, strip_extension,
-};
+use crate::data::file_system::{is_same_path, join_path, lowercase_extension, parent_folder, strip_extension};
+use crate::data::game_files;
 use crate::data::image_resolver::clear_existence_cache;
 use crate::graphics::image_cache::ImageStatus;
 use crate::screens::file_picker::{FilePicker, FilePickerResponse, IMAGE_FILTERS, PickerMode};
@@ -47,7 +44,7 @@ pub fn token_folder_images(
     let folder = join_path(&[folder_path, root_name, sub_path]);
     let relative_of = |name: &str| if sub_path.is_empty() { name.to_string() } else { format!("{sub_path}/{name}") };
     let (mut images, mut links) = (Vec::new(), Vec::new());
-    for entry in list_folder(Path::new(&folder)).unwrap_or_default() {
+    for entry in game_files::list_folder(&folder).unwrap_or_default() {
         if entry.is_folder {
             links.push(FolderLink { name: entry.name.clone(), relative: relative_of(&entry.name) });
         } else if matches!(lowercase_extension(&entry.name).as_str(), ".png" | ".jpg" | ".jpeg" | ".webp") {
@@ -262,7 +259,10 @@ impl TokenChooser {
             }
             ChooserMode::Folder { root_name, sub_path, .. } => {
                 let palette = frame.palette();
-                let add_options = ButtonOptions::variant(ButtonVariant::Outlined).icon("add").id("ctok:add");
+                // A `.gamedef` package can't take new images.
+                let is_packaged = folder_path.as_deref().is_some_and(game_files::is_packaged_game_folder);
+                let add_options =
+                    ButtonOptions::variant(ButtonVariant::Outlined).icon("add").id("ctok:add").disabled(is_packaged);
                 let add_width = frame.button_width("Add Image...", &add_options);
                 if frame.button("Add Image...", x, y, Some(add_width), Some(40.0), &add_options) {
                     open_add_picker = true;

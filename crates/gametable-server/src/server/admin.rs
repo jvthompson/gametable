@@ -369,6 +369,16 @@ impl Request<'_> {
             self.fail("noGame", "The server doesn't have that game.");
             return None;
         };
+        if game.package.is_some() {
+            let message = format!(
+                "{} is installed as a .gamedef package, so its files can't be changed here. Upload a new package \
+                 instead.",
+                game.name
+            );
+            drop(library);
+            self.fail("packaged", &message);
+            return None;
+        }
         let (Some(folder), Some(full_path)) = (game.folder.clone(), game_file_path(game, relative_path)) else {
             drop(library);
             self.fail("noFolder", "This game has no files on disk.");
@@ -465,7 +475,11 @@ impl Request<'_> {
                 self.fail("noGame", "The server doesn't have that game.");
                 return;
             };
-            (game.name.clone(), game.folder.clone())
+            let files = game
+                .folder
+                .clone()
+                .or_else(|| game.package.as_ref().map(|package| package.package_path().to_path_buf()));
+            (game.name.clone(), files)
         };
         let Some(folder) = folder else {
             self.fail("builtIn", "This game is built into the server and can't be removed.");
@@ -476,7 +490,10 @@ impl Request<'_> {
         for room_id in rooms_to_close {
             server.close_room(&room_id, "gameRemoved");
         }
-        if std::fs::remove_dir_all(&folder).is_err() && folder.exists() {
+        // A package's open copy holds its file; let go of it first.
+        gametable_core::game_archive::forget_game_archive(&folder);
+        let removed = if folder.is_dir() { std::fs::remove_dir_all(&folder) } else { std::fs::remove_file(&folder) };
+        if removed.is_err() && folder.exists() {
             self.fail("internal", "Could not delete the game's files.");
             return;
         }

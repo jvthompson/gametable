@@ -66,7 +66,7 @@ Nothing is added to a `Cargo.toml` until the user approves it. Record approvals 
 | `sdl3` (gpu, ttf, image, build-from-source-static) | client | SDL3 bindings (fallback: `sdl3-sys` family) | yes (2026-11-15), in use (static since Phase 10b) |
 | `pdfium-render` | client | PDF rulebooks | yes (2026-11-15), not used: `pdfium.dll` is bound directly with `libloading` (14 functions, as the original's FFI) |
 | `ureq` (rustls) | client | HTTPS: GitHub release check/download, ipify | yes (2026-11-15), in use (updater) |
-| `zip` | client, server | updater extraction, admin game upload/install | yes (2026-11-15), in use (server and client admin zip check, `deflate` only) |
+| `zip` | client, server, core | updater extraction, admin game upload/install, `.gamedef` packages | yes (2026-11-15), in use (server and client admin zip check, `deflate` only); added to `gametable-core` 2026-11-21 for the shared `.gamedef` reader |
 | `igd-next` | client | UPnP port mapping (alternative: hand-port SSDP/SOAP) | yes (2026-11-15) |
 | `libloading` | client | load `discord_partner_sdk.dll` at runtime | yes (2026-11-15) |
 | `md-5` | client | avatar cache keys | yes (2026-11-15) |
@@ -648,10 +648,37 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   A `folder_zip` button left of Save packs the whole game folder into `<folder name>.gamedef` beside it in the game
   library (`lorcana` -> `<library>/lorcana.gamedef`). It is a plain zip with the folder at its root, the layout
   `validate_game_zip` / the admin game upload expect; images are stored, other files deflated, `.gametable-tmp`
-  leftovers skipped. Unsaved changes are saved first (the "Cards Without a Set" warning still applies; Cancel there
+  leftovers skipped, and so are cache/runtime folders (`_cache`, `__pycache__`, `savegames`, `gamelogs`, dot
+  folders; Spellfire's `_cache/atlases` was 1.3 GB of old CardTable texture atlases), and `.py` scripts used to build
+  a game. `flate2`, `miniz_oxide`,
+  `zlib-rs`, `crc32fast` and `zip` build with `opt-level = 3` in dev, since unoptimized Deflate ran at ~3 MB/s. Unsaved changes are saved first (the "Cards Without a Set" warning still applies; Cancel there
   stops the zip). Asks before replacing an existing package; packs on a background thread behind a progress dialog
   with Cancel, writing to a temporary file that only replaces the package once complete. Dev hook:
   `GAMETABLE_GAMEDEF_TAB=savetozip`.
+- [x] **Play games straight from `.gamedef` packages** (2026-11-21). A `.gamedef` (zip with the game folder at its
+  root, as Save to Zip writes) in the game library is a complete game, played in place without unzipping; loose
+  folders still work, and a package wins over a folder with the same id.
+  - `gametable-core/src/game_archive.rs`: `GameArchive` (table of contents read once, one zip reader behind a mutex,
+    case-insensitive fallback lookups, refuses multi-root or unsafe zips), `split_package_path`, and a shared cache
+    (`open_game_archive`, reopened when the file changes; `forget_game_archive` before replacing or deleting one).
+  - A packaged game's `folder_path` is the package file, so paths such as `<lib>/lorcana.gamedef/1st/x.webp` are
+    unique ImageCache keys. `data/game_files.rs` (`read`, `is_file`, `is_dir`, `list_folder`) reads them; the image
+    workers, existence cache, rulebook (PDF + markdown), built-in decks and token folders go through it.
+  - `game_loader::load_games_from_folder` loads `*.gamedef` too and skips dot entries. Save games and logs of a
+    packaged game go to `<lib>/.gamedata/<id>/` (`writable_game_folder`); adding token images is disabled for one.
+  - Home: dropping a `.gamedef` (`Screen::file_dropped`) checks it with `validate_game_zip`, asks Install/Replace
+    (notes a same-id folder it will shadow), copies it to `<lib>/<id>.gamedef` on a thread with a progress bar
+    (`data/game_install.rs`). Dev hooks: `GAMETABLE_HOME_OPEN=drop:<file>`, `GAMETABLE_GAMES_FOLDER=<folder>` (use
+    another library without saving it).
+  - Editor: the game list shows packages (".gamedef package"); picking one offers Extract to `<lib>/<id>/`
+    (`data/game_extract.rs`, temp folder then rename), then opens it. While a package sits beside an open folder the
+    title says "plays from <id>.gamedef; Save to Zip to update it". Dev hook `GAMETABLE_SCREEN=gamedef_entry` with
+    `GAMETABLE_GAMEDEF_EXTRACT=<id>`.
+  - Lobby downloads reuse files from a local package with the same id (`asset_sync::local_game_folders`).
+  - Server: `GameLibrary::scan` loads `<games>/*.gamedef` (`ServerGame::package`), serving `read_file`/`open_file`/
+    built-in decks from the zip; the manifest uses the folder walk's rules, so its hash equals the unpacked game's
+    (tested). Admin file list/upload/delete refuse packaged games; deleting the game removes the package; admin
+    install still unzips.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -1016,3 +1043,11 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   scratch copy of Megaman with 24 Lorcana PNGs (7.1 MB -> 1.2 MB, 24 cards pointing at the `.webp` files).
 - 2026-11-21: **Save to Zip** on the editor toolbar (see "Beyond the port"); checked on the scratch Megaman copy:
   585 files, 68.5 MB `megaman.gamedef`, archive tests clean.
+- 2026-11-21: **`.gamedef` packages** (see "Beyond the port"). Checked in the app on scratch libraries only: the
+  Install prompt from a dropped file, MegaMan cards and backs played from its package, and a packaged copy of
+  Arkham Horror (1 GB) showing its PDF rulebook, game board, tokens and built-in starter deck; the editor's package
+  tiles, Extract prompt and the "plays from" title note. The server scanned a package (585 files). Not yet tried: a
+  real drag from Explorer, a client downloading a packaged game from the lobby server, and Extract run from the app.
+- 2026-11-21: Save to Zip crawled on Spellfire once it reached `_cache/atlases` (76 extension-less files, 1.3 GB,
+  deflated by an unoptimized compressor). Those folders are now left out, and the zip crates build optimized in dev:
+  116 MB of those atlases now pack in ~4.5 s.

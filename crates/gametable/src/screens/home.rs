@@ -5,7 +5,11 @@
 
 use gametable_core::protocol::DEFAULT_GAME_PORT;
 
+use std::path::Path;
+
 use crate::app::{Frame, Screen, ScreenCommand};
+use crate::data::game_install::{GameInstallJob, InstallPlan, plan_install};
+use crate::data::image_resolver::clear_existence_cache;
 use crate::data::profile::{self, RecentServer};
 use crate::platform::updater::{self, AvailableRelease, UpdateJob, UpdateProgress};
 use crate::screens::deck_editor::DeckEditorGameSelect;
@@ -68,6 +72,10 @@ enum HomeDialog {
         quit_at: Option<f64>,
     },
     UpdateFailed(String),
+    /// A dropped `.gamedef`, waiting for "Install".
+    ConfirmInstall(InstallPlan),
+    /// Copying it into the game library.
+    Installing(GameInstallJob),
 }
 
 /// `PHASE_LABELS`, with the download line.
@@ -95,8 +103,8 @@ pub struct Home {
     dialog: Option<HomeDialog>,
     /// A newer release found by the launch check (`updater.state`).
     update_available: Option<AvailableRelease>,
-    /// Development hook (`GAMETABLE_HOME_OPEN=settings|support|editplayer|controls|recent`):
-    /// opened on the first frame.
+    /// Development hook (`GAMETABLE_HOME_OPEN=settings|support|editplayer|controls|recent`, or
+    /// `drop:<file>` to act as if that file were dropped on Home): opened on the first frame.
     development_open: Option<String>,
 }
 
@@ -114,6 +122,18 @@ impl Home {
         }
     }
 
+    /// A file dropped on Home: a `.gamedef` is checked and offered for install.
+    fn install_dropped_file(&mut self, frame: &mut Frame, path: &str) {
+        let library = frame.paths.games_folder(frame.settings).to_string_lossy().into_owned();
+        match plan_install(path, &library) {
+            Ok(plan) if plan.already_installed => {
+                frame.ui.toast(&format!("\"{}\" is already installed.", plan.game_name), None);
+            }
+            Ok(plan) => self.dialog = Some(HomeDialog::ConfirmInstall(plan)),
+            Err(error) => frame.ui.alert("Can't Install Game", &error),
+        }
+    }
+
     fn open_development_dialog(&mut self, frame: &mut Frame) {
         match self.development_open.take().as_deref() {
             Some("settings") => self.dialog = Some(HomeDialog::Settings(SettingsDialog::new())),
@@ -121,6 +141,7 @@ impl Home {
             Some("controls") => self.dialog = Some(HomeDialog::Controls),
             Some("editplayer") => self.dialog = Some(HomeDialog::EditPlayer(EditPlayerSettings::new(frame))),
             Some("recent") => self.recent_open = true,
+            Some(dropped) if dropped.starts_with("drop:") => self.install_dropped_file(frame, &dropped[5..]),
             // With `GAMETABLE_UPDATE_TEST_URL`: the confirmation, or the update straight away.
             Some("update") => self.dialog = updater::available_release().map(HomeDialog::ConfirmUpdate),
             Some("update_now") => {
@@ -422,6 +443,48 @@ impl Home {
                 });
                 true
             }
+            Some(HomeDialog::ConfirmInstall(plan)) => {
+                let message = plan.confirmation_message();
+                let install_label = if plan.replaces_package { "Replace" } else { "Install" };
+                let actions = [DialogAction::text("Cancel"), DialogAction::filled(install_label)];
+                let spec = DialogSpec {
+                    title: Some("Install Game"),
+                    width: 460.0,
+                    message: Some(&message),
+                    actions: &actions,
+                    ..DialogSpec::default()
+                };
+                match frame.dialog("home:installgame", &spec, |_, _, _, _| 0.0) {
+                    DialogResponse::Open => true,
+                    DialogResponse::Action(1) | DialogResponse::Enter => {
+                        self.dialog = Some(HomeDialog::Installing(GameInstallJob::start(plan.clone())));
+                        return;
+                    }
+                    _ => false,
+                }
+            }
+            Some(HomeDialog::Installing(job)) => match job.poll() {
+                Some(Ok(())) => {
+                    clear_existence_cache();
+                    frame.ui.toast(&format!("Installed \"{}\".", job.plan.game_name), None);
+                    false
+                }
+                Some(Err(error)) => {
+                    frame.ui.alert("Couldn't Install Game", &format!("{}: {error}", job.plan.game_name));
+                    false
+                }
+                None => {
+                    let title = format!("Installing {}", job.plan.game_name);
+                    let spec =
+                        DialogSpec { title: Some(&title), width: 420.0, dismissible: false, ..DialogSpec::default() };
+                    let progress = job.progress();
+                    frame.dialog("home:installing", &spec, |frame, x, y, width| {
+                        frame.progress_bar(x, y + 4.0, width, 4.0, Some(progress), None);
+                        28.0
+                    });
+                    true
+                }
+            },
             Some(HomeDialog::UpdateFailed(message)) => {
                 let actions = [DialogAction::text("Close")];
                 let spec = DialogSpec {
@@ -447,6 +510,14 @@ impl Screen for Home {
 
     fn set_message(&mut self, message: Option<String>) {
         self.message = message;
+    }
+
+    /// Dropping a `.gamedef` file on Home offers to install it.
+    fn file_dropped(&mut self, frame: &mut Frame, path: &Path) {
+        if self.dialog.is_some() {
+            return;
+        }
+        self.install_dropped_file(frame, &path.to_string_lossy());
     }
 
     fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {

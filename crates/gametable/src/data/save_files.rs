@@ -1,7 +1,8 @@
 //! Saved games and game logs. Port of `src/data/save_files.lua`.
 //!
 //! Saves live in `<game folder>/savegames/<name>.json` (indented JSON), logs in
-//! `<game folder>/gamelogs/<file name>`.
+//! `<game folder>/gamelogs/<file name>`. A `.gamedef` package can't be written to, so for a
+//! packaged game both go under `<library>/.gamedata/<id>/` instead (`writable_game_folder`).
 
 use std::path::Path;
 
@@ -9,9 +10,10 @@ use gametable_core::json;
 use gametable_core::models::{LocalDateTime, LogEntry, SavedGame, format_elapsed_time, parse_iso_timestamp};
 
 use super::file_system::{join_path, list_folder, strip_extension};
+use super::game_files::writable_game_folder;
 
 fn saves_folder(game_folder_path: &str) -> String {
-    join_path(&[game_folder_path, "savegames"])
+    join_path(&[&writable_game_folder(game_folder_path), "savegames"])
 }
 
 fn save_path(game_folder_path: &str, name: &str) -> String {
@@ -148,7 +150,7 @@ pub fn format_log(entries: &[LogEntry]) -> String {
 }
 
 pub fn write_log(game_folder_path: &str, file_name: &str, contents: &str) -> Result<String, String> {
-    let folder = join_path(&[game_folder_path, "gamelogs"]);
+    let folder = join_path(&[&writable_game_folder(game_folder_path), "gamelogs"]);
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let path = join_path(&[&folder, file_name]);
     std::fs::write(&path, contents).map_err(|error| format!("{path}: {error}"))?;

@@ -7,6 +7,7 @@
 pub mod card_filters;
 pub mod color;
 pub mod deck_widget_zones;
+pub mod game_archive;
 pub mod geometry;
 pub mod host_engine;
 pub mod json;

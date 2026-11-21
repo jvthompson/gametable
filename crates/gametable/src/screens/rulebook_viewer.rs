@@ -15,7 +15,8 @@ use gametable_core::models::{GameDefinition, Scenario};
 
 use crate::app::Frame;
 use crate::data::display_settings::{rulebook_scroll, set_rulebook_scroll};
-use crate::data::file_system::{join_path, list_folder, lowercase_extension, strip_extension};
+use crate::data::file_system::{join_path, lowercase_extension, strip_extension};
+use crate::data::game_files;
 use crate::data::pdf_doc_cache::PdfDocCache;
 use crate::graphics::draw_list::Color;
 use crate::ui::context::RegionOptions;
@@ -112,7 +113,7 @@ fn is_rulebook_name(name: &str) -> bool {
 pub fn list_documents(folder: Option<&str>) -> Vec<String> {
     let Some(folder) = folder else { return Vec::new() };
     let documents_folder = join_path(&[folder, "_documents"]);
-    let mut names: Vec<String> = list_folder(std::path::Path::new(&documents_folder))
+    let mut names: Vec<String> = game_files::list_folder(&documents_folder)
         .unwrap_or_default()
         .into_iter()
         .filter(|entry| !entry.is_folder && matches!(lowercase_extension(&entry.name).as_str(), ".pdf" | ".md"))
@@ -230,7 +231,7 @@ impl RulebookViewer {
             if kind == DocumentKind::Pdf {
                 document.has_content = true;
                 document.pdf = Some(PdfDocCache::new(path));
-            } else if let Ok(bytes) = std::fs::read(path) {
+            } else if let Ok(bytes) = game_files::read(path) {
                 document.has_content = true;
                 document.blocks = parse_markdown(&String::from_utf8_lossy(&bytes));
                 for block in &mut document.blocks {
@@ -259,7 +260,7 @@ impl RulebookViewer {
         let path = match (folder.as_deref(), self.selected_document.as_deref()) {
             (Some(folder), Some(file)) => {
                 let path = join_path(&[folder, "_documents", file]);
-                std::path::Path::new(&path).is_file().then_some(path)
+                game_files::is_file(&path).then_some(path)
             }
             _ => None,
         };
@@ -283,7 +284,7 @@ impl RulebookViewer {
         let path = match (folder.as_deref(), scenario.and_then(|scenario| scenario.guide_path.as_deref())) {
             (Some(folder), Some(guide)) => {
                 let path = join_path(&[folder, "_scenarios", guide]);
-                std::path::Path::new(&path).is_file().then_some(path)
+                game_files::is_file(&path).then_some(path)
             }
             _ => None,
         };

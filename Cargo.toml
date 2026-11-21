@@ -53,3 +53,19 @@ opt-level = 2
 
 [profile.dev.package.sdl3-ttf-sys]
 opt-level = 2
+
+# Zip compression (Save to Zip, .gamedef packages) is unusably slow unoptimized.
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.zlib-rs]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.zip]
+opt-level = 3

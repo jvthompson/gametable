@@ -4,6 +4,8 @@
 //! layout the server's admin game upload expects.
 //!
 //! Images are already compressed, so they are stored as they are; everything else is deflated.
+//! Cache and runtime folders (`_cache`, `__pycache__`, `savegames`, `gamelogs`, dot folders) are
+//! left out, and so are Python scripts (`.py`) used while building a game.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -16,11 +18,23 @@ use zip::write::SimpleFileOptions;
 
 use crate::data::file_system::{base_name, join_path, lowercase_extension, parent_folder};
 
-/// The extension of a packed game file.
-pub const GAME_PACKAGE_EXTENSION: &str = "gamedef";
+pub use gametable_core::game_archive::GAME_PACKAGE_EXTENSION;
 
 /// Extensions written without compression, since deflating them gains next to nothing.
 const STORED_EXTENSIONS: [&str; 8] = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".zip", ".mp3", ".ogg"];
+
+/// Folders that hold caches or what a player's copy writes at runtime, never game content: the
+/// original's texture atlas cache, Python bytecode, save games and logs. Matched ignoring case;
+/// folders whose names start with a dot are skipped too.
+const SKIPPED_FOLDERS: [&str; 4] = ["_cache", "__pycache__", "savegames", "gamelogs"];
+
+/// Whether a folder inside the game folder is left out of the package.
+fn is_skipped_folder(folder_name: &str) -> bool {
+    folder_name.starts_with('.') || SKIPPED_FOLDERS.iter().any(|skipped| skipped.eq_ignore_ascii_case(folder_name))
+}
+
+/// Extensions of files used to build a game rather than play it (matched ignoring case).
+const SKIPPED_EXTENSIONS: [&str; 1] = [".py"];
 
 /// Left behind by an interrupted image rewrite; never worth packing.
 const TEMPORARY_FILE_SUFFIX: &str = ".gametable-tmp";
@@ -52,8 +66,12 @@ pub fn package_entries(game_folder_path: &str) -> Result<Vec<PackageEntry>, Stri
             let path = item.path();
             let child_name = format!("{name_in_zip}/{file_name}");
             if path.is_dir() {
-                folders_to_visit.push((path, child_name));
-            } else if !file_name.ends_with(TEMPORARY_FILE_SUFFIX) {
+                if !is_skipped_folder(&file_name) {
+                    folders_to_visit.push((path, child_name));
+                }
+            } else if !file_name.ends_with(TEMPORARY_FILE_SUFFIX)
+                && !SKIPPED_EXTENSIONS.contains(&lowercase_extension(&file_name).as_str())
+            {
                 entries.push(PackageEntry { file_path: path, name_in_zip: child_name });
             }
         }
@@ -87,6 +105,8 @@ pub fn write_game_package(
 ) -> Result<PackageSummary, PackageError> {
     let temporary_path = format!("{package_path}{TEMPORARY_FILE_SUFFIX}");
     let result = write_zip(entries, &temporary_path, files_done, cancelled).and_then(|()| {
+        // The open copy of the old package holds its file (and would go on showing old contents).
+        gametable_core::game_archive::forget_game_archive(Path::new(package_path));
         std::fs::rename(&temporary_path, package_path).map_err(|error| PackageError::Failed(error.to_string()))
     });
     if let Err(error) = result {
@@ -205,6 +225,12 @@ mod tests {
         std::fs::write(game.join("set1").join("card.webp"), b"image bytes").unwrap();
         std::fs::write(game.join("set1").join("nested").join("notes.txt"), b"notes").unwrap();
         std::fs::write(game.join("set1").join("card.png.gametable-tmp"), b"half written").unwrap();
+        std::fs::write(game.join("make_cards.py"), b"print('building')").unwrap();
+        std::fs::write(game.join("set1").join("Rename.PY"), b"print('renaming')").unwrap();
+        for skipped in ["_cache/atlases", "__pycache__", "SaveGames", "gamelogs", ".git"] {
+            std::fs::create_dir_all(game.join(skipped)).unwrap();
+            std::fs::write(game.join(skipped).join("leftover"), b"not game content").unwrap();
+        }
         let game_path = game.to_string_lossy().into_owned();
 
         let entries = package_entries(&game_path).unwrap();

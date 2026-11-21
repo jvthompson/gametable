@@ -33,10 +33,13 @@ use gametable_core::models::GameDefinition;
 use gametable_core::util::trim_lua_whitespace;
 
 use crate::app::{Frame, Screen, ScreenCommand};
-use crate::data::file_system::{join_path, parent_folder};
+use crate::data::file_system::{base_name, join_path, parent_folder};
+use crate::data::game_extract::{GameExtractJob, extraction_folder};
+use crate::data::game_files::is_packaged_game_folder;
+use crate::data::game_package::game_package_path;
 use crate::data::gamedef_ops::{
-    cards_outside_sets, create_game_definition, load_game_definition_file, scan_game_library, validate_game_id,
-    write_game_definition,
+    cards_outside_sets, create_game_definition, find_game_definition_file, load_game_definition_file,
+    scan_game_library, validate_game_id, write_game_definition,
 };
 use crate::data::image_resolver::clear_existence_cache;
 use crate::data::paths::set_games_folder;
@@ -45,7 +48,9 @@ use crate::screens::game_picker::{GameTile, MoveLibraryPrompt, MovePromptRespons
 use crate::screens::rulebook_viewer::RulebookViewer;
 use crate::ui::components::{EDITOR_TOOLBAR_HEIGHT, TAB_BAR_HEIGHT, ToolbarAction};
 use crate::ui::draw::TextOptions;
-use crate::ui::overlays::{ContextMenu, DialogAction, DialogResponse, DialogSpec, MenuItem, MenuResponse};
+use crate::ui::overlays::{
+    ConfirmResponse, ContextMenu, DialogAction, DialogResponse, DialogSpec, MenuItem, MenuResponse,
+};
 use crate::ui::text_field::{TextFieldOptions, text_field_height};
 use crate::ui::widgets::{ButtonOptions, ButtonVariant, IconButtonOptions};
 
@@ -546,7 +551,17 @@ impl Screen for GameDefinitionEditor {
         let busy = self.sets_tab.busy;
         let can_save_to_zip = !busy && self.save_to_zip.is_none() && !self.model.folder_path.is_empty();
         let name = &self.model.game.name;
-        let title = if name.is_empty() { "Game Definition Editor".to_string() } else { name.clone() };
+        let mut title = if name.is_empty() { "Game Definition Editor".to_string() } else { name.clone() };
+        // A package beside the folder is what the game plays from, so say how edits reach it.
+        if !self.model.folder_path.is_empty() {
+            let package_path = game_package_path(&self.model.folder_path);
+            if std::path::Path::new(&package_path).is_file() {
+                title.push_str(&format!(
+                    "  \u{2014}  plays from {}; Save to Zip to update it",
+                    base_name(&package_path)
+                ));
+            }
+        }
         let actions = [
             ToolbarAction { icon: "note_add", tooltip: "New Game Definition...", id: Some("gde:new"), disabled: busy },
             ToolbarAction { icon: "folder_open", tooltip: "Open Existing...", id: Some("gde:open"), disabled: busy },
@@ -633,6 +648,10 @@ pub struct GameDefinitionEntry {
     move_prompt: Option<MoveLibraryPrompt>,
     new_game: Option<NewGameDialog>,
     open_picker: Option<FilePicker>,
+    /// A packaged game the user picked, waiting for "Extract".
+    extract_prompt: Option<GameDefinition>,
+    /// Unpacking it into a folder to edit.
+    extracting: Option<GameExtractJob>,
 }
 
 impl GameDefinitionEntry {
@@ -647,6 +666,68 @@ impl GameDefinitionEntry {
             move_prompt: None,
             new_game: None,
             open_picker: None,
+            extract_prompt: None,
+            extracting: None,
+        }
+    }
+
+    /// The Extract prompt for a packaged game, then the progress while it unpacks, then the
+    /// editor on the new folder.
+    fn show_extract_dialogs(&mut self, frame: &mut Frame) {
+        if let Some(game) = &self.extract_prompt {
+            let package_path = game.folder_path.clone().unwrap_or_default();
+            let package_name = base_name(&package_path).to_string();
+            let folder = extraction_folder(&package_path).unwrap_or_default();
+            let mut message = format!(
+                "\"{}\" is installed as {package_name}. Extract it to a folder so it can be edited? The game keeps \
+                 playing from {package_name} until you use Save to Zip.",
+                game.name
+            );
+            if std::path::Path::new(&folder).exists() {
+                message.push_str(&format!(" The existing \"{}\" folder will be replaced.", base_name(&folder)));
+            }
+            match frame.confirm_dialog("gdx:extract", "Extract Game", &message, "Extract", false) {
+                ConfirmResponse::Open => {}
+                ConfirmResponse::Cancelled => self.extract_prompt = None,
+                ConfirmResponse::Confirmed => {
+                    self.extract_prompt = None;
+                    match GameExtractJob::start(&package_path) {
+                        Ok(job) => self.extracting = Some(job),
+                        Err(error) => frame.ui.alert("Couldn't Extract Game", &error),
+                    }
+                }
+            }
+        }
+        let Some(job) = &self.extracting else { return };
+        match job.poll() {
+            None => {
+                let spec = DialogSpec {
+                    title: Some("Extracting Game"),
+                    width: 420.0,
+                    dismissible: false,
+                    ..DialogSpec::default()
+                };
+                let progress = job.progress();
+                frame.dialog("gdx:extracting", &spec, |frame, x, y, width| {
+                    frame.progress_bar(x, y + 4.0, width, 4.0, Some(progress), None);
+                    28.0
+                });
+            }
+            Some(result) => {
+                let folder = job.destination_folder.clone();
+                self.extracting = None;
+                clear_existence_cache();
+                self.refresh();
+                let opened = result.and_then(|()| {
+                    let path = find_game_definition_file(&folder)
+                        .ok_or_else(|| format!("No gamedef.json found in {folder}."))?;
+                    load_game_definition_file(&path, &folder)
+                });
+                match opened {
+                    Ok(game) => GameDefinitionEntry::open_editor(frame, game),
+                    Err(error) => frame.ui.alert("Couldn't Extract Game", &error),
+                }
+            }
         }
     }
 
@@ -689,6 +770,16 @@ impl Screen for GameDefinitionEntry {
             Ok(entries) => {
                 if entries.is_empty() {
                     self.error = Some("No games found in this folder.".to_string());
+                }
+                if let Ok(wanted) = std::env::var("GAMETABLE_GAMEDEF_EXTRACT")
+                    && self.extracting.is_none()
+                {
+                    self.extract_prompt = entries
+                        .iter()
+                        .find(|game| {
+                            game.id == wanted && game.folder_path.as_deref().is_some_and(is_packaged_game_folder)
+                        })
+                        .cloned();
                 }
                 self.entries = Some(entries);
             }
@@ -741,10 +832,23 @@ impl Screen for GameDefinitionEntry {
                 frame.text(message, x, row_y, options);
             }
             Some(entries) => {
-                let tiles: Vec<GameTile> = entries.iter().map(GameTile::for_game).collect();
+                let tiles: Vec<GameTile> = entries
+                    .iter()
+                    .map(|game| {
+                        let mut tile = GameTile::for_game(game);
+                        if game.folder_path.as_deref().is_some_and(is_packaged_game_folder) {
+                            tile.caption = Some(format!("{} card(s) \u{00b7} .gamedef package", game.cards().len()));
+                        }
+                        tile
+                    })
+                    .collect();
                 if let Some(index) = frame.game_grid("gdx:grid", &tiles, x, row_y, width, grid_height, padding) {
                     let game = entries[index].clone();
-                    GameDefinitionEntry::open_editor(frame, game);
+                    if game.folder_path.as_deref().is_some_and(is_packaged_game_folder) {
+                        self.extract_prompt = Some(game);
+                    } else {
+                        GameDefinitionEntry::open_editor(frame, game);
+                    }
                 }
             }
         }
@@ -795,5 +899,6 @@ impl Screen for GameDefinitionEntry {
             self.move_prompt = None;
             self.use_folder(frame, chosen);
         }
+        self.show_extract_dialogs(frame);
     }
 }

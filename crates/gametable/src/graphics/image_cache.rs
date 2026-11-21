@@ -86,8 +86,11 @@ fn run_worker(requests: &Mutex<Receiver<WorkerRequest>>, results: &Sender<Worker
         };
         match request {
             Ok(WorkerRequest::Decode { key, path, max_dimension }) => {
-                let decoded =
-                    RgbaImage::load(std::path::Path::new(&path)).map(|image| image.downscaled_to_fit(max_dimension));
+                // Through `game_files`, so images inside `.gamedef` packages load like any other.
+                let decoded = crate::data::game_files::read(&path)
+                    .map_err(|error| format!("{path}: {error}"))
+                    .and_then(|bytes| RgbaImage::decode(&bytes))
+                    .map(|image| image.downscaled_to_fit(max_dimension));
                 if results.send((key, decoded)).is_err() {
                     return;
                 }

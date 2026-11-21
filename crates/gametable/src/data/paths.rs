@@ -56,8 +56,12 @@ impl AppPaths {
         self.default_library_parent().join("deck_library")
     }
 
-    /// The games library: the saved folder when it is absolute, else the default.
+    /// The games library: the saved folder when it is absolute, else the default. Development
+    /// hook: `GAMETABLE_GAMES_FOLDER=<folder>` uses that folder instead (nothing is saved).
     pub fn games_folder(&self, settings: &Settings) -> PathBuf {
+        if let Some(folder) = std::env::var_os("GAMETABLE_GAMES_FOLDER").filter(|folder| !folder.is_empty()) {
+            return PathBuf::from(folder);
+        }
         saved_folder(settings, keys::GAMES_DIRECTORY_PATH).unwrap_or_else(|| self.default_games_folder())
     }
 

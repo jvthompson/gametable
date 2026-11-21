@@ -4,10 +4,18 @@
 //! keeps the parts of each game the server needs (cards for packs and collections, sets, zones,
 //! starter decks), and builds the file manifests clients use to download games. The manifest hash
 //! must match the Go server's exactly, because clients cache games by it.
+//!
+//! GameTable addition: a game can also be a `.gamedef` package (a zip of the game folder) in the
+//! games folder. Its files are served straight out of the package, and its manifest is built
+//! exactly as for the same game unpacked, so clients see the same hash either way. A package
+//! replaces a folder with the same game id.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
+
+use gametable_core::game_archive::{GameArchive, is_game_package_path, open_game_archive};
 
 use sha2::{Digest, Sha256};
 
@@ -86,8 +94,10 @@ pub struct ManifestFile {
 pub struct ServerGame {
     pub id: String,
     pub name: String,
-    /// `None` for a game compiled into the server.
+    /// `None` for a game compiled into the server, or one installed as a `.gamedef` package.
     pub folder: Option<PathBuf>,
+    /// The `.gamedef` package the game's files are read from, when it is one.
+    pub package: Option<Arc<GameArchive>>,
     /// `gamedef.json` exactly as stored.
     pub definition_bytes: Vec<u8>,
     pub cards: HashMap<String, ServerCard>,
@@ -125,16 +135,36 @@ impl ServerGame {
         if self.manifest_file(path).is_none() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
         }
+        if let Some(package) = &self.package {
+            return package.read(&self.package_entry_path(package, path));
+        }
         match &self.folder {
             None => Ok(self.definition_bytes.clone()), // embedded games only have gamedef.json
             Some(folder) => std::fs::read(folder.join(path)),
         }
     }
 
+    /// Where a manifest path is inside the package: the definition is listed as `gamedef.json`
+    /// whatever its case in the package.
+    fn package_entry_path(&self, package: &GameArchive, manifest_path: &str) -> String {
+        match package.game_definition_path() {
+            Some(definition_path) if manifest_path == "gamedef.json" => definition_path.to_string(),
+            _ => manifest_path.to_string(),
+        }
+    }
+
+    /// Whether the game has files of its own (a folder or a package), so an admin can remove it.
+    pub fn is_removable(&self) -> bool {
+        self.folder.is_some() || self.package.is_some()
+    }
+
     /// Opens a file listed in the manifest for streaming.
     pub fn open_file(&self, path: &str) -> std::io::Result<Box<dyn std::io::Read + Send>> {
         if self.manifest_file(path).is_none() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        }
+        if let Some(package) = &self.package {
+            return Ok(Box::new(std::io::Cursor::new(package.read(&self.package_entry_path(package, path))?)));
         }
         match &self.folder {
             None => Ok(Box::new(std::io::Cursor::new(self.definition_bytes.clone()))),
@@ -144,10 +174,13 @@ impl ServerGame {
 
     /// A built-in deck by display name (for shared zones' `deckName`).
     pub fn built_in_deck(&self, name: &str) -> Option<Vec<u8>> {
-        let folder = self.folder.as_ref()?;
         if name.contains(['/', '\\']) {
             return None;
         }
+        if let Some(package) = &self.package {
+            return package.read(&format!("{}/{name}.json", packaged_decks_folder(package))).ok();
+        }
+        let folder = self.folder.as_ref()?;
         std::fs::read(built_in_decks_folder(folder).join(format!("{name}.json"))).ok()
     }
 }
@@ -156,6 +189,27 @@ impl ServerGame {
 pub fn built_in_decks_folder(folder: &Path) -> PathBuf {
     let preferred = folder.join("_decks");
     if preferred.is_dir() { preferred } else { folder.join("decks") }
+}
+
+/// The same choice inside a package: `_decks` when it exists, otherwise `decks`.
+fn packaged_decks_folder(package: &GameArchive) -> &'static str {
+    if package.contains_folder("_decks") { "_decks" } else { "decks" }
+}
+
+/// Whether a file inside a game folder belongs in its manifest: no client-only or dot folder on
+/// the way to it, and an asset extension (the same rules as the folder walk).
+fn is_manifest_path(relative_path: &str) -> bool {
+    let parts: Vec<&str> = relative_path.split('/').collect();
+    let (file_name, folders) = parts.split_last().expect("split always yields one part");
+    if folders
+        .iter()
+        .any(|folder| CLIENT_ONLY_FOLDERS.contains(&folder.to_lowercase().as_str()) || folder.starts_with('.'))
+    {
+        return false;
+    }
+    Path::new(file_name)
+        .extension()
+        .is_some_and(|extension| ASSET_EXTENSIONS.contains(&extension.to_string_lossy().to_lowercase().as_str()))
 }
 
 fn text_field(value: &JsonValue, key: &str) -> Option<String> {
@@ -206,6 +260,7 @@ pub fn parse_game_definition(definition_bytes: &[u8]) -> Result<ServerGame, Stri
         id,
         name: text_field(&value, "name").unwrap_or_default(),
         folder: None,
+        package: None,
         definition_bytes: definition_bytes.to_vec(),
         cards: HashMap::new(),
         sets: Vec::new(),
@@ -258,14 +313,36 @@ pub fn manifest_hash(files: &[ManifestFile]) -> String {
 /// Starter decks in `folder` for `game_id`; unreadable or invalid files are skipped.
 fn scan_starter_decks(folder: &Path, game_id: &str) -> Vec<StarterDeck> {
     let Ok(entries) = std::fs::read_dir(folder) else { return Vec::new() };
-    let mut decks = Vec::new();
-    for entry in entries.filter_map(Result::ok) {
+    let deck_files = entries.filter_map(Result::ok).filter_map(|entry| {
         let path = entry.path();
         let is_json = path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
         if path.is_dir() || !is_json {
-            continue;
+            return None;
         }
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Some((name, std::fs::read(&path).ok()?))
+    });
+    starter_decks_from_files(deck_files, game_id)
+}
+
+/// Starter decks in a package's `_decks` (or `decks`) folder.
+fn scan_packaged_starter_decks(package: &GameArchive, game_id: &str) -> Vec<StarterDeck> {
+    let folder = packaged_decks_folder(package);
+    let deck_files = package.list(folder).unwrap_or_default().into_iter().filter_map(|(file_name, is_folder)| {
+        let is_json = Path::new(&file_name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        if is_folder || !is_json {
+            return None;
+        }
+        let name = Path::new(&file_name).file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Some((name, package.read(&format!("{folder}/{file_name}")).ok()?))
+    });
+    starter_decks_from_files(deck_files, game_id)
+}
+
+/// The starter decks among `(name, file bytes)` deck files.
+fn starter_decks_from_files(deck_files: impl Iterator<Item = (String, Vec<u8>)>, game_id: &str) -> Vec<StarterDeck> {
+    let mut decks = Vec::new();
+    for (name, bytes) in deck_files {
         let Ok(deck) = json::decode_bytes(&bytes) else { continue };
         let is_starter = flag_field(&deck, "isStarter") || flag_field(&deck, "IsStarter");
         let Some(subdecks) = deck.get("subdecks").and_then(JsonValue::as_array) else { continue };
@@ -292,7 +369,6 @@ fn scan_starter_decks(folder: &Path, game_id: &str) -> Vec<StarterDeck> {
         if !is_valid {
             continue;
         }
-        let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         decks.push(StarterDeck { name, deck_bytes: bytes, card_quantities });
     }
     decks.sort_by(|a, b| a.name.cmp(&b.name));
@@ -340,6 +416,12 @@ impl GameLibrary {
         std::fs::create_dir_all(&self.games_folder)?;
         let mut folders: Vec<PathBuf> =
             std::fs::read_dir(&self.games_folder)?.filter_map(Result::ok).map(|entry| entry.path()).collect();
+        let mut packages: Vec<PathBuf> = folders
+            .iter()
+            .filter(|path| path.is_file() && is_game_package_path(&path.to_string_lossy()))
+            .cloned()
+            .collect();
+        packages.sort();
         folders.retain(|path| path.is_dir());
         folders.sort();
 
@@ -357,6 +439,24 @@ impl GameLibrary {
                         continue;
                     }
                     display_order.push(game.id.clone());
+                    games_by_id.insert(game.id.clone(), game);
+                }
+            }
+        }
+        for package_path in packages {
+            let package_name = package_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            match self.scan_package(&package_path) {
+                Err(error) => scan_errors.push(format!("{package_name}: {error}")),
+                Ok(game) => {
+                    match games_by_id.get(&game.id) {
+                        Some(existing) if existing.package.is_some() => {
+                            scan_errors.push(format!("{package_name}: duplicate game id \"{}\"", game.id));
+                            continue;
+                        }
+                        // A package replaces a folder with the same id.
+                        Some(_) => {}
+                        None => display_order.push(game.id.clone()),
+                    }
                     games_by_id.insert(game.id.clone(), game);
                 }
             }
@@ -418,6 +518,44 @@ impl GameLibrary {
         game.manifest_hash = manifest_hash(&files);
         game.files = files;
         Ok(Some(game))
+    }
+
+    /// A `.gamedef` package's game, with the manifest its files would have unpacked.
+    fn scan_package(&mut self, package_path: &Path) -> Result<ServerGame, String> {
+        let package = open_game_archive(package_path)?;
+        let definition_path =
+            package.game_definition_path().ok_or_else(|| "no gamedef.json in the package".to_string())?.to_string();
+        let definition_bytes = package.read(&definition_path).map_err(|error| error.to_string())?;
+        let mut game = parse_game_definition(&definition_bytes)?;
+        game.starter_decks = scan_packaged_starter_decks(&package, &game.id);
+        let modified = std::fs::metadata(package_path).and_then(|metadata| metadata.modified()).ok();
+        let mut files = Vec::new();
+        for file in package.files() {
+            if !is_manifest_path(&file.relative_path) {
+                continue;
+            }
+            let key = FileHashKey { path: package_path.join(&file.relative_path), size: file.size, modified };
+            let sha256 = match self.file_hash_cache.get(&key) {
+                Some(hash) => hash.clone(),
+                None => {
+                    let bytes = package.read(&file.relative_path).map_err(|error| error.to_string())?;
+                    let hash = sha256_hex(&bytes);
+                    self.file_hash_cache.insert(key, hash.clone());
+                    hash
+                }
+            };
+            let path = if file.relative_path == definition_path {
+                "gamedef.json".to_string()
+            } else {
+                file.relative_path.clone()
+            };
+            files.push(ManifestFile { path, sha256, size: file.size });
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        game.manifest_hash = manifest_hash(&files);
+        game.files = files;
+        game.package = Some(package);
+        Ok(game)
     }
 
     /// Walks a game folder (skipping client-only and dot folders) collecting manifest files.
@@ -560,6 +698,80 @@ mod tests {
         assert_eq!(standard.files.len(), 1);
         assert_eq!(standard.read_file("gamedef.json").unwrap(), STANDARD_52_GAMEDEF);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Zips `folder` the way the editor's Save to Zip does: the folder at the zip's root.
+    fn pack_folder(folder: &Path, package_path: &Path) {
+        use std::io::Write;
+        fn add(writer: &mut zip::ZipWriter<std::fs::File>, root: &Path, current: &Path, prefix: &str) {
+            let mut entries: Vec<PathBuf> =
+                std::fs::read_dir(current).unwrap().map(|entry| entry.unwrap().path()).collect();
+            entries.sort();
+            for path in entries {
+                let relative = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                if path.is_dir() {
+                    add(writer, root, &path, prefix);
+                } else {
+                    writer
+                        .start_file(format!("{prefix}/{relative}"), zip::write::SimpleFileOptions::default())
+                        .unwrap();
+                    writer.write_all(&std::fs::read(&path).unwrap()).unwrap();
+                }
+            }
+        }
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(package_path).unwrap());
+        let prefix = folder.file_name().unwrap().to_string_lossy().to_string();
+        add(&mut writer, folder, folder, &prefix);
+        writer.finish().unwrap();
+    }
+
+    #[test]
+    fn packages_serve_the_same_manifest_as_their_folder_and_replace_it() {
+        let unpacked = temporary_folder("unpacked");
+        write(
+            &unpacked.join("zeta/GameDef.json"),
+            r#"{"id":"zeta","name":"Zeta","sets":[{"id":"s","name":"S","cards":[{"id":"c1","cardTitle":"One"}]}],"zones":[{"id":"z","shared":true,"deckName":"Starter"}]}"#,
+        );
+        write(&unpacked.join("zeta/s/c1.PNG"), "image");
+        write(&unpacked.join("zeta/notes.txt"), "not an asset");
+        write(&unpacked.join("zeta/savegames/save.json"), "{}");
+        write(&unpacked.join("zeta/.hidden/x.png"), "hidden");
+        write(
+            &unpacked.join("zeta/_decks/Starter.json"),
+            r#"{"gameId":"zeta","isStarter":true,"subdecks":[{"name":"main_deck","entries":[{"definitionId":"c1","quantity":2}]}]}"#,
+        );
+        let mut folder_library = GameLibrary::new(&unpacked, Vec::new());
+        folder_library.scan().unwrap();
+        let from_folder = folder_library.game("zeta").unwrap();
+
+        let packed = temporary_folder("packed");
+        // A stale folder with the same id is replaced by the package.
+        write(&packed.join("zeta/gamedef.json"), r#"{"id":"zeta","name":"Old Zeta","cards":[]}"#);
+        pack_folder(&unpacked.join("zeta"), &packed.join("zeta.gamedef"));
+        let mut package_library = GameLibrary::new(&packed, Vec::new());
+        package_library.scan().unwrap();
+        assert!(package_library.scan_errors().is_empty(), "{:?}", package_library.scan_errors());
+        let ids: Vec<&str> = package_library.games().map(|game| game.id.as_str()).collect();
+        assert_eq!(ids, ["zeta"]);
+        let from_package = package_library.game("zeta").unwrap();
+
+        assert_eq!(from_package.name, "Zeta");
+        assert!(from_package.package.is_some() && from_package.folder.is_none() && from_package.is_removable());
+        assert_eq!(from_package.files, from_folder.files);
+        assert_eq!(from_package.manifest_hash, from_folder.manifest_hash);
+        assert_eq!(from_package.starter_decks, from_folder.starter_decks);
+        assert_eq!(from_package.read_file("gamedef.json").unwrap(), from_folder.read_file("gamedef.json").unwrap());
+        assert_eq!(from_package.read_file("s/c1.PNG").unwrap(), b"image");
+        let mut streamed = Vec::new();
+        std::io::Read::read_to_end(&mut from_package.open_file("s/c1.PNG").unwrap(), &mut streamed).unwrap();
+        assert_eq!(streamed, b"image");
+        assert!(from_package.read_file("notes.txt").is_err());
+        assert_eq!(from_package.built_in_deck("Starter"), from_folder.built_in_deck("Starter"));
+
+        drop(package_library);
+        gametable_core::game_archive::forget_game_archive(&packed.join("zeta.gamedef"));
+        let _ = std::fs::remove_dir_all(&unpacked);
+        let _ = std::fs::remove_dir_all(&packed);
     }
 
     /// Reads (never writes) the real library to check every game parses. Run with
