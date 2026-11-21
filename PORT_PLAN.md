@@ -920,3 +920,9 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   gets the Table Preview's wheel zoom, felt-drag pan and zoom controls.
 - 2026-11-20: Scenario zones can be set at fixed spots on the table from the Card Placement canvas
   (right-click > Add Zone; `zonePlacements`); in the game they sit there and can't be moved.
+- 2026-11-20: **Release `v0.2.0+43`** (game boards, boards carrying what lies on them, zone tooltips and Shuffle
+  Deck, the drop flash fix, scenario Card Placement with boards, zoom/pan and zones set on the table). The tag's CI
+  run passed on all three platforms and attached the Windows (18.0 MB), Linux (19.4 MB) and macOS (32.6 MB) zips.
+  The live server was redeployed (dry run first: all six games loaded, no errors; backup
+  `~/backups/20261121-042846`), so server games get `requestSetMovedBoard` with `carried` and keep
+  `zonePlacements`.
