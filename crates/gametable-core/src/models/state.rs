@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::definitions::{WidgetSizeOverride, ZoneDefinition};
+use super::definitions::{WidgetSizeOverride, ZoneDefinition, normalized_rotation};
 use super::json_fields::{FieldReader, SparseObjectWriter, string_list_to_json};
 use super::{
     BoardWidgetKind, CardZone, DEFAULT_BOARD_WIDGET_BACKGROUND_COLOR, DEFAULT_BOARD_WIDGET_TEXT_COLOR, ModelError,
@@ -251,25 +251,25 @@ impl BoardWidgetInstance {
 // ---------------------------------------------------------------------------
 
 /// Where a player moved a zone on a playmat (a GameTable addition): the zone's centre as
-/// fractions of the mat (`playmat_index` is 1-based, like the playmat choice). It replaces the
+/// fractions of the mat (`board_index` is 1-based, like the playmat choice). It replaces the
 /// game designer's position while that mat is in use.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlaymatZonePosition {
-    pub playmat_index: i64,
+pub struct BoardZonePosition {
+    pub board_index: i64,
     pub zone_id: String,
     pub x: f64,
     pub y: f64,
 }
 
-impl PlaymatZonePosition {
-    pub fn new(playmat_index: i64, zone_id: impl Into<String>, x: f64, y: f64) -> Self {
-        Self { playmat_index, zone_id: zone_id.into(), x, y }
+impl BoardZonePosition {
+    pub fn new(board_index: i64, zone_id: impl Into<String>, x: f64, y: f64) -> Self {
+        Self { board_index, zone_id: zone_id.into(), x, y }
     }
 
     pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
-        let fields = FieldReader::new(value, "PlaymatZonePosition")?;
+        let fields = FieldReader::new(value, "BoardZonePosition")?;
         Ok(Self {
-            playmat_index: fields.optional_whole_number("playmatIndex")?.unwrap_or(0),
+            board_index: fields.optional_whole_number("playmatIndex")?.unwrap_or(0),
             zone_id: fields.required_string("zoneId")?,
             x: fields.required_number("x")?,
             y: fields.required_number("y")?,
@@ -278,7 +278,7 @@ impl PlaymatZonePosition {
 
     pub fn to_json(&self) -> JsonValue {
         SparseObjectWriter::new()
-            .field("playmatIndex", self.playmat_index)
+            .field("playmatIndex", self.board_index)
             .field("zoneId", &self.zone_id)
             .field("x", self.x)
             .field("y", self.y)
@@ -288,20 +288,122 @@ impl PlaymatZonePosition {
 
 /// Replaces the moved zone positions for one playmat with `positions` (fractions clamped to the
 /// mat), keeping those for other mats.
-pub fn replace_playmat_zone_positions(
-    stored: &mut Vec<PlaymatZonePosition>,
-    playmat_index: i64,
-    positions: Vec<PlaymatZonePosition>,
+pub fn replace_board_zone_positions(
+    stored: &mut Vec<BoardZonePosition>,
+    board_index: i64,
+    positions: Vec<BoardZonePosition>,
 ) {
-    stored.retain(|position| position.playmat_index != playmat_index);
+    stored.retain(|position| position.board_index != board_index);
     stored.extend(positions.into_iter().filter(|position| position.x.is_finite() && position.y.is_finite()).map(
-        |position| PlaymatZonePosition {
-            playmat_index,
+        |position| BoardZonePosition {
+            board_index,
             x: position.x.clamp(0.0, 1.0),
             y: position.y.clamp(0.0, 1.0),
             ..position
         },
     ));
+}
+
+/// Where a player moved one of their own boards during the game (a GameTable addition): its centre
+/// as fractions of the table as the first seat sees it, and its quarter turns (0, 90, 180 or 270
+/// degrees clockwise, as the first seat sees it). It replaces where the game puts that board.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MovedBoard {
+    pub board_index: i64,
+    pub x: f64,
+    pub y: f64,
+    pub rotation: i64,
+}
+
+impl MovedBoard {
+    pub fn new(board_index: i64, x: f64, y: f64, rotation: i64) -> Self {
+        Self { board_index, x, y, rotation }
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
+        let fields = FieldReader::new(value, "MovedBoard")?;
+        Ok(Self {
+            board_index: fields.optional_whole_number("boardIndex")?.unwrap_or(0),
+            x: fields.required_number("x")?,
+            y: fields.required_number("y")?,
+            rotation: normalized_rotation(fields.optional_whole_number("rotation")?.unwrap_or(0)),
+        })
+    }
+
+    pub fn to_json(&self) -> JsonValue {
+        SparseObjectWriter::new()
+            .field("boardIndex", self.board_index)
+            .field("x", self.x)
+            .field("y", self.y)
+            .unless_default("rotation", self.rotation, 0)
+            .finish_value()
+    }
+
+    /// Kept on the table and turned a whole quarter; `None` when the position isn't a number.
+    pub fn sanitized(self) -> Option<MovedBoard> {
+        (self.x.is_finite() && self.y.is_finite()).then(|| MovedBoard {
+            x: self.x.clamp(0.0, 1.0),
+            y: self.y.clamp(0.0, 1.0),
+            rotation: normalized_rotation(self.rotation),
+            ..self
+        })
+    }
+}
+
+/// Where a board lies on the table as the first seat sees it: its centre as table fractions and
+/// its turn in degrees clockwise (0, 90, 180 or 270).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoardSpot {
+    pub x: f64,
+    pub y: f64,
+    pub rotation: i64,
+}
+
+/// The cards and tokens lying on a board that its player moved, and the board's spot before and
+/// after the move, so they keep their place on the board (sent with `requestSetMovedBoard` as
+/// `carried`). The player only picks which items lie on the board; the session decides which of
+/// them they may move.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoardCarry {
+    pub from: BoardSpot,
+    pub to: BoardSpot,
+    pub card_ids: Vec<String>,
+    pub widget_ids: Vec<String>,
+}
+
+impl BoardCarry {
+    pub fn to_json(&self) -> JsonValue {
+        let ids_to_json =
+            |ids: &[String]| JsonValue::Array(ids.iter().map(|id| JsonValue::from(id.as_str())).collect());
+        let mut object = crate::json::JsonObject::new();
+        object.insert("fromX", self.from.x);
+        object.insert("fromY", self.from.y);
+        object.insert("fromRotation", self.from.rotation);
+        object.insert("toX", self.to.x);
+        object.insert("toY", self.to.y);
+        object.insert("toRotation", self.to.rotation);
+        object.insert("cardIds", ids_to_json(&self.card_ids));
+        object.insert("widgetIds", ids_to_json(&self.widget_ids));
+        JsonValue::Object(object)
+    }
+
+    /// `None` when a spot is missing or not a finite number. Non-text ids are skipped.
+    pub fn from_json(value: &JsonValue) -> Option<BoardCarry> {
+        let number = |key: &str| value.get(key).and_then(JsonValue::as_f64).filter(|number| number.is_finite());
+        let rotation = |key: &str| normalized_rotation(number(key).unwrap_or(0.0).round() as i64);
+        let ids = |key: &str| -> Vec<String> {
+            value
+                .get(key)
+                .and_then(JsonValue::as_array)
+                .map_or_else(Vec::new, |items| items.iter().filter_map(JsonValue::as_str).map(str::to_string).collect())
+        };
+        Some(BoardCarry {
+            from: BoardSpot { x: number("fromX")?, y: number("fromY")?, rotation: rotation("fromRotation") },
+            to: BoardSpot { x: number("toX")?, y: number("toY")?, rotation: rotation("toRotation") },
+            card_ids: ids("cardIds"),
+            widget_ids: ids("widgetIds"),
+        })
+    }
 }
 
 /// A seat at the table.
@@ -312,10 +414,12 @@ pub struct PlayerInfo {
     pub role: PlayerRole,
     pub color: ArgbColor,
     pub connected: bool,
-    pub individual_playmat_on: bool,
-    pub individual_playmat_index: i64,
+    pub player_boards_shown: bool,
+    pub chosen_player_board: i64,
     /// Zones this player moved on their own playmats.
-    pub playmat_zone_positions: Vec<PlaymatZonePosition>,
+    pub board_zone_positions: Vec<BoardZonePosition>,
+    /// Their own boards they moved or turned during the game.
+    pub moved_boards: Vec<MovedBoard>,
 }
 
 impl PlayerInfo {
@@ -326,9 +430,10 @@ impl PlayerInfo {
             role,
             color,
             connected: true,
-            individual_playmat_on: false,
-            individual_playmat_index: 0,
-            playmat_zone_positions: Vec::new(),
+            player_boards_shown: false,
+            chosen_player_board: 0,
+            board_zone_positions: Vec::new(),
+            moved_boards: Vec::new(),
         }
     }
 
@@ -340,9 +445,10 @@ impl PlayerInfo {
             role: fields.required_enum("role", "PlayerInfo.role")?,
             color: fields.required_color("color")?,
             connected: fields.bool_or_default("connected", true)?,
-            individual_playmat_on: fields.flag_is_exactly_true("individualPlaymatOn"),
-            individual_playmat_index: fields.optional_whole_number("individualPlaymatIndex")?.unwrap_or(0),
-            playmat_zone_positions: fields.list_of("playmatZonePositions", PlaymatZonePosition::from_json)?,
+            player_boards_shown: fields.flag_is_exactly_true("individualPlaymatOn"),
+            chosen_player_board: fields.optional_whole_number("individualPlaymatIndex")?.unwrap_or(0),
+            board_zone_positions: fields.list_of("playmatZonePositions", BoardZonePosition::from_json)?,
+            moved_boards: fields.list_of("movedBoards", MovedBoard::from_json)?,
         })
     }
 
@@ -353,9 +459,10 @@ impl PlayerInfo {
             .field("role", self.role.as_json_str())
             .field("color", self.color)
             .field("connected", self.connected)
-            .flag_when_true("individualPlaymatOn", self.individual_playmat_on)
-            .unless_default("individualPlaymatIndex", self.individual_playmat_index, 0)
-            .non_empty_list("playmatZonePositions", &self.playmat_zone_positions, PlaymatZonePosition::to_json)
+            .flag_when_true("individualPlaymatOn", self.player_boards_shown)
+            .unless_default("individualPlaymatIndex", self.chosen_player_board, 0)
+            .non_empty_list("playmatZonePositions", &self.board_zone_positions, BoardZonePosition::to_json)
+            .non_empty_list("movedBoards", &self.moved_boards, MovedBoard::to_json)
             .finish_value()
     }
 }
@@ -468,10 +575,10 @@ pub struct TableState {
     /// Zones added by loaded scenarios.
     pub loaded_zones: Vec<ZoneDefinition>,
     pub loaded_scenario_ids: Vec<String>,
-    pub shared_playmat_on: bool,
-    pub shared_playmat_index: i64,
+    pub shared_boards_shown: bool,
+    pub chosen_shared_board: i64,
     /// Zones the host moved on the shared playmats.
-    pub shared_playmat_zone_positions: Vec<PlaymatZonePosition>,
+    pub shared_board_zone_positions: Vec<BoardZonePosition>,
     pub current_player_id: Option<String>,
 }
 
@@ -536,10 +643,9 @@ impl TableState {
             log: fields.list_of("log", LogEntry::from_json)?,
             loaded_zones: fields.list_of("loadedZones", ZoneDefinition::from_json)?,
             loaded_scenario_ids: fields.string_list("loadedScenarioIds")?,
-            shared_playmat_on: fields.flag_is_exactly_true("sharedPlaymatOn"),
-            shared_playmat_index: fields.optional_whole_number("sharedPlaymatIndex")?.unwrap_or(0),
-            shared_playmat_zone_positions: fields
-                .list_of("sharedPlaymatZonePositions", PlaymatZonePosition::from_json)?,
+            shared_boards_shown: fields.flag_is_exactly_true("sharedPlaymatOn"),
+            chosen_shared_board: fields.optional_whole_number("sharedPlaymatIndex")?.unwrap_or(0),
+            shared_board_zone_positions: fields.list_of("sharedBoardZonePositions", BoardZonePosition::from_json)?,
             current_player_id: fields.optional_string("currentPlayerId")?,
         })
     }
@@ -558,13 +664,9 @@ impl TableState {
                 "loadedScenarioIds",
                 (!self.loaded_scenario_ids.is_empty()).then(|| string_list_to_json(&self.loaded_scenario_ids)),
             )
-            .flag_when_true("sharedPlaymatOn", self.shared_playmat_on)
-            .unless_default("sharedPlaymatIndex", self.shared_playmat_index, 0)
-            .non_empty_list(
-                "sharedPlaymatZonePositions",
-                &self.shared_playmat_zone_positions,
-                PlaymatZonePosition::to_json,
-            )
+            .flag_when_true("sharedPlaymatOn", self.shared_boards_shown)
+            .unless_default("sharedPlaymatIndex", self.chosen_shared_board, 0)
+            .non_empty_list("sharedBoardZonePositions", &self.shared_board_zone_positions, BoardZonePosition::to_json)
             .optional("currentPlayerId", self.current_player_id.as_ref())
             .finish_value()
     }

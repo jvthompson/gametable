@@ -11,9 +11,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::deck_widget_zones::parse_deck_widget_zone_id;
+use crate::geometry::{WORLD_HEIGHT, WORLD_WIDTH};
 use crate::models::{
-    ActiveSearch, BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardWidgetInstance, BoardWidgetKind,
-    CardInstance, CardZone, RevealedToken, SearchTargetType, TableState, WidgetSizeOverride,
+    ActiveSearch, BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardCarry, BoardSpot,
+    BoardWidgetInstance, BoardWidgetKind, CardInstance, CardZone, RevealedToken, SearchTargetType, TableState,
+    WidgetSizeOverride,
 };
 use crate::stack_utils::{stack_of, top_of};
 use crate::util::{RandomIndexSource, shuffle_in_place};
@@ -879,5 +881,78 @@ pub fn return_image_token_to_bag(
             bag.bag_remaining.push(image_path.clone());
         }
     }
+    next
+}
+
+// ---------------------------------------------------------------------------
+// Boards
+// ---------------------------------------------------------------------------
+
+/// Where a point on a board at `from` ends up once the board lies at `to`: it keeps its place on
+/// the board, turning with it. Points are table fractions; the turn is worked out in world units
+/// so the table's proportions don't skew it. The result stays within half a table of the edges.
+pub fn point_carried_by_board(point: (f64, f64), from: BoardSpot, to: BoardSpot) -> (f64, f64) {
+    let offset_x = (point.0 - from.x) * WORLD_WIDTH;
+    let offset_y = (point.1 - from.y) * WORLD_HEIGHT;
+    let quarter_turns_clockwise = quarter_turns_between(from, to);
+    let (turned_x, turned_y) = (0..quarter_turns_clockwise).fold((offset_x, offset_y), |(x, y), _| (-y, x));
+    let carried_x = to.x + turned_x / WORLD_WIDTH;
+    let carried_y = to.y + turned_y / WORLD_HEIGHT;
+    (carried_x.clamp(-0.5, 1.5), carried_y.clamp(-0.5, 1.5))
+}
+
+/// How many quarter turns clockwise (0 to 3) a board turned going from `from` to `to`.
+fn quarter_turns_between(from: BoardSpot, to: BoardSpot) -> i64 {
+    ((to.rotation - from.rotation) / 90).rem_euclid(4)
+}
+
+/// The widget kinds a board carries when it moves: counters and tokens. Arrows, pack generators,
+/// deck widgets and token bags stay where they are.
+fn widget_rides_on_boards(kind: BoardWidgetKind) -> bool {
+    matches!(
+        kind,
+        BoardWidgetKind::SimpleCounter
+            | BoardWidgetKind::Token
+            | BoardWidgetKind::ImageToken
+            | BoardWidgetKind::CardToken
+    )
+}
+
+/// Moves the cards and tokens lying on a board along with it when `mover_id` moves (or turns)
+/// the board, so they keep their place on it; cards and tokens turn with the board too. Only
+/// table cards and free (not docked, not attached) widgets that `mover_id` owns, or that nobody
+/// owns, are carried; widgets attached to carried cards follow their cards. Leaves the revision
+/// alone (the caller bumps it along with the board's move).
+pub fn carry_with_board(state: &TableState, carry: &BoardCarry, mover_id: &str) -> TableState {
+    // Three quarter turns clockwise is one back, so things turn the short way round.
+    let quarter_turns = match quarter_turns_between(carry.from, carry.to) {
+        3 => -1.0,
+        turns => turns as f64,
+    };
+    let may_move = |owner_id: Option<&str>| owner_id.is_none_or(|owner| owner == mover_id);
+    let card_ids: HashSet<&str> = carry.card_ids.iter().map(String::as_str).collect();
+    let widget_ids: HashSet<&str> = carry.widget_ids.iter().map(String::as_str).collect();
+    let mut next = state.clone();
+    for card in next.cards_mut().iter_mut().filter(|card| {
+        card_ids.contains(card.instance_id.as_str())
+            && card.zone == CardZone::Table
+            && may_move(card.owner_id.as_deref())
+    }) {
+        (card.x, card.y) = point_carried_by_board((card.x, card.y), carry.from, carry.to);
+        card.rotation_turns += quarter_turns;
+    }
+    for widget in next.widgets_mut().iter_mut().filter(|widget| {
+        widget_ids.contains(widget.instance_id.as_str())
+            && widget_rides_on_boards(widget.kind)
+            && widget.zone_id.is_none()
+            && widget.attached_card_id.is_none()
+            && may_move(widget.owner_id.as_deref())
+    }) {
+        (widget.x, widget.y) = point_carried_by_board((widget.x, widget.y), carry.from, carry.to);
+        if widget.kind != BoardWidgetKind::SimpleCounter {
+            widget.rotation_turns += quarter_turns;
+        }
+    }
+    sync_attached_widgets(&mut next);
     next
 }

@@ -12,8 +12,8 @@ use gametable_core::geometry::{
     local_pixel_to_canonical,
 };
 use gametable_core::models::{
-    BoardWidgetInstance, BoardWidgetKind, CardInstance, PlayerInfo, PlaymatType, SharedZoneSide, WidgetSizeOverride,
-    ZoneDefinition, ZoneKind, ZoneWidgetKind,
+    BoardWidgetInstance, BoardWidgetKind, CardInstance, PlayerInfo, SharedZoneSide, WidgetSizeOverride, ZoneDefinition,
+    ZoneKind, ZoneWidgetKind,
 };
 
 use crate::app::Frame;
@@ -22,8 +22,9 @@ use crate::data::file_system::join_path;
 use crate::data::image_resolver::resolve_pack_generator_image_path;
 use crate::graphics::draw_list::{Color, FragmentProgram, StencilCompare};
 use crate::graphics::tessellation::DrawMode;
+use crate::table::board_layout::{BoardOnTable, turned_size};
+use crate::table::board_zones::{placed_zone_fraction, placed_zone_world_center};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw, PILE_EXTRA, orientation_turns, shown_orientation};
-use crate::table::playmat_zones::{placed_zone_fraction, placed_zone_world_center};
 use crate::table::screen::{SHARED_OWNER_KEY, TableScreen, top_card};
 use crate::table::selection::{HitShape, clamp_world_center};
 use crate::ui::components::AvatarSource;
@@ -47,14 +48,6 @@ const ROTATION_DURATION: f64 = 0.15;
 const FAN_LIFT_RATE: f32 = 18.0;
 const BAG_SIZE: f32 = COUNTER_SIZE;
 const BAG_GAP: f32 = 12.0;
-/// A standard card is 2.5in wide, so this many world units make an inch; a playmat is 24×12in.
-const PIXELS_PER_INCH: f32 = CARD_WIDTH / 2.5;
-const PLAYMAT_WIDTH: f32 = 24.0 * PIXELS_PER_INCH;
-const PLAYMAT_HEIGHT: f32 = 12.0 * PIXELS_PER_INCH;
-/// The single centre marker's size while its image loads (or with none chosen).
-const SINGLE_MARKER_WIDTH: f32 = 1280.0;
-const SINGLE_MARKER_HEIGHT: f32 = 720.0;
-const MAT_GAP_X: f32 = 2.0 * CARD_WIDTH;
 
 const WORLD_W: f32 = WORLD_WIDTH as f32;
 const WORLD_H: f32 = WORLD_HEIGHT as f32;
@@ -67,13 +60,6 @@ pub fn deck_widget_size(sub_zone_count: usize) -> (f32, f32) {
         count * zone_width + (count - 1.0) * DECK_SPACING + DECK_PADDING * 2.0,
         DECK_HEADER + DECK_SPACING + zone_height + DECK_SPACING + DECK_FOOTER + DECK_PADDING * 2.0,
     )
-}
-
-/// Which side of a shuffle button acts on what.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ShuffleTarget {
-    Pile { root_id: String },
-    Zone { zone_id: String },
 }
 
 /// What a hit item is (the original's `item.kind` plus its payload).
@@ -91,9 +77,9 @@ pub enum ItemKind {
         cards: Vec<CardInstance>,
         owned_by_opponent: bool,
     },
+    /// The shuffle button under a table pile.
     Shuffle {
-        key: String,
-        target: ShuffleTarget,
+        root_id: String,
     },
     HandCard {
         card: CardInstance,
@@ -107,6 +93,9 @@ pub enum ItemKind {
         cards: Vec<CardInstance>,
         shared: bool,
         deck_widget: bool,
+        /// The wiggle key the zone's pile animates under when shuffled; `None` for zones that
+        /// can't be shuffled from their menu (deck-widget sub-zones).
+        shuffle_wiggle_key: Option<String>,
     },
     Tooltip,
     /// A player's hand area: the table shows through it but can't be clicked there.
@@ -218,24 +207,13 @@ pub struct DropZone {
     pub rect: Rect,
 }
 
-/// A playmat on the table this frame, laid out in the viewer's world.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct ActivePlaymat {
-    /// The mat owner's player id, or `__shared` for the shared mat.
-    pub owner_key: String,
-    pub world_rect: Rect,
-    /// Turned 180° (an opponent's mat across the table).
-    pub rotated: bool,
-    pub image_path: Option<String>,
-}
-
 /// Where a zone is drawn, which decides the list of drop targets it joins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ZoneSurface {
     /// A player area slot, a sidebar.
     Docked,
-    /// On a playmat, at the table's zoom.
-    Playmat,
+    /// On a game board, at the table's zoom.
+    Board,
 }
 
 /// A zone slot's box (the pile box plus a margin) centred on a point.
@@ -298,45 +276,6 @@ fn fan_layout(parameters: &HandParameters, count: usize, inner_width: f32) -> Ve
         .collect()
 }
 
-/// `rowLefts(widths, gap)`: left edges of mats placed edge to edge outward from the table's
-/// vertical centre line (no gap at the centre split, `gap` between other neighbours).
-fn row_lefts(widths: &[f32], gap: f32) -> Vec<f32> {
-    let count = widths.len();
-    let mut lefts = vec![0.0; count];
-    if count == 0 {
-        return lefts;
-    }
-    if count % 2 == 1 {
-        let middle = count / 2;
-        lefts[middle] = WORLD_W / 2.0 - widths[middle] / 2.0;
-        let mut x = lefts[middle];
-        for index in (0..middle).rev() {
-            x = x - gap - widths[index];
-            lefts[index] = x;
-        }
-        x = lefts[middle] + widths[middle];
-        for index in middle + 1..count {
-            x += gap;
-            lefts[index] = x;
-            x += widths[index];
-        }
-    } else {
-        let half = count / 2;
-        let mut x = WORLD_W / 2.0;
-        for index in half..count {
-            lefts[index] = x;
-            x += widths[index] + gap;
-        }
-        x = WORLD_W / 2.0;
-        for index in (0..half).rev() {
-            x -= widths[index];
-            lefts[index] = x;
-            x -= gap;
-        }
-    }
-    lefts
-}
-
 /// Player colour with HSL lightness - 0.30 at 55% alpha (`_playerTintColor`).
 fn player_tint(argb: u32) -> Color {
     let channels = to_rgba_channels(argb, 1.0);
@@ -365,8 +304,17 @@ pub(super) struct PileBox<'a> {
     pub tint: Option<Color>,
     pub wiggle_key: Option<String>,
     pub searched: bool,
-    /// The shuffle button and what it shuffles.
-    pub shuffle: Option<(String, ShuffleTarget)>,
+    /// Draws the card count badge in the top-right corner. Zones show their count in their
+    /// tooltip instead.
+    pub show_count_badge: bool,
+    /// The root card id of the table pile the shuffle button under the box shuffles.
+    pub shuffle_pile_root_id: Option<String>,
+}
+
+/// A zone's hover tooltip: its name and how many cards it holds.
+pub(super) fn zone_tooltip_text(zone_name: &str, card_count: usize) -> String {
+    let plural_suffix = if card_count == 1 { "" } else { "s" };
+    format!("{zone_name} ({card_count} card{plural_suffix})")
 }
 
 impl<'a> PileBox<'a> {
@@ -383,7 +331,8 @@ impl<'a> PileBox<'a> {
             tint: None,
             wiggle_key: None,
             searched: false,
-            shuffle: None,
+            show_count_badge: true,
+            shuffle_pile_root_id: None,
         }
     }
 }
@@ -654,56 +603,45 @@ impl TableScreen {
     }
 
     // -----------------------------------------------------------------------
-    // Playmats
+    // Game boards
     // -----------------------------------------------------------------------
 
-    fn playmat_size(&self, frame: &mut Frame, path: Option<&str>, scale: f32, fallback: (f32, f32)) -> (f32, f32) {
-        match path.and_then(|path| frame.images.get(path)) {
-            Some(texture) => (texture.width * scale, texture.height * scale),
-            None => (fallback.0 * scale, fallback.1 * scale),
-        }
-    }
-
-    /// A playmat rect at a world top-left: its image cover-fit (at half opacity) inside the rounded
-    /// marker, and the border. `rotated` turns just the image for a far-seat player's own mat.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_playmat_rect(
-        &self,
-        frame: &mut Frame,
-        left: f32,
-        top: f32,
-        mark_width: f32,
-        mark_height: f32,
-        path: Option<&str>,
-        rotated: bool,
-    ) {
-        let (x, y) = self.world_to_screen(left, top);
-        let (width, height) = (mark_width * self.zoom, mark_height * self.zoom);
+    /// One board on the table: its image cover-fit (at half opacity) inside the rounded marker,
+    /// turned as the board is, and the border.
+    fn draw_board(&self, frame: &mut Frame, board: &BoardOnTable) {
+        let rect = board.world_rect;
+        let (x, y) = self.world_to_screen(rect.x, rect.y);
+        let (width, height) = (rect.width * self.zoom, rect.height * self.zoom);
         let radius = 32.0 * self.zoom;
-        if let Some(texture) = path.and_then(|path| frame.images.get(path)) {
+        let path = self.board_image_path(board.board_index);
+        if let Some(texture) = path.as_deref().and_then(|path| frame.images.get(path)) {
+            // The image fills the board as it lies before turning, then turns with it.
+            let (upright_width, upright_height) = turned_size((width, height), board.rotation);
+            let (center_x, center_y) = (x + width / 2.0, y + height / 2.0);
             let list = frame.ui.list();
             list.stencil(1, |list| list.rectangle(DrawMode::Fill, x, y, width, height, radius, radius));
             list.set_stencil_test(Some((StencilCompare::Greater, 0)));
-            let scale = (width / texture.width).max(height / texture.height);
+            let scale = (upright_width / texture.width).max(upright_height / texture.height);
             list.set_color(Color::rgba(1.0, 1.0, 1.0, 0.5));
-            if rotated {
+            let turned = board.rotation != 0;
+            if turned {
                 list.push();
-                list.translate(x + width / 2.0, y + height / 2.0);
-                list.rotate(PI);
-                list.translate(-(x + width / 2.0), -(y + height / 2.0));
+                list.translate(center_x, center_y);
+                list.rotate(board.rotation as f32 * PI / 180.0);
+                list.translate(-center_x, -center_y);
             }
             list.draw_texture(
                 texture,
                 None,
-                x + (width - texture.width * scale) / 2.0,
-                y + (height - texture.height * scale) / 2.0,
+                center_x - texture.width * scale / 2.0,
+                center_y - texture.height * scale / 2.0,
                 0.0,
                 scale,
                 scale,
                 0.0,
                 0.0,
             );
-            if rotated {
+            if turned {
                 list.pop();
             }
             list.set_stencil_test(None);
@@ -724,121 +662,42 @@ impl TableScreen {
         list.set_line_width(1.0);
     }
 
-    /// One row's mats (`drawPlayerRowMarkers`): every player's size counts toward the layout,
-    /// even when their mat is off, so toggling one doesn't move the others. Adds the mats that
-    /// are on to `mats`.
-    fn row_playmats(
-        &self,
-        frame: &mut Frame,
-        entries: &[(Option<String>, f64)],
-        players: &[PlayerInfo],
-        top_for_height: impl Fn(f32) -> f32,
-        rotated: bool,
-        mats: &mut Vec<ActivePlaymat>,
-    ) {
-        let mut widths = Vec::new();
-        let mut heights = Vec::new();
-        let mut paths = Vec::new();
-        for player in players {
-            let entry = usize::try_from(player.individual_playmat_index - 1).ok().and_then(|index| entries.get(index));
-            let scale = entry.map_or(1.0, |(_, scale)| *scale as f32);
-            let path = entry.and_then(|(path, _)| path.clone());
-            let (width, height) = self.playmat_size(frame, path.as_deref(), scale, (PLAYMAT_WIDTH, PLAYMAT_HEIGHT));
-            widths.push(width);
-            heights.push(height);
-            paths.push(path);
-        }
-        let lefts = row_lefts(&widths, MAT_GAP_X);
-        for (index, player) in players.iter().enumerate() {
-            if player.individual_playmat_on {
-                let top = top_for_height(heights[index]);
-                mats.push(ActivePlaymat {
-                    owner_key: player.id.clone(),
-                    world_rect: Rect::new(lefts[index], top, widths[index], heights[index]),
-                    rotated,
-                    image_path: paths[index].clone(),
-                });
-            }
+    fn draw_boards(&self, frame: &mut Frame, boards: &[BoardOnTable]) {
+        for board in boards {
+            self.draw_board(frame, board);
         }
     }
 
-    /// The playmats on the table this frame, laid out in the viewer's world (`drawCenterMarker`'s
-    /// layout): individual mats in rows either side of the middle, or the one shared mat centred.
-    pub(super) fn active_playmats(&self, frame: &mut Frame) -> Vec<ActivePlaymat> {
-        let entries = self.defined_playmat_entries();
-        let mut mats = Vec::new();
-        if self.game.playmat_type != PlaymatType::Shared {
-            let (top_row, bottom_row) = (&self.derived.top_row, &self.derived.bottom_row);
-            if !top_row.is_empty() && !bottom_row.is_empty() {
-                self.row_playmats(frame, &entries, top_row, |height| WORLD_H / 2.0 - height, true, &mut mats);
-                self.row_playmats(frame, &entries, bottom_row, |_| WORLD_H / 2.0, false, &mut mats);
-            } else if !top_row.is_empty() || !bottom_row.is_empty() {
-                // Solo table: centre each mat vertically, unrotated.
-                let row = if top_row.is_empty() { bottom_row } else { top_row };
-                self.row_playmats(frame, &entries, row, |height| (WORLD_H - height) / 2.0, false, &mut mats);
-            }
-            return mats;
-        }
-        if !self.state.shared_playmat_on {
-            return mats;
-        }
-        let entry = usize::try_from(self.state.shared_playmat_index - 1).ok().and_then(|index| entries.get(index));
-        let scale = entry.map_or(1.0, |(_, scale)| *scale as f32);
-        let path = entry.and_then(|(path, _)| path.clone());
-        let (width, height) =
-            self.playmat_size(frame, path.as_deref(), scale, (SINGLE_MARKER_WIDTH, SINGLE_MARKER_HEIGHT));
-        mats.push(ActivePlaymat {
-            owner_key: SHARED_OWNER_KEY.to_string(),
-            world_rect: Rect::new((WORLD_W - width) / 2.0, (WORLD_H - height) / 2.0, width, height),
-            rotated: false,
-            image_path: path,
-        });
-        mats
-    }
-
-    fn draw_center_marker(&self, frame: &mut Frame, mats: &[ActivePlaymat]) {
-        for mat in mats {
-            let rect = mat.world_rect;
-            self.draw_playmat_rect(
-                frame,
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                mat.image_path.as_deref(),
-                mat.rotated,
-            );
-        }
-    }
-
-    /// The zones placed on the mats in use, drawn at the table's zoom. An opponent's mat across
-    /// the table is turned 180 degrees, and its zones with it.
-    fn draw_playmat_zones(&mut self, frame: &mut Frame, mats: &[ActivePlaymat]) {
-        for mat in mats {
-            let Some(placed_zones) = self.derived.placed_zones.get(&mat.owner_key).cloned() else { continue };
-            let owner_id = (mat.owner_key != SHARED_OWNER_KEY).then(|| mat.owner_key.clone());
+    /// The zones placed on the boards in use, drawn at the table's zoom where their board puts
+    /// them. On a board turned upside down (an opponent's, across the table) the zones are turned
+    /// too.
+    fn draw_board_zones(&mut self, frame: &mut Frame, boards: &[BoardOnTable]) {
+        for board in boards {
+            let Some(placed_zones) = self.derived.placed_zones.get(&board.owner_key).cloned() else { continue };
+            let owner_id = (board.owner_key != SHARED_OWNER_KEY).then(|| board.owner_key.clone());
             let is_local = owner_id.as_deref().is_none_or(|owner_id| owner_id == self.acting_player_id);
             let scale = self.zoom;
-            for placed in &placed_zones {
+            for placed in placed_zones.iter().filter(|placed| placed.board_index == board.board_index) {
                 let (world_x, world_y) =
-                    placed_zone_world_center(mat.world_rect, mat.rotated, placed.fraction_x, placed.fraction_y);
+                    placed_zone_world_center(board.world_rect, board.rotation, placed.fraction_x, placed.fraction_y);
                 let mut center = self.world_to_screen(world_x, world_y);
-                // A zone being Ctrl-dragged follows the mouse, kept on its mat.
+                // A zone being Ctrl-dragged follows the mouse, kept on its board.
                 if let Some(zone_move) = &self.zone_move
-                    && zone_move.owner_key == mat.owner_key
+                    && zone_move.owner_key == board.owner_key
                     && zone_move.zone_id == placed.zone.id
                 {
                     let (mouse_x, mouse_y) = frame.ui.mouse();
                     let dragged = (mouse_x - zone_move.grab_offset.0, mouse_y - zone_move.grab_offset.1);
                     let (world_x, world_y) = self.screen_to_world(dragged.0, dragged.1);
-                    let (fraction_x, fraction_y) = placed_zone_fraction(mat.world_rect, mat.rotated, world_x, world_y);
+                    let (fraction_x, fraction_y) =
+                        placed_zone_fraction(board.world_rect, board.rotation, world_x, world_y);
                     let (world_x, world_y) =
-                        placed_zone_world_center(mat.world_rect, mat.rotated, fraction_x, fraction_y);
+                        placed_zone_world_center(board.world_rect, board.rotation, fraction_x, fraction_y);
                     center = self.world_to_screen(world_x, world_y);
                 }
                 let (center_x, center_y) = center;
                 let slot = zone_slot_rect(center_x, center_y, scale);
-                self.with_rotated(frame, mat.rotated, slot, |table, frame| {
+                self.with_rotated(frame, board.turns_its_zones(), slot, |table, frame| {
                     table.draw_zone_pile(
                         frame,
                         &placed.zone,
@@ -846,10 +705,20 @@ impl TableScreen {
                         is_local,
                         (center_x, center_y),
                         scale,
-                        ZoneSurface::Playmat,
+                        ZoneSurface::Board,
                     );
                 });
             }
+        }
+    }
+
+    /// The loaded scenarios' zones set at fixed spots on the table, at the table's zoom. They take
+    /// drops and clicks like any shared zone, but can't be moved (they sit on no board).
+    fn draw_zones_set_on_table(&mut self, frame: &mut Frame) {
+        let scale = self.zoom;
+        for on_table in self.derived.zones_on_table.clone() {
+            let center = self.to_screen(on_table.fraction_x, on_table.fraction_y);
+            self.draw_zone_pile(frame, &on_table.zone, None, true, center, scale, ZoneSurface::Board);
         }
     }
 
@@ -885,7 +754,7 @@ impl TableScreen {
         list.set_line_width(1.0);
     }
 
-    /// `drawPileBox`: an empty outline, or the top card with a count badge and optional shuffle
+    /// `drawPileBox`: an empty outline, or the top card with an optional count badge, shuffle
     /// button and search badge. Returns the box.
     pub(super) fn draw_pile_box(&mut self, frame: &mut Frame, pile: PileBox) -> Rect {
         let scale = pile.scale;
@@ -912,12 +781,14 @@ impl TableScreen {
                     .tint(pile.tint);
                 frame.draw_card(&card);
             }
-            frame.draw_count_badge(box_x + box_width - 12.0 * scale, box_y + 12.0 * scale, pile.count, scale);
-            if let Some((key, target)) = pile.shuffle {
+            if pile.show_count_badge {
+                frame.draw_count_badge(box_x + box_width - 12.0 * scale, box_y + 12.0 * scale, pile.count, scale);
+            }
+            if let Some(root_id) = pile.shuffle_pile_root_id {
                 let (shuffle_x, shuffle_y) = (center_x, box_y + box_height + 8.0 * scale - 14.0 * scale);
-                let hovered = self.hover_item.as_ref().is_some_and(
-                    |item| matches!(&item.kind, ItemKind::Shuffle { key: hovered_key, .. } if *hovered_key == key),
-                );
+                let hovered = self.hover_item.as_ref().is_some_and(|item| {
+                    matches!(&item.kind, ItemKind::Shuffle { root_id: hovered_root_id } if *hovered_root_id == root_id)
+                });
                 let list = frame.ui.list();
                 list.set_color(Color::rgba(0.0, 0.0, 0.0, if hovered { 0.75 } else { 0.54 }));
                 list.circle(DrawMode::Fill, shuffle_x, shuffle_y, 14.0 * scale, None);
@@ -926,11 +797,9 @@ impl TableScreen {
                 let origin = (frame.fonts.width(font, &glyph) / 2.0, frame.fonts.height(font) / 2.0);
                 frame.ui.list().set_color(Color::WHITE);
                 frame.print_transformed(&glyph, font, shuffle_x, shuffle_y, 0.0, scale, scale, origin.0, origin.1);
-                let item = HitItem::new(
-                    ItemKind::Shuffle { key, target },
-                    HitShape::circle(shuffle_x, shuffle_y, 14.0 * scale),
-                )
-                .tooltip("Shuffle");
+                let item =
+                    HitItem::new(ItemKind::Shuffle { root_id }, HitShape::circle(shuffle_x, shuffle_y, 14.0 * scale))
+                        .tooltip("Shuffle");
                 self.add_item(item);
             }
         }
@@ -1339,8 +1208,10 @@ impl TableScreen {
             pile.scale = scale;
             pile.alpha = top.as_ref().map_or(1.0, |top| self.ghost_alpha(&top.instance_id)) * alpha;
             pile.searched = self.is_zone_searched(&synthetic_id, widget.owner_id.as_deref());
+            pile.show_count_badge = false;
             self.draw_pile_box(frame, pile);
             let shape = HitShape::rect(zone_x, zone_y, zone_width, zone_height);
+            let tooltip = zone_tooltip_text(&zone.name, cards.len());
             if is_owner {
                 self.drop_zones.push(DropZone {
                     zone_id: synthetic_id.clone(),
@@ -1354,12 +1225,12 @@ impl TableScreen {
                     cards,
                     shared: false,
                     deck_widget: true,
+                    shuffle_wiggle_key: None,
                 };
-                let item =
-                    HitItem::new(kind, shape).tooltip(zone.name.clone()).interactable(interactable).hover(hover_id);
+                let item = HitItem::new(kind, shape).tooltip(tooltip).interactable(interactable).hover(hover_id);
                 self.add_item(item);
             } else {
-                self.add_item(HitItem::new(ItemKind::Tooltip, shape).tooltip(zone.name.clone()));
+                self.add_item(HitItem::new(ItemKind::Tooltip, shape).tooltip(tooltip));
             }
             zone_x += zone_width + DECK_SPACING * scale;
         }
@@ -1448,7 +1319,7 @@ impl TableScreen {
             pile.wiggle_key = Some(format!("pile:{root_id}"));
             pile.searched = self.derived.pile_searched.contains(root_id);
             if interactable {
-                pile.shuffle = Some((format!("pile:{root_id}"), ShuffleTarget::Pile { root_id: root_id.to_string() }));
+                pile.shuffle_pile_root_id = Some(root_id.to_string());
             }
             self.draw_pile_box(frame, pile);
             // The pile item covers the unrotated 94×124 box and goes before the shuffle button.
@@ -1682,9 +1553,12 @@ impl TableScreen {
         let visible_bottom = bottom.y + bottom.height;
         frame.ui.push_clip(rect.x, visible_top, rect.width, visible_bottom - visible_top);
         self.add_item(HitItem::new(ItemKind::Table, HitShape::rect(rect.x, rect.y, rect.width, rect.height)));
-        let mats = self.active_playmats(frame);
-        self.draw_center_marker(frame, &mats);
-        self.draw_playmat_zones(frame, &mats);
+        let boards = self.boards_on_table(frame);
+        self.draw_boards(frame, &boards);
+        self.draw_board_zones(frame, &boards);
+        self.draw_zones_set_on_table(frame);
+        self.boards_shown = boards;
+        self.draw_board_handles(frame);
         self.draw_table_piles(frame);
         self.draw_table_widgets(frame);
         self.draw_arrows(frame);
@@ -1859,8 +1733,8 @@ impl TableScreen {
     }
 
     /// One zone centred on a screen point, wherever it sits (a player area slot, a sidebar or a
-    /// playmat): a card zone's pile (top card, count, shuffle button) or a widget zone's counter or
-    /// token bag, with its hit item, name tooltip and drop target. `owner_id` is `None` for the
+    /// playmat): a card zone's pile (top card) or a widget zone's counter or token bag, with its
+    /// hit item, tooltip (a card zone's tooltip includes its card count) and drop target. `owner_id` is `None` for the
     /// shared copy; only the local player's zones and shared zones take drops and clicks, other
     /// players' zones just show their name. `scale` is 1 when docked, the table zoom on a mat.
     #[allow(clippy::too_many_arguments)]
@@ -1890,7 +1764,7 @@ impl TableScreen {
                     let drop_zone = DropZone { zone_id: zone.id.clone(), rect: widget_rect };
                     match surface {
                         ZoneSurface::Docked => self.bag_drop_zones.push(drop_zone),
-                        ZoneSurface::Playmat => self.playmat_bag_drop_zones.push(drop_zone),
+                        ZoneSurface::Board => self.playmat_bag_drop_zones.push(drop_zone),
                     }
                 }
             } else {
@@ -1919,16 +1793,14 @@ impl TableScreen {
         pile.wiggle_key = Some(wiggle_key.clone());
         pile.angle = orientation_turns(zone.orientation) * 2.0 * PI;
         pile.searched = self.is_zone_searched(&zone.id, owner_id);
-        if is_local && !cards.is_empty() && zone.shuffleable {
-            pile.shuffle = Some((wiggle_key, ShuffleTarget::Zone { zone_id: zone.id.clone() }));
-        }
-        let items_before = self.items.len();
+        pile.show_count_badge = false;
+        let tooltip = zone_tooltip_text(&zone.name, cards.len());
         self.draw_pile_box(frame, pile);
         if is_local {
             let drop_zone = DropZone { zone_id: zone.id.clone(), rect: slot };
             match surface {
                 ZoneSurface::Docked => self.drop_zones.push(drop_zone),
-                ZoneSurface::Playmat => self.playmat_drop_zones.push(drop_zone),
+                ZoneSurface::Board => self.playmat_drop_zones.push(drop_zone),
             }
             let hover_id = top.as_ref().map(|top| top.instance_id.clone());
             let kind = ItemKind::Zone {
@@ -1938,18 +1810,18 @@ impl TableScreen {
                 cards,
                 shared: is_shared,
                 deck_widget: false,
+                shuffle_wiggle_key: Some(wiggle_key),
             };
             let item = HitItem::new(kind, HitShape::rect(slot.x, slot.y, slot.width, slot.height))
-                .tooltip(zone.name.clone())
+                .tooltip(tooltip)
                 .hover(hover_id);
             let item = HitItem { mirror: self.draw_mirror, ..item };
-            // Before the shuffle button, so the button wins.
-            self.items.insert(items_before.min(self.items.len()), item);
+            self.add_item(item);
         } else {
             let inset = 8.0 * scale;
             let shape =
                 HitShape::rect(slot.x + inset, slot.y + inset, slot.width - 2.0 * inset, slot.height - 2.0 * inset);
-            self.add_item(HitItem::new(ItemKind::Tooltip, shape).tooltip(zone.name.clone()));
+            self.add_item(HitItem::new(ItemKind::Tooltip, shape).tooltip(tooltip));
         }
     }
 
@@ -2027,7 +1899,7 @@ impl TableScreen {
             // Zones placed on this player's playmat are drawn there instead.
             let mut zones: Vec<ZoneDefinition> = owned_zones
                 .iter()
-                .filter(|zone| !self.derived.is_zone_on_playmat(Some(&player.id), &zone.id))
+                .filter(|zone| !self.derived.is_zone_on_board(Some(&player.id), &zone.id))
                 .cloned()
                 .collect();
             if reverse {
@@ -2059,7 +1931,8 @@ impl TableScreen {
         }
     }
 
-    /// The shared zones docked in this sidebar (those not placed on the shared playmat).
+    /// The shared zones docked in this sidebar (those not placed on a shared board or set on the
+    /// table by a scenario).
     fn sidebar_zones(&self, side: SharedZoneSide) -> Vec<ZoneDefinition> {
         let on_this_side = |zone: &&ZoneDefinition| match side {
             SharedZoneSide::Left => zone.side == SharedZoneSide::Left,
@@ -2069,7 +1942,8 @@ impl TableScreen {
             .shared_zones
             .iter()
             .filter(on_this_side)
-            .filter(|zone| !self.derived.is_zone_on_playmat(None, &zone.id))
+            .filter(|zone| !self.derived.is_zone_on_board(None, &zone.id))
+            .filter(|zone| !self.derived.is_zone_set_on_table(&zone.id))
             .cloned()
             .collect()
     }
@@ -2156,13 +2030,6 @@ impl TableScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn mats_meet_at_the_centre_line() {
-        assert_eq!(row_lefts(&[100.0, 200.0], 10.0), vec![1180.0, 1280.0]);
-        assert_eq!(row_lefts(&[100.0, 50.0, 100.0], 10.0), vec![1145.0, 1255.0, 1315.0]);
-        assert!(row_lefts(&[], 10.0).is_empty());
-    }
 
     #[test]
     fn fans_fit_the_band() {

@@ -1,14 +1,15 @@
-//! Zones placed on a playmat, edited in the Playmats tab (a GameTable addition). A row of chips
-//! lists the zones that can still go on the selected mat; clicking one drops it in the mat's
-//! centre. Placed zones are drawn on the table preview (a card back for card zones, the widget
-//! for counters and token bags) with their name as a small label above, and can be dragged around
-//! the mat, dragged off it to remove them, or removed with their × button.
+//! Zones placed on a game board, edited in the Game Boards tab's Board Preview (a GameTable
+//! addition). Right-clicking the preview offers "Add Zone...", a list of the zones that can still
+//! go on the selected board; the picked zone lands where the preview was right-clicked (or in the
+//! board's centre). Placed zones are drawn on the preview (a card back for card
+//! zones, the widget for counters and token bags) with their name as a small label above, and can
+//! be dragged around the board, dragged off it to remove them, or removed with their × button.
 
 use std::f32::consts::PI;
 
 use gametable_core::models::{
-    CardDefinition, GameDefinition, PlaymatType, PlaymatZonePlacement, ZoneDefinition, ZoneKind, ZoneWidgetKind,
-    zone_fits_playmat_type,
+    BoardKind, BoardZonePlacement, CardDefinition, GameDefinition, ZoneDefinition, ZoneKind, ZoneWidgetKind,
+    zone_fits_board_kind,
 };
 
 use crate::app::Frame;
@@ -17,18 +18,19 @@ use crate::graphics::draw_list::Color;
 use crate::graphics::tessellation::DrawMode;
 use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::display_card_backs;
+use crate::screens::gamedef::list_picker_dialog::{ListPickerDialog, PickerEntry, PickerResponse};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw, orientation_turns};
 use crate::table::panels::lua_number_text;
 use crate::table::view::COUNTER_SIZE;
-use crate::ui::components::{ChipOptions, Flow};
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
+use crate::ui::overlays::{ContextMenu, MenuItem, MenuResponse};
 use crate::ui::theme::with_alpha;
 use crate::ui::widgets::IconButtonOptions;
 
-/// The playmat's rectangle on screen and the preview's world-to-screen scale.
+/// The board's rectangle on screen and the preview's world-to-screen scale.
 #[derive(Debug, Clone, Copy)]
-pub struct MatScreenRect {
+pub struct BoardScreenRect {
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -36,17 +38,17 @@ pub struct MatScreenRect {
     pub preview_scale: f32,
 }
 
-impl MatScreenRect {
+impl BoardScreenRect {
     fn point_at(&self, fraction_x: f64, fraction_y: f64) -> (f32, f32) {
         (self.x + fraction_x as f32 * self.width, self.y + fraction_y as f32 * self.height)
     }
 
-    fn fraction_at(&self, screen_x: f32, screen_y: f32) -> (f64, f64) {
+    pub fn fraction_at(&self, screen_x: f32, screen_y: f32) -> (f64, f64) {
         (f64::from((screen_x - self.x) / self.width), f64::from((screen_y - self.y) / self.height))
     }
 }
 
-/// A zone that can be placed on the selected kind of mat.
+/// A zone that can be placed on the selected kind of board.
 #[derive(Debug, Clone)]
 pub struct PlaceableZone {
     pub zone: ZoneDefinition,
@@ -55,16 +57,16 @@ pub struct PlaceableZone {
     pub is_scenario_zone: bool,
 }
 
-/// Every zone that fits this playmat type: the game's own zones, and for the shared mat also
+/// Every zone that fits this kind of board: the game's own zones, and for a shared board also
 /// every scenario's zones (scenario zones are always shared).
-pub fn placeable_zones(game: &GameDefinition) -> Vec<PlaceableZone> {
+pub fn placeable_zones(game: &GameDefinition, kind: BoardKind) -> Vec<PlaceableZone> {
     let mut zones: Vec<PlaceableZone> = game
         .zones
         .iter()
-        .filter(|zone| zone_fits_playmat_type(zone, game.playmat_type))
+        .filter(|zone| zone_fits_board_kind(zone, kind))
         .map(|zone| PlaceableZone { zone: zone.clone(), chip_label: zone.name.clone(), is_scenario_zone: false })
         .collect();
-    if game.playmat_type == PlaymatType::Shared {
+    if kind == BoardKind::Shared {
         for scenario in &game.scenarios {
             for zone in &scenario.zones {
                 if zones.iter().any(|placeable| placeable.zone.id == zone.id) {
@@ -82,14 +84,14 @@ pub fn placeable_zones(game: &GameDefinition) -> Vec<PlaceableZone> {
 }
 
 /// The zone's size in world units, turned for landscape orientations.
-fn zone_world_size(zone: &ZoneDefinition) -> (f32, f32) {
+pub(super) fn zone_world_size(zone: &ZoneDefinition) -> (f32, f32) {
     if zone.kind == ZoneKind::Widget {
         return (COUNTER_SIZE, COUNTER_SIZE);
     }
     if orientation_turns(zone.orientation) == 0.0 { (CARD_WIDTH, CARD_HEIGHT) } else { (CARD_HEIGHT, CARD_WIDTH) }
 }
 
-/// A zone being dragged around the mat: which placement, and where on the zone it was grabbed
+/// A zone being dragged around the board: which placement, and where on the zone it was grabbed
 /// (as an offset from its centre, in screen pixels).
 struct DraggedZone {
     zone_id: String,
@@ -99,72 +101,116 @@ struct DraggedZone {
 #[derive(Default)]
 pub struct ZonePlacementEditor {
     dragged: Option<DraggedZone>,
+    menu: Option<ContextMenu<ZoneMenuAction>>,
+    picker: Option<ListPickerDialog>,
+    /// Where on the board (fractions) a zone picked from the open picker goes.
+    add_at: (f64, f64),
 }
 
+/// The zones that fit the board and aren't on it yet.
+fn unplaced_zones(model: &EditorModel, board_index: usize) -> Vec<PlaceableZone> {
+    let Some(board) = model.game.game_boards.get(board_index) else { return Vec::new() };
+    placeable_zones(&model.game, board.kind)
+        .into_iter()
+        .filter(|candidate| board.placement_for(&candidate.zone.id).is_none())
+        .collect()
+}
+
+/// The picker's second line for a zone: what kind it is, and its scenario.
+fn zone_description(candidate: &PlaceableZone) -> String {
+    let kind = match (candidate.zone.kind, candidate.zone.widget_kind) {
+        (ZoneKind::Card, _) => "Card zone",
+        (ZoneKind::Widget, ZoneWidgetKind::Counter) => "Counter",
+        (ZoneKind::Widget, ZoneWidgetKind::TokenBag) => "Token bag",
+    };
+    match candidate.chip_label.strip_prefix("Scenario: ") {
+        Some(scenario) => format!("{kind} · Scenario: {}", scenario.split(" — ").next().unwrap_or(scenario)),
+        None => kind.to_string(),
+    }
+}
+
+/// What the Board Preview's right-click menu does.
+#[derive(Debug, Clone, PartialEq)]
+enum ZoneMenuAction {
+    AddZone,
+}
+
+pub const ADD_ZONE_DIALOG: &str = "gb:zones:add";
+
 impl ZonePlacementEditor {
-    /// The "Zones on This Mat" chips for placing zones. Returns the height used.
-    pub fn draw_zone_chips(
+    /// The Board Preview was right-clicked at `(screen_x, screen_y)`: offers "Add Zone...", which
+    /// places the picked zone there when that is on the board (in the board's middle otherwise).
+    pub fn open_menu(
         &mut self,
-        frame: &mut Frame,
-        model: &mut EditorModel,
-        playmat_index: usize,
-        x: f32,
-        y: f32,
-        width: f32,
-    ) -> f32 {
-        let palette = frame.palette();
-        let label_height = frame.group_label("Zones on This Mat", x, y, width);
-        let chips_y = y + label_height + 4.0;
-        let placeable = placeable_zones(&model.game);
-        let playmat = &model.game.playmats[playmat_index];
-        let unplaced: Vec<&PlaceableZone> =
-            placeable.iter().filter(|candidate| playmat.placement_for(&candidate.zone.id).is_none()).collect();
-        let hint = if placeable.is_empty() {
-            Some(match model.game.playmat_type {
-                PlaymatType::Individual => "Add player zones (not shared) on the Zones tab to place them here.",
-                PlaymatType::Shared => "Add shared zones or scenario zones to place them on the shared mat.",
-            })
-        } else if unplaced.is_empty() {
-            Some("Every zone is placed. Drag a zone off the mat to take it off again.")
-        } else {
-            None
-        };
-        if let Some(hint) = hint {
-            let options = TextOptions::new().size(13.0).width(width).color(palette.on_surface_variant);
-            frame.text(hint, x, chips_y + 6.0, options);
-            return label_height + 4.0 + 32.0;
-        }
-        let mut flow = Flow::new(x, chips_y, width, 32.0, 8.0);
-        let mut picked_zone_id = None;
-        for candidate in unplaced {
-            let chip_width = frame.chip_width(&candidate.chip_label, false, true);
-            let (chip_x, chip_y) = flow.place(chip_width);
-            let id = format!("pt:place:{}", candidate.zone.id);
-            let options = ChipOptions { id: Some(&id), icon: Some("add"), tooltip: Some("Place on the mat") };
-            let (clicked, _) = frame.chip(&candidate.chip_label, chip_x, chip_y, false, &options);
-            if clicked {
-                picked_zone_id = Some(candidate.zone.id.clone());
-            }
-        }
-        if let Some(zone_id) = picked_zone_id {
-            model.game.playmats[playmat_index].zone_placements.push(PlaymatZonePlacement::new(zone_id, 0.5, 0.5));
-        }
-        flow.bottom() - y
+        model: &EditorModel,
+        board_index: usize,
+        board_rect: BoardScreenRect,
+        screen_x: f32,
+        screen_y: f32,
+    ) {
+        let (fraction_x, fraction_y) = board_rect.fraction_at(screen_x, screen_y);
+        let on_board = (0.0..=1.0).contains(&fraction_x) && (0.0..=1.0).contains(&fraction_y);
+        self.add_at = if on_board { (fraction_x, fraction_y) } else { (0.5, 0.5) };
+        let nothing_to_add = unplaced_zones(model, board_index).is_empty();
+        let items = vec![MenuItem::new("Add Zone...", ZoneMenuAction::AddZone).disabled(nothing_to_add)];
+        self.menu = Some(ContextMenu::new("gb:zones:menu", screen_x, screen_y, items));
     }
 
-    /// Draws the placed zones on the preview mat and handles dragging and removing them.
+    /// Shows the open menu and zone picker, and places a picked zone.
+    pub fn show_menu_and_picker(&mut self, frame: &mut Frame, model: &mut EditorModel, board_index: usize) {
+        if let Some(menu) = &mut self.menu {
+            match menu.show(frame) {
+                MenuResponse::Open => {}
+                MenuResponse::Closed => self.menu = None,
+                MenuResponse::Selected(ZoneMenuAction::AddZone) => {
+                    self.menu = None;
+                    let entries: Vec<PickerEntry> = unplaced_zones(model, board_index)
+                        .into_iter()
+                        .map(|candidate| {
+                            let entry = PickerEntry::new(candidate.zone.id.clone(), candidate.zone.name.clone());
+                            entry.detail(zone_description(&candidate))
+                        })
+                        .collect();
+                    let empty = match model.game.game_boards.get(board_index).map(|board| board.kind) {
+                        Some(BoardKind::Shared) => {
+                            "Add shared zones or scenario zones to place them on a shared board."
+                        }
+                        _ => "Add player zones (not shared) on the Zones tab to place them here.",
+                    };
+                    self.picker = Some(ListPickerDialog::new(ADD_ZONE_DIALOG, "Add Zone", empty, entries));
+                }
+            }
+        }
+        if let Some(picker) = &mut self.picker {
+            match picker.show(frame) {
+                PickerResponse::Open => {}
+                PickerResponse::Cancelled => self.picker = None,
+                PickerResponse::Picked(zone_id) => {
+                    self.picker = None;
+                    let (x, y) = self.add_at;
+                    if let Some(board) = model.game.game_boards.get_mut(board_index)
+                        && board.placement_for(&zone_id).is_none()
+                    {
+                        board.zone_placements.push(BoardZonePlacement::new(zone_id, x, y));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draws the placed zones on the previewed board and handles dragging and removing them.
     pub fn draw_placed_zones(
         &mut self,
         frame: &mut Frame,
         model: &mut EditorModel,
-        playmat_index: usize,
-        mat: MatScreenRect,
+        board_index: usize,
+        mat: BoardScreenRect,
     ) {
-        let placeable = placeable_zones(&model.game);
+        let placeable = placeable_zones(&model.game, model.game.game_boards[board_index].kind);
         let display_backs = display_card_backs(&model.folder_path, &model.game.card_backs);
         let scenario_card_back_id = model.game.scenario_card_back_id.clone();
         let mut removed_zone_id = None;
-        let placements = model.game.playmats[playmat_index].zone_placements.clone();
+        let placements = model.game.game_boards[board_index].zone_placements.clone();
         for placement in &placements {
             let fitting = placeable.iter().find(|candidate| candidate.zone.id == placement.zone_id);
             let known_zone = fitting.map(|candidate| candidate.zone.clone()).or_else(|| {
@@ -185,7 +231,7 @@ impl ZonePlacementEditor {
                 center = (mouse_x - dragged.grab_offset.0, mouse_y - dragged.grab_offset.1);
             }
             let region = frame.ui.region(
-                &format!("pt:zone:{}", placement.zone_id),
+                &format!("gb:zone:{}", placement.zone_id),
                 center.0 - zone_width / 2.0,
                 center.1 - zone_height / 2.0,
                 zone_width,
@@ -199,16 +245,16 @@ impl ZonePlacementEditor {
                     grab_offset: (mouse_x - center.0, mouse_y - center.1),
                 });
             }
-            let off_the_mat =
+            let off_the_board =
                 !(mat.x..=mat.x + mat.width).contains(&center.0) || !(mat.y..=mat.y + mat.height).contains(&center.1);
             if is_dragged && !region.held {
                 self.dragged = None;
-                if off_the_mat {
+                if off_the_board {
                     removed_zone_id = Some(placement.zone_id.clone());
                     continue;
                 }
                 let (fraction_x, fraction_y) = mat.fraction_at(center.0, center.1);
-                if let Some(stored) = model.game.playmats[playmat_index]
+                if let Some(stored) = model.game.game_boards[board_index]
                     .zone_placements
                     .iter_mut()
                     .find(|stored| stored.zone_id == placement.zone_id)
@@ -217,7 +263,7 @@ impl ZonePlacementEditor {
                     stored.y = fraction_y.clamp(0.0, 1.0);
                 }
             }
-            let alpha = match (fitting.is_some(), is_dragged && off_the_mat) {
+            let alpha = match (fitting.is_some(), is_dragged && off_the_board) {
                 (false, _) => 0.4,
                 (true, true) => 0.5,
                 (true, false) => 1.0,
@@ -261,7 +307,7 @@ impl ZonePlacementEditor {
             }
             let label = match (&known_zone, fitting.is_some()) {
                 (Some(zone), true) => zone.name.clone(),
-                (Some(zone), false) => format!("{} (doesn't fit this mat type)", zone.name),
+                (Some(zone), false) => format!("{} (doesn't fit this kind of board)", zone.name),
                 (None, _) => "Deleted zone".to_string(),
             };
             draw_zone_label(frame, &label, center.0, center.1 - zone_height / 2.0, alpha);
@@ -273,10 +319,13 @@ impl ZonePlacementEditor {
             let over_button = (button_x..=button_x + button_size).contains(&mouse_x)
                 && (button_y..=button_y + button_size).contains(&mouse_y);
             if (region.hovered || over_button) && self.dragged.is_none() {
-                let id = format!("pt:unplace:{}", placement.zone_id);
+                let id = format!("gb:unplace:{}", placement.zone_id);
                 let options = IconButtonOptions {
                     background: Some(Color::rgba(0.0, 0.0, 0.0, 0.7)),
-                    ..IconButtonOptions::tooltip("Take off the mat").id(&id).size(button_size, 16.0).color(Color::WHITE)
+                    ..IconButtonOptions::tooltip("Take off the board")
+                        .id(&id)
+                        .size(button_size, 16.0)
+                        .color(Color::WHITE)
                 };
                 if frame.icon_button("close", button_x, button_y, &options) {
                     removed_zone_id = Some(placement.zone_id.clone());
@@ -284,7 +333,7 @@ impl ZonePlacementEditor {
             }
         }
         if let Some(zone_id) = removed_zone_id {
-            model.game.playmats[playmat_index].zone_placements.retain(|placement| placement.zone_id != zone_id);
+            model.game.game_boards[board_index].zone_placements.retain(|placement| placement.zone_id != zone_id);
         }
     }
 }
@@ -292,7 +341,7 @@ impl ZonePlacementEditor {
 /// What a placed zone looks like in the editor: a card back for card zones (the scenario back
 /// for scenario zones), the counter or token bag for widget zones.
 #[allow(clippy::too_many_arguments)]
-fn draw_zone_stand_in(
+pub(super) fn draw_zone_stand_in(
     frame: &mut Frame,
     folder_path: &str,
     zone: &ZoneDefinition,
@@ -376,7 +425,7 @@ fn argb_with_alpha(argb: u32, alpha: f32) -> Color {
 }
 
 /// The zone name as a small label centred just above the zone (editor only).
-fn draw_zone_label(frame: &mut Frame, label: &str, center_x: f32, zone_top: f32, alpha: f32) {
+pub(super) fn draw_zone_label(frame: &mut Frame, label: &str, center_x: f32, zone_top: f32, alpha: f32) {
     let font_size = 11.0;
     let max_width = 160.0;
     let text_width = frame.text_width(label, font_size, crate::ui::theme::Weight::Medium).min(max_width);
@@ -416,18 +465,17 @@ mod tests {
     }
 
     #[test]
-    fn individual_mats_offer_only_player_zones() {
-        let mut game = game_with_zones();
-        game.playmat_type = PlaymatType::Individual;
-        let ids: Vec<String> = placeable_zones(&game).into_iter().map(|candidate| candidate.zone.id).collect();
+    fn player_boards_offer_only_player_zones() {
+        let game = game_with_zones();
+        let ids: Vec<String> =
+            placeable_zones(&game, BoardKind::Player).into_iter().map(|candidate| candidate.zone.id).collect();
         assert_eq!(ids, ["deck"]);
     }
 
     #[test]
-    fn the_shared_mat_offers_shared_and_scenario_zones() {
-        let mut game = game_with_zones();
-        game.playmat_type = PlaymatType::Shared;
-        let zones = placeable_zones(&game);
+    fn shared_boards_offer_shared_and_scenario_zones() {
+        let game = game_with_zones();
+        let zones = placeable_zones(&game, BoardKind::Shared);
         let ids: Vec<&str> = zones.iter().map(|candidate| candidate.zone.id.as_str()).collect();
         assert_eq!(ids, ["market", "walls"]);
         assert_eq!(zones[1].chip_label, "Scenario: Siege — Walls");

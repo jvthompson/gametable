@@ -630,8 +630,8 @@ impl SettingsTab {
         row_y += SettingsTab::optional_color(
             frame,
             "gs:playmatBorderColor",
-            "Playmat Border Color",
-            "Clear playmat border color",
+            "Board Border Color",
+            "Clear board border color",
             &mut game.playmat_border_color,
             DEFAULT_PLAYMAT_BORDER_COLOR,
             column_x,

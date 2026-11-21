@@ -950,11 +950,15 @@ impl TableScreen {
     /// `T:draw(x, y, w, h)`: input against last frame's items, the view, then the overlays in
     /// the original's stacking order.
     pub fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {
-        self.snapshot_session();
-        self.derive();
-        self.refresh_selection();
+        self.read_table_from_session();
         if self.table_rect.is_some() {
+            self.table_changed_by_input = false;
             self.process_input(frame);
+            // A drop ends the drag and moves the card in the same frame: draw where it landed,
+            // not where the copy taken before input still has it.
+            if self.table_changed_by_input {
+                self.read_table_from_session();
+            }
         }
         self.library_hover_definition = None;
         let chat_squeeze = if self.is_chat_available() { CHAT_WIDTH * self.chat_animation } else { 0.0 };
@@ -997,9 +1001,17 @@ impl TableScreen {
         self.show_menus_and_dialogs(frame);
     }
 
-    /// Seeds the playmat once the table is first shown.
+    /// Copies the session's table and works out everything drawn from it.
+    fn read_table_from_session(&mut self) {
+        self.snapshot_session();
+        self.show_items_riding_on_the_dragged_board();
+        self.derive();
+        self.refresh_selection();
+    }
+
+    /// Seeds the game boards once the table is first shown.
     pub fn enter(&mut self, frame: &Frame) {
-        self.seed_playmat(frame);
+        self.seed_boards(frame);
     }
 }
 

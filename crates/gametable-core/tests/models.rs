@@ -102,26 +102,111 @@ fn zone_definition_defaults_and_field_order() {
 
 #[test]
 fn playmat_zone_placements_round_trip_and_are_omitted_when_empty() {
-    let plain = PlaymatDefinition::from_json(&decode(r#"{"imagePath":"mat.png"}"#)).unwrap();
+    let plain = GameBoardDefinition::from_json(&decode(r#"{"imagePath":"mat.png"}"#)).unwrap();
     assert!(plain.zone_placements.is_empty());
     assert_eq!(compact(&plain.to_json()), r#"{"imagePath":"mat.png"}"#);
 
     let text = r#"{"imagePath":"mat.png","scale":0.5,"zonePlacements":[{"zoneId":"deck","x":0.25,"y":0.75}]}"#;
-    let placed = PlaymatDefinition::from_json(&decode(text)).unwrap();
-    assert_eq!(placed.zone_placements, vec![PlaymatZonePlacement::new("deck", 0.25, 0.75)]);
+    let placed = GameBoardDefinition::from_json(&decode(text)).unwrap();
+    assert_eq!(placed.zone_placements, vec![BoardZonePlacement::new("deck", 0.25, 0.75)]);
     assert_eq!(placed.placement_for("deck").map(|placement| placement.x), Some(0.25));
     assert!(placed.placement_for("discard").is_none());
     assert_eq!(compact(&placed.to_json()), text);
 }
 
 #[test]
-fn zones_fit_playmat_types_by_ownership() {
+fn zones_fit_board_kinds_by_ownership() {
     let owned = ZoneDefinition::new("deck", "Deck");
     let shared = ZoneDefinition { shared: true, ..owned.clone() };
-    assert!(zone_fits_playmat_type(&owned, PlaymatType::Individual));
-    assert!(!zone_fits_playmat_type(&owned, PlaymatType::Shared));
-    assert!(zone_fits_playmat_type(&shared, PlaymatType::Shared));
-    assert!(!zone_fits_playmat_type(&shared, PlaymatType::Individual));
+    assert!(zone_fits_board_kind(&owned, BoardKind::Player));
+    assert!(!zone_fits_board_kind(&owned, BoardKind::Shared));
+    assert!(zone_fits_board_kind(&shared, BoardKind::Shared));
+    assert!(!zone_fits_board_kind(&shared, BoardKind::Player));
+}
+
+#[test]
+fn game_boards_kind_and_table_placement_round_trip_in_field_order() {
+    let text = r#"{"imagePath":"board.png","scale":0.5,"kind":"shared","zonePlacements":[{"zoneId":"deck","x":0.25,"y":0.75}],"tablePlacement":{"x":1280,"y":300,"rotation":90,"toggleable":true,"unlockedFromCenter":true}}"#;
+    let board = GameBoardDefinition::from_json(&decode(text)).unwrap();
+    assert_eq!(board.kind, BoardKind::Shared);
+    assert_eq!(
+        board.table_placement,
+        Some(BoardTablePlacement { x: 1280.0, y: 300.0, rotation: 90, toggleable: true, unlocked_from_center: true })
+    );
+    assert!(board.is_toggleable_on_table());
+    assert_eq!(compact(&board.to_json()), text);
+
+    // Defaults are left out: a player board, unrotated and always shown.
+    let fixed = GameBoardDefinition {
+        table_placement: Some(BoardTablePlacement::new(0.0, -200.0)),
+        ..GameBoardDefinition::new("mat.png")
+    };
+    assert!(!fixed.is_toggleable_on_table());
+    assert_eq!(compact(&fixed.to_json()), r#"{"imagePath":"mat.png","tablePlacement":{"x":0,"y":-200}}"#);
+}
+
+#[test]
+fn player_placements_round_trip_and_replace_the_every_seat_copy_for_their_player() {
+    let text = r#"{"imagePath":"mat.png","tablePlacement":{"x":0,"y":200},"playerPlacements":[{"player":2,"x":400,"y":300,"rotation":90,"toggleable":true},{"player":3,"x":2000,"y":1100}]}"#;
+    let board = GameBoardDefinition::from_json(&decode(text)).unwrap();
+    assert_eq!(
+        board.player_placements,
+        vec![
+            BoardPlayerPlacement { rotation: 90, toggleable: true, ..BoardPlayerPlacement::new(2, 400.0, 300.0) },
+            BoardPlayerPlacement::new(3, 2000.0, 1100.0),
+        ]
+    );
+    assert_eq!(compact(&board.to_json()), text);
+    assert!(board.is_on_table() && board.is_toggleable_on_table());
+    // Player 1 gets the every-seat copy; players 2 and 3 their own placements.
+    assert_eq!(board.toggleable_for_player(1), Some(false));
+    assert_eq!(board.toggleable_for_player(2), Some(true));
+    assert_eq!(board.toggleable_for_player(3), Some(false));
+
+    // Placed for one player only: nobody else gets it.
+    let only_two = GameBoardDefinition {
+        player_placements: vec![BoardPlayerPlacement::new(2, 400.0, 300.0)],
+        ..GameBoardDefinition::new("mat.png")
+    };
+    assert_eq!(only_two.toggleable_for_player(1), None);
+    assert!(only_two.is_on_table());
+}
+
+#[test]
+fn board_rotation_snaps_to_quarter_turns() {
+    assert_eq!(normalized_rotation(0), 0);
+    assert_eq!(normalized_rotation(-90), 270);
+    assert_eq!(normalized_rotation(450), 90);
+    assert_eq!(normalized_rotation(100), 90);
+    let mut placement = BoardTablePlacement::new(0.0, 0.0);
+    for expected in [90, 180, 270, 0] {
+        placement.rotate_clockwise();
+        assert_eq!(placement.rotation, expected);
+    }
+}
+
+#[test]
+fn old_playmats_load_as_game_boards_and_save_as_game_boards() {
+    let old = r#"{"id":"g","name":"G","cards":[],"playmatType":"shared","playmats":[{"imagePath":"a.png"},{"imagePath":"b.png","scale":2}]}"#;
+    let game = GameDefinition::from_json(&decode(old)).unwrap();
+    assert_eq!(game.game_boards.len(), 2);
+    assert!(game.game_boards.iter().all(|board| board.kind == BoardKind::Shared));
+    assert_eq!(
+        compact(&game.to_json()),
+        r#"{"id":"g","name":"G","cards":[],"gameBoards":[{"imagePath":"a.png","kind":"shared"},{"imagePath":"b.png","scale":2,"kind":"shared"}]}"#
+    );
+
+    // Individual mats were player boards (the default kind, so it isn't written).
+    let individual = r#"{"id":"g","name":"G","cards":[],"playmats":[{"imagePath":"a.png"}]}"#;
+    let game = GameDefinition::from_json(&decode(individual)).unwrap();
+    assert_eq!(game.game_boards[0].kind, BoardKind::Player);
+    assert_eq!(compact(&game.to_json()), r#"{"id":"g","name":"G","cards":[],"gameBoards":[{"imagePath":"a.png"}]}"#);
+
+    // gameBoards wins over a leftover playmats list.
+    let both = r#"{"id":"g","name":"G","cards":[],"playmats":[{"imagePath":"old.png"}],"gameBoards":[{"imagePath":"new.png"}]}"#;
+    let game = GameDefinition::from_json(&decode(both)).unwrap();
+    assert_eq!(game.game_boards.len(), 1);
+    assert_eq!(game.game_boards[0].image_path, "new.png");
 }
 
 #[test]
@@ -132,6 +217,19 @@ fn scenario_placements_omit_defaults() {
     assert_eq!(compact(&face_down.to_json()), r#"{"definitionId":"c1","x":0.25,"y":0.75,"faceUp":false}"#);
     let token = ScenarioTokenPlacement::new("clue.png", 0.3, 0.4);
     assert_eq!(compact(&token.to_json()), r#"{"imagePath":"clue.png","x":0.3,"y":0.4}"#);
+}
+
+#[test]
+fn scenario_zones_set_on_the_table_round_trip() {
+    let placement = ScenarioZonePlacement::new("boss_deck_zone", 0.5, 0.25);
+    assert_eq!(compact(&placement.to_json()), r#"{"zoneId":"boss_deck_zone","x":0.5,"y":0.25}"#);
+    let scenario = Scenario { zone_placements: vec![placement.clone()], ..Scenario::new("scen1", "Opening") };
+    let json = compact(&scenario.to_json());
+    assert!(json.contains(r#""zonePlacements":[{"zoneId":"boss_deck_zone","x":0.5,"y":0.25}]"#), "{json}");
+    assert_eq!(Scenario::from_json(&scenario.to_json()).unwrap(), scenario);
+    assert_eq!(scenario.zone_placement_for("boss_deck_zone"), Some(&placement));
+    // Without any, the key is left out (files stay as the original writes them).
+    assert!(!compact(&Scenario::new("scen1", "Opening").to_json()).contains("zonePlacements"));
 }
 
 #[test]

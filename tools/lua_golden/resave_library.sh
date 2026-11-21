@@ -4,6 +4,10 @@
 #
 # Usage: tools/lua_golden/resave_library.sh <libraryRoot> <outputDir>
 #   e.g. tools/lua_golden/resave_library.sh /d/CardfluxLibrary "$TMP/resave"
+#
+# Expected difference: GameTable saves a game's `playmatType` + `playmats` as `gameBoards` (each
+# board with its own kind, and any table placement or zones placed on it), so every gamedef with
+# playmats differs there and only there.
 set -euo pipefail
 
 library_root="$(cd "$1" && pwd)"

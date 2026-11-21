@@ -14,8 +14,8 @@ use std::collections::{BTreeSet, HashSet};
 use crate::deck_widget_zones::parse_deck_widget_zone_id;
 use crate::json::{JsonObject, JsonValue};
 use crate::models::{
-    BoardWidgetKind, DeckConfig, GameDefinition, PlayerInfo, PlayerRole, PlaymatType, PlaymatZonePosition, TableState,
-    WidgetSizeOverride,
+    BoardCarry, BoardKind, BoardWidgetKind, BoardZonePosition, DeckConfig, GameDefinition, MovedBoard, PlayerInfo,
+    PlayerRole, TableState, WidgetSizeOverride,
 };
 use crate::session::{ArrowDragPreview, CardDragPreview, Session, SessionError};
 use crate::stack_utils::stack_of;
@@ -589,25 +589,43 @@ impl HostEngine {
             "requestSetCurrentPlayer" => self.session.set_current_player(p.text("playerId")),
             // A player moves zones on their own mat; only the owner moves zones on the shared mat.
             "requestSetPlaymatZonePositions" => {
-                if let Some(playmat_index) = p.whole_number_or("playmatIndex", 0) {
-                    let positions: Vec<PlaymatZonePosition> = p
+                if let Some(board_index) = p.whole_number_or("playmatIndex", 0) {
+                    let positions: Vec<BoardZonePosition> = p
                         .list("positions")
                         .iter()
                         .filter_map(|position| {
-                            let mut position = PlaymatZonePosition::from_json(position).ok()?;
-                            position.playmat_index = playmat_index;
+                            let mut position = BoardZonePosition::from_json(position).ok()?;
+                            position.board_index = board_index;
                             Some(position)
                         })
                         .collect();
-                    match self.session.game.playmat_type {
-                        PlaymatType::Individual => {
-                            self.session.set_playmat_zone_positions(Some(client_id), playmat_index, positions)
+                    let board_kind = usize::try_from(board_index - 1)
+                        .ok()
+                        .and_then(|index| self.session.game.game_boards.get(index))
+                        .map(|board| board.kind);
+                    match board_kind {
+                        Some(BoardKind::Player) => {
+                            self.session.set_board_zone_positions(Some(client_id), board_index, positions)
                         }
-                        PlaymatType::Shared if client_id == self.owner_id => {
-                            self.session.set_playmat_zone_positions(None, playmat_index, positions)
+                        Some(BoardKind::Shared) if client_id == self.owner_id => {
+                            self.session.set_board_zone_positions(None, board_index, positions)
                         }
-                        PlaymatType::Shared => {}
+                        _ => {}
                     }
+                }
+            }
+            // A player moves (or puts back) one of their own player boards.
+            "requestSetMovedBoard" => {
+                if let Some(board_index) = p.whole_number_or("boardIndex", 0) {
+                    let moved = match (p.number("x"), p.number("y")) {
+                        (Some(x), Some(y)) => {
+                            Some(MovedBoard::new(board_index, x, y, p.whole_number_or("rotation", 0).unwrap_or(0)))
+                        }
+                        _ => None,
+                    };
+                    // The session only carries the items this player may move.
+                    let carried = p.0.get("carried").and_then(BoardCarry::from_json);
+                    self.session.set_moved_board(client_id, board_index, moved, carried.as_ref());
                 }
             }
             "requestSetIndividualPlaymat" => {

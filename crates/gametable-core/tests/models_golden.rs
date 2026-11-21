@@ -4,13 +4,72 @@
 //! re-encoded; the result must match `fixtures/models/expected` byte for byte (compact and
 //! indented), or the error message must match `<name>.<Model>.error.txt`.
 //! Regenerate the expected files with `tools/lua_golden/run.sh models`.
+//!
+//! One deliberate difference is applied to the Lua output before comparing: GameTable saves the
+//! original's `playmatType` + `playmats` as `gameBoards`, each board carrying its own kind (see
+//! [`as_game_table_saves_it`]).
 
 use std::path::{Path, PathBuf};
 
-use gametable_core::json::{self, JsonValue};
+use gametable_core::json::{self, JsonObject, JsonValue};
 use gametable_core::models::{
     CardDefinition, CardInstance, DeckConfig, GameDefinition, ModelError, SavedGame, ZoneDefinition,
 };
+
+/// The Lua output as GameTable writes it: wherever an object has `playmats`, the list is
+/// written as `gameBoards` in its place, `playmatType` is dropped, and a shared game's boards
+/// each say `"kind":"shared"` (player boards, the default, say nothing).
+fn as_game_table_saves_it(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Array(items) => JsonValue::Array(items.iter().map(as_game_table_saves_it).collect()),
+        JsonValue::Object(object) if object.contains_key("playmats") => {
+            let shared = object.get("playmatType").and_then(JsonValue::as_str) == Some("shared");
+            let mut rewritten = JsonObject::new();
+            for (key, field) in object.iter() {
+                match key.as_str() {
+                    "playmatType" => {}
+                    "playmats" => {
+                        let boards: Vec<JsonValue> = field
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|board| {
+                                let mut board = board.as_object().cloned().unwrap_or_default();
+                                if shared {
+                                    board.insert("kind", "shared");
+                                }
+                                JsonValue::Object(board)
+                            })
+                            .collect();
+                        rewritten.insert("gameBoards", JsonValue::Array(boards));
+                    }
+                    _ => rewritten.insert(key.clone(), as_game_table_saves_it(field)),
+                }
+            }
+            JsonValue::Object(rewritten)
+        }
+        JsonValue::Object(object) => {
+            let mut rewritten = JsonObject::new();
+            for (key, field) in object.iter() {
+                rewritten.insert(key.clone(), as_game_table_saves_it(field));
+            }
+            JsonValue::Object(rewritten)
+        }
+        other => other.clone(),
+    }
+}
+
+/// The expected text with GameTable's deliberate differences applied, in the same format.
+fn expected_from_game_table(expected: String, suffix: &str) -> String {
+    if !expected.contains("\"playmats\"") {
+        return expected;
+    }
+    let value = as_game_table_saves_it(&json::decode(&expected).expect("expected output is valid JSON"));
+    let encoded = if suffix == "compact" { json::encode_compact(&value) } else { json::encode_indented(&value) };
+    let encoded = encoded.unwrap();
+    // Keep the file's trailing newline, if it has one.
+    if expected.ends_with('\n') && !encoded.ends_with('\n') { encoded + "\n" } else { encoded }
+}
 
 fn fixtures_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/models")
@@ -52,7 +111,7 @@ fn every_fixture_matches_the_original_lua_output() {
                     ("indented", json::encode_indented(&output).unwrap()),
                 ] {
                     let expected_path = expected_directory.join(format!("{stem}.{suffix}.json"));
-                    match std::fs::read_to_string(&expected_path) {
+                    match std::fs::read_to_string(&expected_path).map(|text| expected_from_game_table(text, suffix)) {
                         Ok(expected) if expected == encoded => {}
                         Ok(expected) => mismatches.push(format!(
                             "{file_name} ({suffix}) differs\n  expected: {expected}\n  actual:   {encoded}"

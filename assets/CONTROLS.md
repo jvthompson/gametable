@@ -19,10 +19,12 @@
 | Alt + drag a pile | Move the whole pile; dropped on your hand, every card is dealt into it |
 | Drag a card token | Move it like a card -- it shares the same front-to-back ordering as cards, but never attaches to a card and can't be dropped into a hand or zone. Hold **Alt** to carry along anything stacked on top of it (cards or other card tokens) as a group. Only its owner (whoever spawned it) can interact with it at all. |
 | Pile's shuffle button | Shuffle the pile and turn every card face-down |
+| Hover a zone | Its name and how many cards it holds |
 | Click a player's avatar | Practice games: act as that seat |
 | Mouse wheel over the table | Zoom in/out around the cursor |
 | Middle-button drag on the table | Pan your own camera |
 | Tab + drag on the table | Draw an arrow everyone can see (fades after 5 seconds) |
+| Drag a game board's handle | Move one of your own player boards, with the zones on it and the cards, counters and tokens lying on it (they keep their place on the board and turn with it; other players' cards stay put); everyone sees where you leave it. Press **Q** / **E** while dragging to turn it a quarter turn counter-clockwise / clockwise. The handle shows after you right-click the board and pick **Unlock Board**; **Lock Board** hides it again and **Reset Board Position** puts the board back |
 | Drag on empty table | Box select: every card, pile and token of yours the box touches is selected (tinted in the selection color, set in **Settings > Table**) |
 | Shift + drag on empty table | Add to the selection |
 | Ctrl + click a card, pile or token | Add it to or remove it from the selection |
@@ -37,6 +39,8 @@
 - On a shared pile on the table: stacks onto it.
 - Near another loose card with **Alt** held: stacks onto it. Piles never mix owners: your cards only stack onto your own piles and unowned cards onto unowned piles; otherwise the card stays where it was.
 - Anywhere else: moves it on the table. Anything that would end up partly off the table is pulled back fully onto it.
+
+A zone a loaded scenario sets on the table works like any shared zone (draw from it, drop onto it, right-click it), but stays where the scenario put it: it can't be moved during the game.
 
 Opponents' cards, piles and zones are read-only: you can hover them (for the Space preview) but not draw, drag, shuffle or flip them.
 
@@ -56,7 +60,7 @@ Hotkeys act on the card (or token, for Q / E; a card token also responds to Z) u
 | Home or H | Reset camera pan and zoom | |
 | F1 | Show/hide the ownership border on every card | This session only |
 | F2 | Toggle zone/hand backgrounds between player-color tint and black | This session only |
-| F12 | Cycle the playmat: off, then each playmat defined on the game's Playmats tab in turn, then off again. For a shared playmat, host only; for individual playmats, each player controls their own | Persists across sessions |
+| F12 | Show/hide the game boards marked "Can be toggled" on the Game Boards tab (boards placed without it always stay). With no boards placed on the table, shows/hides your player board; pick which one from the table's right-click menu (Player Board). You toggle your own player boards; the host also toggles shared boards | Persists across sessions |
 | L | Open/close the Game Log (with a Save Log button) | |
 | C | Open/close the chat panel (server games, and practice games for /flip and /roll -- see Chat commands below; not in LAN host/join games) | |
 | Ctrl + R | Open/close the Documents viewer (if the game has any PDF/Markdown file in its _documents folder), with a document picker and a collapsible table-of-contents sidebar. Also works in the Deck Editor and the Game Definition Editor. | |
@@ -81,7 +85,7 @@ Typed into any chat box (lobby, room, or the in-game chat panel) on a GameTable 
 | Your card | **Send to...** Hand / Discard / a zone (Top, Shuffle Into, Bottom); on the table also **Flip**, **Rotate**, **Give to** a player and **Remove Ownership** (both ask first; not offered for a card in a pile) |
 | A selected card (2+ items selected) | The same actions for every selected card, plus **Create Pile Here** (piles them all at the click, in their current order) |
 | Your pile | Same as a card, plus **Search...** |
-| A zone | **Search...**; an empty zone that deals a built deck also offers **Load Deck...** |
+| A zone | **Search...**; **Shuffle Deck** (shuffles it and turns every card face-down) when it holds 2+ cards and can be shuffled; an empty zone that deals a built deck also offers **Load Deck...** |
 | Simple Counter | Increment / Decrement / Set Value / Set Colors / Delete |
 | Token | Set Color / Delete |
 | Pack Generator | Open a pack from one of the game's sets / Delete |
@@ -112,3 +116,7 @@ Your hand is drawn as a fan of cards along the bottom of the screen, and opponen
 | Action | Effect |
 |--------|--------|
 | Rulebook toolbar button, or Ctrl + R | Open/close the Documents viewer (if the game has any PDF/Markdown file in its _documents folder) |
+| Mouse wheel over a table canvas | Zoom in/out around the cursor (Game Boards' Table Preview and Scenarios' Card Placement); the zoom buttons and percentage sit above the canvas, and clicking the percentage fits the whole table again |
+| Drag empty felt, or middle-button drag | Pan a zoomed table canvas |
+| Players (Scenarios > Card Placement) | Lays the game boards out for that many seats, exactly where the table puts them for player 1, under the placed cards |
+| Right-click the Card Placement canvas > Add Zone | Sets one of the scenario's zones on the table where you clicked. Drag it anywhere on the table; select it and press Delete (or the Delete button) to take it off the table again. Once the scenario is loaded the zone sits at that spot for everyone and can't be moved during the game |

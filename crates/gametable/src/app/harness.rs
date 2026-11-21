@@ -104,6 +104,11 @@ impl UiHarness {
         self.ui.on_mouse_released(x, y, button);
     }
 
+    /// Turns the mouse wheel (positive is away from the user, zooming in).
+    pub fn wheel(&mut self, notches: f32) {
+        self.ui.on_wheel(0.0, notches);
+    }
+
     /// A key press routed like `App.keypressed`: open dialogs and menus get Escape first, a
     /// focused field gets keys, then open overlays. Returns true when the UI took the key.
     pub fn key(&mut self, key: &'static str) -> bool {

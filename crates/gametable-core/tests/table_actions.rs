@@ -674,3 +674,100 @@ fn deal_new_cards_appends_with_ascending_z() {
     assert_eq!(dealt.revision, 1);
     assert_eq!(deal_new_cards(&pile(), vec![]), pile());
 }
+
+// ---------------------------------------------------------------------------
+// carryWithBoard (a GameTable addition)
+// ---------------------------------------------------------------------------
+
+fn spot(x: f64, y: f64, rotation: i64) -> BoardSpot {
+    BoardSpot { x, y, rotation }
+}
+
+fn carry(from: BoardSpot, to: BoardSpot, card_ids: &[&str], widget_ids: &[&str]) -> BoardCarry {
+    BoardCarry {
+        from,
+        to,
+        card_ids: card_ids.iter().map(|id| id.to_string()).collect(),
+        widget_ids: widget_ids.iter().map(|id| id.to_string()).collect(),
+    }
+}
+
+#[test]
+fn a_board_slid_across_the_table_carries_its_cards_and_tokens() {
+    let mut rider = widget_at("rider", BoardWidgetKind::Token, 0.32, 0.62, 0);
+    rider.attached_card_id = Some("mine".into());
+    rider.attach_offset_x = 0.02;
+    rider.attach_offset_y = 0.02;
+    let mut docked = widget_at("docked", BoardWidgetKind::SimpleCounter, 0.3, 0.6, 1);
+    docked.zone_id = Some("life".into());
+    let original = table_with_widgets(
+        vec![
+            card("mine").owner("p1").at(0.3, 0.6).build(),
+            card("unowned").at(0.2, 0.4).build(),
+            card("theirs").owner("p2").at(0.3, 0.5).build(),
+            card("in_hand").in_hand("p1").build(),
+        ],
+        vec![
+            rider,
+            docked,
+            widget_at("counter", BoardWidgetKind::SimpleCounter, 0.25, 0.55, 2),
+            widget_at("arrow", BoardWidgetKind::Arrow, 0.25, 0.5, 3),
+        ],
+    );
+    let move_right = carry(
+        spot(0.25, 0.5, 0),
+        spot(0.75, 0.5, 0),
+        &["mine", "unowned", "theirs", "in_hand"],
+        &["rider", "docked", "counter", "arrow"],
+    );
+    let moved = carry_with_board(&original, &move_right, "p1");
+    assert_near(card_in(&moved, "mine").x, 0.8);
+    assert_near(card_in(&moved, "mine").y, 0.6);
+    assert_near(card_in(&moved, "unowned").x, 0.7);
+    // Another player's card and a card in hand stay put.
+    assert_eq!(card_in(&moved, "theirs"), card_in(&original, "theirs"));
+    assert_eq!(card_in(&moved, "in_hand"), card_in(&original, "in_hand"));
+    // A token attached to a carried card follows it; a free counter rides along; a docked
+    // counter and an arrow stay.
+    assert_near(widget_in(&moved, "rider").x, 0.82);
+    assert_near(widget_in(&moved, "counter").x, 0.75);
+    assert_eq!(widget_in(&moved, "docked"), widget_in(&original, "docked"));
+    assert_eq!(widget_in(&moved, "arrow"), widget_in(&original, "arrow"));
+    // The caller bumps the revision along with the board's move.
+    assert_eq!(moved.revision, original.revision);
+}
+
+#[test]
+fn a_board_turned_a_quarter_turns_what_lies_on_it() {
+    // 256 world units right of the board's centre (a tenth of the table's 2560 width).
+    let original = table_with_widgets(
+        vec![card("c").owner("p1").at(0.6, 0.5).build()],
+        vec![
+            widget_at("token", BoardWidgetKind::Token, 0.6, 0.5, 0),
+            widget_at("counter", BoardWidgetKind::SimpleCounter, 0.6, 0.5, 1),
+        ],
+    );
+    let turn = carry(spot(0.5, 0.5, 0), spot(0.5, 0.5, 90), &["c"], &["token", "counter"]);
+    let turned = carry_with_board(&original, &turn, "p1");
+    // A quarter turn clockwise takes "right of centre" to "below centre": 256 of the 1440 height.
+    let c = card_in(&turned, "c");
+    assert_near(c.x, 0.5);
+    assert_near(c.y, 0.5 + 256.0 / 1440.0);
+    assert_near(c.rotation_turns, 1.0);
+    assert_near(widget_in(&turned, "token").rotation_turns, 1.0);
+    // Counters move but never turn.
+    assert_near(widget_in(&turned, "counter").rotation_turns, 0.0);
+    // Turning back from 90 to 0 is a quarter turn the other way: three clockwise.
+    let back = carry(spot(0.5, 0.5, 90), spot(0.5, 0.5, 0), &["c"], &[]);
+    let restored = carry_with_board(&turned, &back, "p1");
+    assert_near(card_in(&restored, "c").x, 0.6);
+    assert_near(card_in(&restored, "c").y, 0.5);
+    // ...which turns the card back rather than three quarters on round.
+    assert_near(card_in(&restored, "c").rotation_turns, 0.0);
+}
+
+#[test]
+fn board_carry_round_trips_through_json() {
+    let original = carry(spot(0.25, 0.5, 180), spot(0.7, 0.4, 90), &["a", "b"], &["w"]);
+    assert_eq!(BoardCarry::from_json(&original.to_json()), Some(original));
+}

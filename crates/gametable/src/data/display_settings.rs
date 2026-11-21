@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use gametable_core::color::{ArgbColor, color_from_hex};
 use gametable_core::json::{JsonObject, JsonValue, format_like_c_percent_g};
-use gametable_core::models::PlaymatZonePosition;
+use gametable_core::models::BoardZonePosition;
 
 use super::settings::{Settings, keys};
 
@@ -273,26 +273,29 @@ pub fn set_felt_texture_enabled(settings: &mut Settings, enabled: bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Playmat seeds and rulebook scroll positions (per game id)
+// Game board seeds and rulebook scroll positions (per game id)
 // ---------------------------------------------------------------------------
+// (The keys still say "playmat", from before boards were renamed, so earlier choices carry over.)
 
-/// The local seed for the F12 playmat choice of a game (off, or which playmat).
-pub fn playmat_on(settings: &Settings, game_id: &str) -> bool {
-    settings.flag(&format!("playmat_on_{game_id}")) == Some(true)
+/// Whether this computer last showed (F12) the game's toggleable boards; `when_never_set` until
+/// the player has pressed F12 in this game.
+pub fn boards_shown(settings: &Settings, game_id: &str, when_never_set: bool) -> bool {
+    settings.flag(&format!("playmat_on_{game_id}")).unwrap_or(when_never_set)
 }
 
-pub fn playmat_index(settings: &Settings, game_id: &str) -> f64 {
-    settings.number(&format!("playmat_index_{game_id}")).unwrap_or(0.0)
+/// The board this computer's player last picked (1-based; 0 for none yet).
+pub fn chosen_board(settings: &Settings, game_id: &str) -> i64 {
+    settings.number(&format!("playmat_index_{game_id}")).unwrap_or(0.0) as i64
 }
 
-fn playmat_zone_positions_key(game_id: &str, playmat_index: i64) -> String {
-    format!("playmat_zone_positions_{game_id}_{playmat_index}")
+fn board_zone_positions_key(game_id: &str, board_index: i64) -> String {
+    format!("playmat_zone_positions_{game_id}_{board_index}")
 }
 
-/// Where this computer's player last moved zones on one of a game's playmats (1-based index):
-/// `[{zoneId, x, y}]`, sent again whenever they pick that mat.
-pub fn playmat_zone_positions(settings: &Settings, game_id: &str, playmat_index: i64) -> Vec<PlaymatZonePosition> {
-    let Some(JsonValue::Array(entries)) = settings.get(&playmat_zone_positions_key(game_id, playmat_index)) else {
+/// Where this computer's player last moved zones on one of a game's boards (1-based index):
+/// `[{zoneId, x, y}]`, sent again whenever that board is shown.
+pub fn board_zone_positions(settings: &Settings, game_id: &str, board_index: i64) -> Vec<BoardZonePosition> {
+    let Some(JsonValue::Array(entries)) = settings.get(&board_zone_positions_key(game_id, board_index)) else {
         return Vec::new();
     };
     entries
@@ -300,19 +303,19 @@ pub fn playmat_zone_positions(settings: &Settings, game_id: &str, playmat_index:
         .filter_map(|entry| {
             let zone_id = entry.get("zoneId")?.as_str()?;
             let (x, y) = (entry.get("x")?.as_f64()?, entry.get("y")?.as_f64()?);
-            Some(PlaymatZonePosition::new(playmat_index, zone_id, x, y))
+            Some(BoardZonePosition::new(board_index, zone_id, x, y))
         })
         .collect()
 }
 
-/// Remembers (or, for an empty list, forgets) where zones were moved on one playmat.
-pub fn set_playmat_zone_positions(
+/// Remembers (or, for an empty list, forgets) where zones were moved on one board.
+pub fn set_board_zone_positions(
     settings: &mut Settings,
     game_id: &str,
-    playmat_index: i64,
-    positions: &[PlaymatZonePosition],
+    board_index: i64,
+    positions: &[BoardZonePosition],
 ) {
-    let key = playmat_zone_positions_key(game_id, playmat_index);
+    let key = board_zone_positions_key(game_id, board_index);
     if positions.is_empty() {
         settings.remove(&key);
         return;
@@ -330,17 +333,14 @@ pub fn set_playmat_zone_positions(
     settings.set(&key, JsonValue::Array(entries));
 }
 
-pub fn set_playmat(settings: &mut Settings, game_id: &str, on: bool, index: Option<f64>) {
-    let on_key = format!("playmat_on_{game_id}");
+/// Remembers whether the game's toggleable boards are shown, and the board picked (0 forgets it).
+pub fn set_boards_shown(settings: &mut Settings, game_id: &str, shown: bool, chosen_board: i64) {
+    settings.set(&format!("playmat_on_{game_id}"), shown);
     let index_key = format!("playmat_index_{game_id}");
-    if on {
-        settings.set(&on_key, true);
+    if chosen_board != 0 {
+        settings.set(&index_key, chosen_board as f64);
     } else {
-        settings.remove(&on_key);
-    }
-    match index {
-        Some(index) if index != 0.0 => settings.set(&index_key, index),
-        _ => settings.remove(&index_key),
+        settings.remove(&index_key);
     }
 }
 
@@ -415,12 +415,15 @@ mod tests {
     #[test]
     fn playmat_and_rulebook_values() {
         let mut settings = Settings::in_memory();
-        assert!(!playmat_on(&settings, "g"));
-        set_playmat(&mut settings, "g", true, Some(2.0));
-        assert!(playmat_on(&settings, "g"));
-        assert_eq!(playmat_index(&settings, "g"), 2.0);
-        set_playmat(&mut settings, "g", false, Some(0.0));
-        assert!(settings.get("playmat_on_g").is_none() && settings.get("playmat_index_g").is_none());
+        assert!(!boards_shown(&settings, "g", false));
+        assert!(boards_shown(&settings, "g", true));
+        set_boards_shown(&mut settings, "g", true, 2);
+        assert!(boards_shown(&settings, "g", false));
+        assert_eq!(chosen_board(&settings, "g"), 2);
+        // Hiding is remembered too, so boards that start shown stay hidden next time.
+        set_boards_shown(&mut settings, "g", false, 0);
+        assert!(!boards_shown(&settings, "g", true));
+        assert!(settings.get("playmat_index_g").is_none());
         set_rulebook_scroll(&mut settings, "g:doc:rules.pdf", 120.5);
         assert_eq!(rulebook_scroll(&settings, "g:doc:rules.pdf"), 120.5);
         assert_eq!(rulebook_scroll(&settings, "other"), 0.0);

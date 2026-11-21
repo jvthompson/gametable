@@ -1,14 +1,18 @@
 //! The Scenarios tab: named setups (shared zones, starting entries or a built subdeck, and cards
 //! placed on the table) a host can load from the in-game menu. Shown only while the game has
-//! scenarios. Port of `src/ui/screens/gamedef/scenario_tab.lua`.
+//! scenarios. Port of `src/ui/screens/gamedef/scenario_tab.lua`. GameTable additions: the Card Placement
+//! canvas draws the game boards where the table places them (for a chosen number of seats) and zooms and
+//! pans like the Game Boards tab's Table Preview; right-clicking it sets one of the scenario's zones at a
+//! spot on the table (dragged anywhere here, fixed in the game).
 
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
 use gametable_core::geometry::{WORLD_HEIGHT, WORLD_WIDTH};
 use gametable_core::models::{
-    CardDefinition, CardOrientation, DeckEntry, Scenario, ScenarioPlacement, ScenarioTokenPlacement, SubDeck,
-    WidgetSizeOverride, ZoneDefinition, ZoneKind, ZoneWidgetKind,
+    CardBackDefinition, CardDefinition, CardOrientation, DeckEntry, Scenario, ScenarioPlacement,
+    ScenarioTokenPlacement, ScenarioZonePlacement, SubDeck, WidgetSizeOverride, ZoneDefinition, ZoneKind,
+    ZoneWidgetKind,
 };
 use gametable_core::uuid::new_v4_uuid;
 
@@ -18,15 +22,20 @@ use crate::data::file_system::join_path;
 use crate::graphics::draw_list::Color;
 use crate::graphics::tessellation::DrawMode;
 use crate::screens::gamedef::EditorModel;
+use crate::screens::gamedef::board_zone_placement::{draw_zone_label, draw_zone_stand_in, zone_world_size};
 use crate::screens::gamedef::common::{
     FIELD_HEIGHT, FileImport, GAP, ImportResponse, PAD, SectionAction, StableKeys, ToggleRow, column, display_card,
     display_card_backs, orientation_choices,
+};
+use crate::screens::gamedef::table_board_placement::{
+    MAXIMUM_PREVIEW_PLAYERS, PreviewCamera, ZOOM_STEP, draw_placed_boards, draw_zoom_controls,
 };
 use crate::screens::gamedef::zones_tab::{
     ZonePick, bag_token_images, deck_type_field, draw_card_entries, draw_counter_fields, draw_token_bag_fields,
     kind_choices, side_choices, widget_kind_choices,
 };
 use crate::screens::token_choosers::{ChooserResponse, TokenChooser};
+use crate::table::board_layout::has_placed_boards;
 use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE};
 use crate::table::card_render::{
     CARD_HEIGHT, CARD_WIDTH, CardDraw, PreviewFace, definition_faces, orientation_turns, shown_orientation,
@@ -89,10 +98,13 @@ struct CloneDrag {
     clone: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum PlacementAction {
-    AddCard,
-    AddToken,
+/// What the Card Placement canvas's right-click menu adds.
+#[derive(Debug, Clone, PartialEq)]
+enum AddToCanvas {
+    Card,
+    Token,
+    /// Sets one of the scenario's zones on the table where the canvas was right-clicked.
+    Zone(String),
 }
 
 /// What a running file import or token chooser is for.
@@ -116,18 +128,26 @@ pub struct ScenarioTab {
     placing_draft: Option<String>,
     selected_placement: Option<usize>,
     selected_token_placement: Option<usize>,
+    /// The scenario zone (by id) selected on the placement canvas.
+    selected_zone_placement: Option<String>,
     clone_drag: Option<CloneDrag>,
     /// The canvas fraction last right-clicked (where Add Token... drops).
     placement_click: (f64, f64),
     hovered_id: Option<String>,
     hovered_placement_face: Option<(String, bool, CardOrientation)>,
     duplicate_menu: Option<ContextMenu<usize>>,
-    placement_menu: Option<ContextMenu<PlacementAction>>,
+    placement_menu: Option<ContextMenu<AddToCanvas>>,
     size_menu: Option<ContextMenu<Option<f64>>>,
     guide_import: Option<(FileImport, u64)>,
     chooser: Option<(TokenChooser, ChooserTarget)>,
     pending_remove: Option<usize>,
     pending_zone_remove: Option<(u64, usize)>,
+    /// The Card Placement canvas's zoom and pan (GameTable addition, as the Table Preview's).
+    placement_camera: PreviewCamera,
+    /// The mouse position while the placement canvas is being dragged around.
+    placement_pan: Option<(f32, f32)>,
+    /// How many seats the placement canvas lays the game boards out for.
+    board_preview_players: usize,
 }
 
 impl Default for ScenarioTab {
@@ -152,6 +172,7 @@ impl ScenarioTab {
             placing_draft: None,
             selected_placement: None,
             selected_token_placement: None,
+            selected_zone_placement: None,
             clone_drag: None,
             placement_click: (0.0, 0.0),
             hovered_id: None,
@@ -163,6 +184,9 @@ impl ScenarioTab {
             chooser: None,
             pending_remove: None,
             pending_zone_remove: None,
+            placement_camera: PreviewCamera::default(),
+            placement_pan: None,
+            board_preview_players: 2,
         }
     }
 
@@ -182,7 +206,12 @@ impl ScenarioTab {
         copy.id = new_v4_uuid();
         copy.name = format!("{} Copy", copy.name);
         for zone in &mut copy.zones {
-            zone.id = new_v4_uuid();
+            let fresh_id = new_v4_uuid();
+            // The copy sets its own zones on the table where the original sets them.
+            for placement in copy.zone_placements.iter_mut().filter(|placement| placement.zone_id == zone.id) {
+                placement.zone_id = fresh_id.clone();
+            }
+            zone.id = fresh_id;
         }
         model.game.scenarios.push(copy);
         self.keys.sync(model.game.scenarios.len());
@@ -190,7 +219,7 @@ impl ScenarioTab {
     }
 
     /// `T:keypressed`: on the placement canvas, F flips, Q/E rotate (Ctrl for 45°), Delete or
-    /// Backspace removes the selected placement.
+    /// Backspace removes the selected placement (or takes the selected zone off the table).
     pub fn key_pressed(&mut self, frame: &mut Frame, model: &mut EditorModel, key: &str) {
         if self.view != ScenarioView::Placement || frame.ui.focus.is_some() {
             return;
@@ -211,6 +240,11 @@ impl ScenarioTab {
                     self.selected_placement = None;
                 }
                 _ => {}
+            }
+        } else if let Some(zone_id) = self.selected_zone_placement.clone() {
+            if matches!(key, "delete" | "backspace") {
+                scenario.zone_placements.retain(|placement| placement.zone_id != zone_id);
+                self.selected_zone_placement = None;
             }
         } else if let Some(token_index) =
             self.selected_token_placement.filter(|&token| token < scenario.token_placements.len())
@@ -489,8 +523,11 @@ impl ScenarioTab {
         if let Some((key, zone_index)) = self.pending_zone_remove.take()
             && key == scenario_key
         {
-            let zones = &mut model.game.scenarios[index].zones;
-            zones.remove(zone_index);
+            let scenario = &mut model.game.scenarios[index];
+            let removed_zone = scenario.zones.remove(zone_index);
+            // A removed zone is off the table too.
+            scenario.zone_placements.retain(|placement| placement.zone_id != removed_zone.id);
+            let zones = &scenario.zones;
             let view = self.zones_views.entry(scenario_key).or_default();
             view.keys.removed(zone_index);
             let count = zones.len();
@@ -1141,12 +1178,6 @@ impl ScenarioTab {
     // Card Placement sub-view
     // -----------------------------------------------------------------------
 
-    fn canvas_rect(x: f32, y: f32, width: f32, height: f32) -> (f32, f32, f32, f32, f32) {
-        let scale = (width / WORLD_WIDTH as f32).min(height / WORLD_HEIGHT as f32);
-        let (canvas_width, canvas_height) = (WORLD_WIDTH as f32 * scale, WORLD_HEIGHT as f32 * scale);
-        (x + (width - canvas_width) / 2.0, y + (height - canvas_height) / 2.0, canvas_width, canvas_height, scale)
-    }
-
     /// A token placement's size on the table (`V.widgetInstanceSize` for an image token).
     fn token_size(frame: &mut Frame, folder: &str, placement: &ScenarioTokenPlacement) -> f32 {
         match placement.size_override {
@@ -1305,6 +1336,84 @@ impl ScenarioTab {
         }
     }
 
+    /// Draws the scenario's zones set on the table (a card back for card zones, the widget for
+    /// counters and token bags, with the name above) and lets them be selected and dragged
+    /// anywhere on the table. Returns whether one was pressed this frame.
+    fn draw_zone_placements(
+        &mut self,
+        frame: &mut Frame,
+        model: &mut EditorModel,
+        index: usize,
+        (canvas_x, canvas_y): (f32, f32),
+        scale: f32,
+        display_backs: &[CardBackDefinition],
+    ) -> bool {
+        let (canvas_width, canvas_height) = (WORLD_WIDTH as f32 * scale, WORLD_HEIGHT as f32 * scale);
+        let scenario_key = self.keys.key(index);
+        let (mouse_x, mouse_y) = frame.ui.mouse();
+        let scenario_card_back_id = model.game.scenario_card_back_id.clone();
+        let mut pressed = false;
+        let placements = model.game.scenarios[index].zone_placements.clone();
+        for placement in &placements {
+            let Some(zone) =
+                model.game.scenarios[index].zones.iter().find(|zone| zone.id == placement.zone_id).cloned()
+            else {
+                continue;
+            };
+            let (world_width, world_height) = zone_world_size(&zone);
+            let (box_width, box_height) = (world_width * scale, world_height * scale);
+            let mut center =
+                (canvas_x + placement.x as f32 * canvas_width, canvas_y + placement.y as f32 * canvas_height);
+            let region = frame.ui.region(
+                &format!("scen:zplace:{scenario_key}:{}", placement.zone_id),
+                center.0 - box_width / 2.0,
+                center.1 - box_height / 2.0,
+                box_width,
+                box_height,
+                RegionOptions::hand(),
+            );
+            if region.pressed {
+                pressed = true;
+                self.selected_zone_placement = Some(placement.zone_id.clone());
+            }
+            if region.held {
+                // Kept wholly on the table.
+                let (half_width, half_height) = ((box_width / 2.0) / canvas_width, (box_height / 2.0) / canvas_height);
+                let fraction_x = ((mouse_x - canvas_x) / canvas_width).clamp(half_width, 1.0 - half_width);
+                let fraction_y = ((mouse_y - canvas_y) / canvas_height).clamp(half_height, 1.0 - half_height);
+                center = (canvas_x + fraction_x * canvas_width, canvas_y + fraction_y * canvas_height);
+                let zone_placements = &mut model.game.scenarios[index].zone_placements;
+                if let Some(stored) = zone_placements.iter_mut().find(|stored| stored.zone_id == placement.zone_id) {
+                    (stored.x, stored.y) = (f64::from(fraction_x), f64::from(fraction_y));
+                }
+            }
+            draw_zone_stand_in(
+                frame,
+                &model.folder_path,
+                &zone,
+                true,
+                center,
+                scale,
+                1.0,
+                display_backs,
+                scenario_card_back_id.as_deref(),
+            );
+            draw_zone_label(frame, &zone.name, center.0, center.1 - box_height / 2.0, 1.0);
+            if self.selected_zone_placement.as_deref() == Some(placement.zone_id.as_str()) {
+                frame.outline_rect(
+                    center.0 - box_width / 2.0 - 2.0,
+                    center.1 - box_height / 2.0 - 2.0,
+                    box_width + 4.0,
+                    box_height + 4.0,
+                    4.0,
+                    fixed::BLUE,
+                    1.0,
+                );
+            }
+        }
+        pressed
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_placement_view(
         &mut self,
@@ -1328,6 +1437,11 @@ impl ScenarioTab {
         if self.selected_token_placement.is_some_and(|token| token >= token_count) {
             self.selected_token_placement = None;
         }
+        if let Some(zone_id) = &self.selected_zone_placement
+            && model.game.scenarios[index].zone_placement_for(zone_id).is_none()
+        {
+            self.selected_zone_placement = None;
+        }
 
         let toolbar_height = 40.0;
         let flip_options = ButtonOptions::variant(ButtonVariant::Outlined)
@@ -1336,10 +1450,12 @@ impl ScenarioTab {
         let size_options = ButtonOptions::variant(ButtonVariant::Outlined)
             .id("scen:place:size")
             .disabled(self.selected_token_placement.is_none());
-        let delete_options = ButtonOptions::variant(ButtonVariant::Outlined)
-            .icon("delete_outline")
-            .id("scen:place:delete")
-            .disabled(self.selected_placement.is_none() && self.selected_token_placement.is_none());
+        let delete_options =
+            ButtonOptions::variant(ButtonVariant::Outlined).icon("delete_outline").id("scen:place:delete").disabled(
+                self.selected_placement.is_none()
+                    && self.selected_token_placement.is_none()
+                    && self.selected_zone_placement.is_none(),
+            );
         let flip_width = frame.button_width("Flip", &flip_options);
         let size_width = frame.button_width("Size", &size_options);
         let delete_width = frame.button_width("Delete", &delete_options);
@@ -1349,7 +1465,7 @@ impl ScenarioTab {
             .color(palette.on_surface_variant)
             .width(width - 24.0 - flip_width - size_width - delete_width - 24.0);
         frame.text(
-            "Right-click to add a card or token. Drag to move (Ctrl+drag to clone); Q/E rotates (Ctrl for 45°).",
+            "Right-click to add a card, token or scenario zone. Drag to move (Ctrl+drag to clone); Q/E rotates (Ctrl for 45°).",
             x + 12.0,
             y,
             options,
@@ -1399,40 +1515,106 @@ impl ScenarioTab {
                 scenario.placements.remove(placement);
             } else if let Some(token) = self.selected_token_placement.take() {
                 scenario.token_placements.remove(token);
+            } else if let Some(zone_id) = self.selected_zone_placement.take() {
+                scenario.zone_placements.retain(|placement| placement.zone_id != zone_id);
             }
         }
 
-        let (canvas_x, canvas_y, canvas_width, canvas_height, scale) =
-            ScenarioTab::canvas_rect(x, y + toolbar_height + 8.0, width, height - toolbar_height - 8.0);
+        // Second row: how many seats the game boards are laid out for, and the zoom controls.
+        let view_row_y = y + toolbar_height + 8.0;
+        let view_row_height = 32.0;
+        if has_placed_boards(&game) {
+            let label =
+                TextOptions::new().size(12.0).medium().middle_of(view_row_height).color(palette.on_surface_variant);
+            frame.text("Players", x + 12.0, view_row_y, label);
+            let choices: Vec<Choice<usize>> =
+                (1..=MAXIMUM_PREVIEW_PLAYERS).map(|count| Choice::new(count, count.to_string())).collect();
+            self.board_preview_players = frame.segmented(
+                "scen:place:players",
+                x + 68.0,
+                view_row_y,
+                228.0,
+                &choices,
+                self.board_preview_players,
+                Some(view_row_height),
+                false,
+            );
+        }
+        let zoom_controls_width =
+            draw_zoom_controls(frame, &mut self.placement_camera, "scen:place", x + width - 12.0, view_row_y);
+        let hint_x = x + 68.0 + 228.0 + 24.0;
+        let hint = TextOptions::new()
+            .size(12.0)
+            .width((x + width - 12.0 - zoom_controls_width - 16.0 - hint_x).max(0.0))
+            .ellipsis()
+            .middle_of(view_row_height)
+            .color(palette.on_surface_variant);
+        frame.text("Wheel zooms · drag the felt to pan", hint_x, view_row_y, hint);
+
+        // The canvas: the whole table under the camera, game boards as the table places them.
+        let area_y = view_row_y + view_row_height + 8.0;
+        let (area_x, area_width, area_height) = (x, width, (y + height - area_y).max(100.0));
+        let (mouse_x, mouse_y) = frame.ui.mouse();
+        let mut view = self.placement_camera.view(area_x, area_y, area_width, area_height);
+        let wheel = frame.ui.input.wheel_y;
+        if wheel != 0.0 && view.contains(mouse_x, mouse_y) && !frame.ui.modal_open() && !self.placement_library_open {
+            self.placement_camera.zoom_at(&view, mouse_x, mouse_y, ZOOM_STEP.powf(wheel));
+            frame.ui.consume_wheel();
+            view = self.placement_camera.view(area_x, area_y, area_width, area_height);
+        }
+        if let Some((last_x, last_y)) = self.placement_pan {
+            if frame.ui.input.is_down(1) || frame.ui.input.is_down(3) {
+                self.placement_camera.pan_by(&view, mouse_x - last_x, mouse_y - last_y);
+                self.placement_pan = Some((mouse_x, mouse_y));
+                view = self.placement_camera.view(area_x, area_y, area_width, area_height);
+            } else {
+                self.placement_pan = None;
+            }
+        }
+        let (canvas_x, canvas_y) = view.to_screen(0.0, 0.0);
+        let scale = view.scale;
+        let (canvas_width, canvas_height) = (WORLD_WIDTH as f32 * scale, WORLD_HEIGHT as f32 * scale);
+        frame.fill_rect(area_x, area_y, area_width, area_height, 8.0, palette.surface_container_highest);
+        frame.ui.push_clip(area_x, area_y, area_width, area_height);
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
         let border =
             argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
         frame.fill_rect(canvas_x, canvas_y, canvas_width, canvas_height, 0.0, felt);
         frame.outline_rect(canvas_x + 1.0, canvas_y + 1.0, canvas_width - 2.0, canvas_height - 2.0, 0.0, border, 1.0);
-        let canvas = frame.ui.region(
-            "scen:place:canvas",
-            canvas_x,
-            canvas_y,
-            canvas_width,
-            canvas_height,
-            RegionOptions::default(),
-        );
+        draw_placed_boards(frame, &folder, &game, &view, self.board_preview_players);
+        let canvas =
+            frame.ui.region("scen:place:canvas", area_x, area_y, area_width, area_height, RegionOptions::default());
+        let mut placement_pressed = false;
         if canvas.right_clicked {
             let (mouse_x, mouse_y) = frame.ui.mouse();
             self.placement_click = (
                 ((mouse_x - canvas_x) / canvas_width).clamp(0.0, 1.0) as f64,
                 ((mouse_y - canvas_y) / canvas_height).clamp(0.0, 1.0) as f64,
             );
-            let items = vec![
-                MenuItem::new("Add Card...", PlacementAction::AddCard),
-                MenuItem::new("Add Token...", PlacementAction::AddToken),
+            let scenario = &model.game.scenarios[index];
+            let zones_off_the_table: Vec<MenuItem<AddToCanvas>> = scenario
+                .zones
+                .iter()
+                .filter(|zone| scenario.zone_placement_for(&zone.id).is_none())
+                .map(|zone| MenuItem::new(zone.name.clone(), AddToCanvas::Zone(zone.id.clone())))
+                .collect();
+            let mut items = vec![
+                MenuItem::new("Add Card...", AddToCanvas::Card),
+                MenuItem::new("Add Token...", AddToCanvas::Token),
             ];
+            if zones_off_the_table.is_empty() {
+                let label = if scenario.zones.is_empty() { "Add Zone (none yet)" } else { "Add Zone (all placed)" };
+                items.push(MenuItem::new(label, AddToCanvas::Card).disabled(true));
+            } else {
+                items.push(MenuItem::submenu("Add Zone", zones_off_the_table));
+            }
             self.placement_menu = Some(ContextMenu::new("scen:place:menu", mouse_x, mouse_y, items));
         }
 
         let display_backs = display_card_backs(&folder, &game.card_backs);
+        // The scenario's zones set on the table, under the cards as on the table.
+        let zone_pressed = self.draw_zone_placements(frame, model, index, (canvas_x, canvas_y), scale, &display_backs);
         let ctrl = frame.keyboard.ctrl();
-        let (mouse_x, mouse_y) = frame.ui.mouse();
         let mut card_clone = None;
         for placement_index in 0..placement_count {
             let placement = model.game.scenarios[index].placements[placement_index].clone();
@@ -1461,6 +1643,7 @@ impl ScenarioTab {
                 self.hovered_placement_face = Some((definition.id.clone(), placement.face_up, orientation));
             }
             if region.pressed {
+                placement_pressed = true;
                 if ctrl {
                     // Ctrl+drag clones: the clone follows the drag, added after this loop.
                     let clone_index = placement_count + usize::from(card_clone.is_some());
@@ -1536,6 +1719,7 @@ impl ScenarioTab {
                 RegionOptions::hand(),
             );
             if region.pressed {
+                placement_pressed = true;
                 if ctrl {
                     let clone_index = token_count;
                     token_clone = Some(placement.clone());
@@ -1580,6 +1764,18 @@ impl ScenarioTab {
         if let Some(clone) = token_clone {
             model.game.scenarios[index].token_placements.push(clone);
         }
+        frame.ui.pop_clip();
+        if placement_pressed {
+            self.selected_zone_placement = None;
+        } else if zone_pressed {
+            self.selected_placement = None;
+            self.selected_token_placement = None;
+        }
+        // A press on bare felt (or the middle button anywhere) starts panning.
+        if (canvas.pressed && !placement_pressed && !zone_pressed) || (canvas.hovered && frame.ui.input.was_pressed(3))
+        {
+            self.placement_pan = Some((mouse_x, mouse_y));
+        }
 
         if let Some(definition_id) = self.placing_draft.clone() {
             if let Some(definition) = game.card_by_id(&definition_id) {
@@ -1597,7 +1793,8 @@ impl ScenarioTab {
                 .alpha(0.85);
                 frame.draw_card(&draw);
                 if frame.ui.mouse_released(1) {
-                    let inside = mouse_x >= canvas_x
+                    let inside = view.contains(mouse_x, mouse_y)
+                        && mouse_x >= canvas_x
                         && mouse_x <= canvas_x + canvas_width
                         && mouse_y >= canvas_y
                         && mouse_y <= canvas_y + canvas_height;
@@ -1637,8 +1834,22 @@ impl ScenarioTab {
                 MenuResponse::Selected(action) => {
                     self.placement_menu = None;
                     match action {
-                        PlacementAction::AddCard => self.placement_library_open = true,
-                        PlacementAction::AddToken => {
+                        AddToCanvas::Card => self.placement_library_open = true,
+                        AddToCanvas::Zone(zone_id) => {
+                            let (fraction_x, fraction_y) = self.placement_click;
+                            let scenario = &mut model.game.scenarios[index];
+                            if scenario.zone_placement_for(&zone_id).is_none() {
+                                scenario.zone_placements.push(ScenarioZonePlacement::new(
+                                    zone_id.clone(),
+                                    fraction_x,
+                                    fraction_y,
+                                ));
+                                self.selected_zone_placement = Some(zone_id);
+                                self.selected_placement = None;
+                                self.selected_token_placement = None;
+                            }
+                        }
+                        AddToCanvas::Token => {
                             let (fraction_x, fraction_y) = self.placement_click;
                             let mut chooser_game = model.game.clone();
                             chooser_game.folder_path = Some(folder.clone());
@@ -1788,4 +1999,119 @@ impl ScenarioTab {
 /// A number as Lua's `tostring` writes it.
 fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 { format!("{}", value as i64) } else { value.to_string() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::harness::UiHarness;
+    use crate::screens::gamedef::common::StableKeys;
+    use gametable_core::models::{BoardTablePlacement, GameBoardDefinition, GameDefinition, ZoneDefinition};
+
+    fn model_with_a_placed_card_and_a_board() -> EditorModel {
+        let mut game = GameDefinition::new("game", "Game");
+        game.cards_mut().push(CardDefinition::new("card", "Card"));
+        let mut board = GameBoardDefinition::new("missing.png");
+        board.table_placement = Some(BoardTablePlacement::new(1280.0, 720.0));
+        game.game_boards.push(board);
+        let mut scenario = Scenario::new("scenario", "Scenario");
+        scenario.placements.push(ScenarioPlacement::new("card", 0.5, 0.5));
+        game.scenarios.push(scenario);
+        EditorModel { folder_path: String::new(), game, card_keys: StableKeys::default() }
+    }
+
+    fn drag(harness: &mut UiHarness, draw: &mut dyn FnMut(&mut Frame), from: (f32, f32), to: (f32, f32)) {
+        harness.move_mouse(from.0, from.1);
+        harness.frame(|frame| draw(frame));
+        harness.press(from.0, from.1, 1, 1);
+        harness.frame(|frame| draw(frame));
+        harness.move_mouse(to.0, to.1);
+        harness.frame(|frame| draw(frame));
+        harness.release(to.0, to.1, 1);
+        harness.frame(|frame| draw(frame));
+        harness.frame(|frame| draw(frame));
+    }
+
+    #[test]
+    fn a_scenario_zone_is_added_from_the_right_click_menu_and_dragged_anywhere() {
+        let mut harness = UiHarness::new();
+        let mut model = model_with_a_placed_card_and_a_board();
+        let boss_deck = ZoneDefinition { shared: true, ..ZoneDefinition::new("boss", "Boss Deck") };
+        model.game.scenarios[0].zones.push(boss_deck);
+        let mut tab = ScenarioTab::new();
+        tab.set_view_for_development("placement");
+        tab.keys.sync(1);
+        let zone_region = format!("scen:zplace:{}:boss", tab.keys.key(0));
+        let mut draw = |frame: &mut Frame| tab.draw(frame, &mut model, 0.0, 0.0, 1280.0, 800.0);
+        harness.frame(|frame| draw(frame));
+        harness.frame(|frame| draw(frame));
+
+        // Right-click an empty spot of the table, then Add Zone > Boss Deck.
+        let (canvas_x, canvas_y) = harness.region_center("scen:place:canvas").unwrap();
+        let spot = (canvas_x - 250.0, canvas_y - 120.0);
+        harness.move_mouse(spot.0, spot.1);
+        harness.frame(|frame| draw(frame));
+        harness.press(spot.0, spot.1, 2, 1);
+        harness.frame(|frame| draw(frame));
+        harness.release(spot.0, spot.1, 2);
+        harness.frame(|frame| draw(frame));
+        harness.click_region("scen:place:menu:menu1:3:Add Zone", &mut draw);
+        harness.click_region("scen:place:menu:menu2:1:Boss Deck", &mut draw);
+        harness.frame(|frame| draw(frame));
+        let placed = harness.region_center(&zone_region).expect("the zone is on the canvas");
+        assert!((placed.0 - spot.0).abs() < 1.0 && (placed.1 - spot.1).abs() < 1.0, "{spot:?} -> {placed:?}");
+
+        // It drags anywhere on the table.
+        drag(&mut harness, &mut draw, placed, (placed.0 + 300.0, placed.1 + 200.0));
+        let dragged = harness.region_center(&zone_region).unwrap();
+        assert!((dragged.0 - (placed.0 + 300.0)).abs() < 1.0 && (dragged.1 - (placed.1 + 200.0)).abs() < 1.0);
+
+        // Selected by the drag, Delete takes it off the table again (the zone itself stays).
+        harness.click_region("scen:place:delete", &mut draw);
+        harness.frame(|frame| draw(frame));
+        let scenario = &model.game.scenarios[0];
+        assert!(scenario.zone_placements.is_empty());
+        assert_eq!(scenario.zones.len(), 1);
+    }
+
+    #[test]
+    fn the_placement_canvas_zooms_and_pans_like_the_table_preview() {
+        let mut harness = UiHarness::new();
+        let mut model = model_with_a_placed_card_and_a_board();
+        let mut tab = ScenarioTab::new();
+        tab.set_view_for_development("placement");
+        tab.keys.sync(1);
+        let card_id = format!("scen:place:{}:0", tab.keys.key(0));
+        let mut draw = |frame: &mut Frame| tab.draw(frame, &mut model, 0.0, 0.0, 1280.0, 800.0);
+        harness.frame(|frame| draw(frame));
+        harness.frame(|frame| draw(frame));
+        let card = harness.region_center(&card_id).expect("the placed card");
+        assert!(harness.region_center("scen:place:players:3").is_some(), "a board is placed, so seats can be picked");
+
+        // The wheel zooms around the mouse: the card under it stays put.
+        harness.move_mouse(card.0, card.1);
+        harness.frame(|frame| draw(frame));
+        harness.wheel(2.0);
+        harness.frame(|frame| draw(frame));
+        harness.frame(|frame| draw(frame));
+        let zoomed = harness.region_center(&card_id).unwrap();
+        assert!((zoomed.0 - card.0).abs() < 1.0 && (zoomed.1 - card.1).abs() < 1.0, "{card:?} -> {zoomed:?}");
+
+        // Dragging the felt pans the view, not the card.
+        let felt = (card.0 + 300.0, card.1);
+        drag(&mut harness, &mut draw, felt, (felt.0 - 100.0, felt.1));
+        let panned = harness.region_center(&card_id).unwrap();
+        assert!((panned.0 - (card.0 - 100.0)).abs() < 1.0, "{card:?} -> {panned:?}");
+
+        // Dragging the card still drops it where the mouse lets go.
+        drag(&mut harness, &mut draw, panned, (panned.0 + 60.0, panned.1));
+        let dropped = harness.region_center(&card_id).unwrap();
+        assert!((dropped.0 - (panned.0 + 60.0)).abs() < 1.0, "{panned:?} -> {dropped:?}");
+
+        // The percentage fits the whole table again.
+        harness.click_region("scen:place:zoom:fit", &mut draw);
+        assert_eq!(tab.placement_camera, PreviewCamera::default());
+        let placed = &model.game.scenarios[0].placements[0];
+        assert!(placed.x > 0.5 && (placed.y - 0.5).abs() < 1e-6, "only the card drag moved it: {placed:?}");
+    }
 }

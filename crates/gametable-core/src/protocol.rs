@@ -143,6 +143,9 @@ pub mod game_requests {
     pub const SET_INDIVIDUAL_PLAYMAT: &str = "requestSetIndividualPlaymat";
     /// GameTable addition: `{playmatIndex, positions: [{zoneId, x, y}]}`.
     pub const SET_PLAYMAT_ZONE_POSITIONS: &str = "requestSetPlaymatZonePositions";
+    /// GameTable addition: `{boardIndex, x, y, rotation}` moves one of the sender's player boards
+    /// (`x`, `y` fractions of the table as the first seat sees it); without `x` and `y` it goes back.
+    pub const SET_MOVED_BOARD: &str = "requestSetMovedBoard";
     pub const CARD_DRAG_PREVIEW: &str = "cardDragPreview";
     pub const CARD_DRAG_PREVIEW_END: &str = "cardDragPreviewEnd";
     pub const ARROW_DRAG_PREVIEW: &str = "arrowDragPreview";

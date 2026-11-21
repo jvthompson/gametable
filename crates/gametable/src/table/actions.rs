@@ -7,7 +7,9 @@
 
 use gametable_core::deck_widget_zones::parse_deck_widget_zone_id;
 use gametable_core::json::{JsonObject, JsonValue};
-use gametable_core::models::{BoardWidgetKind, DeckConfig, PlaymatType, PlaymatZonePosition, WidgetSizeOverride};
+use gametable_core::models::{
+    BoardCarry, BoardKind, BoardWidgetKind, BoardZonePosition, DeckConfig, MovedBoard, WidgetSizeOverride,
+};
 use gametable_core::session::Session;
 use gametable_core::stack_utils::stack_of;
 
@@ -104,11 +106,18 @@ pub enum TableAction {
         on: bool,
         index: i64,
     },
-    /// Where zones were moved on one playmat (the acting player's own, or the shared mat when the
-    /// game uses one), replacing the earlier positions for that mat.
-    SetPlaymatZonePositions {
-        playmat_index: i64,
-        positions: Vec<PlaymatZonePosition>,
+    /// Where zones were moved on one game board (the acting player's own player board, or a shared
+    /// board), replacing the earlier positions for that board.
+    SetBoardZonePositions {
+        board_index: i64,
+        positions: Vec<BoardZonePosition>,
+    },
+    /// Where the acting player moved one of their own player boards (`None`: back where the game
+    /// puts it), with the cards and tokens lying on it, which move and turn with it.
+    SetMovedBoard {
+        board_index: i64,
+        moved: Option<MovedBoard>,
+        carried: Option<BoardCarry>,
     },
     StartSearchZone {
         zone_id: String,
@@ -325,7 +334,17 @@ pub fn request_message(action: &TableAction) -> (&'static str, JsonValue) {
         TableAction::SetIndividualPlaymat { on, index } => {
             (requests::SET_INDIVIDUAL_PLAYMAT, object().with("on", *on).with("index", *index as f64))
         }
-        TableAction::SetPlaymatZonePositions { playmat_index, positions } => {
+        TableAction::SetMovedBoard { board_index, moved, carried } => {
+            let mut payload = object().with("boardIndex", *board_index as f64);
+            if let Some(moved) = moved {
+                payload = payload.with("x", moved.x).with("y", moved.y).with("rotation", moved.rotation as f64);
+            }
+            if let Some(carried) = carried {
+                payload = payload.with("carried", carried.to_json());
+            }
+            (requests::SET_MOVED_BOARD, payload)
+        }
+        TableAction::SetBoardZonePositions { board_index, positions } => {
             let positions: Vec<JsonValue> = positions
                 .iter()
                 .map(|position| {
@@ -336,7 +355,7 @@ pub fn request_message(action: &TableAction) -> (&'static str, JsonValue) {
                 .collect();
             (
                 requests::SET_PLAYMAT_ZONE_POSITIONS,
-                object().with("playmatIndex", *playmat_index as f64).with("positions", JsonValue::Array(positions)),
+                object().with("playmatIndex", *board_index as f64).with("positions", JsonValue::Array(positions)),
             )
         }
         TableAction::StartSearchZone { zone_id } => {
@@ -588,9 +607,16 @@ pub fn apply_as_host(session: &mut Session, action: TableAction) {
         TableAction::SetSharedPlaymat { on, index } => session.set_shared_playmat(on, index),
         TableAction::SetCurrentPlayer { player_id } => session.set_current_player(Some(&player_id)),
         TableAction::SetIndividualPlaymat { on, index } => session.set_individual_playmat(acting, on, index),
-        TableAction::SetPlaymatZonePositions { playmat_index, positions } => {
-            let owner = (session.game.playmat_type == PlaymatType::Individual).then_some(acting);
-            session.set_playmat_zone_positions(owner, playmat_index, positions);
+        TableAction::SetMovedBoard { board_index, moved, carried } => {
+            session.set_moved_board(acting, board_index, moved, carried.as_ref())
+        }
+        TableAction::SetBoardZonePositions { board_index, positions } => {
+            let board_kind = usize::try_from(board_index - 1)
+                .ok()
+                .and_then(|index| session.game.game_boards.get(index))
+                .map(|board| board.kind);
+            let owner = (board_kind != Some(BoardKind::Shared)).then_some(acting);
+            session.set_board_zone_positions(owner, board_index, positions);
         }
         TableAction::StartSearchZone { zone_id } => {
             let owner = zone_owner_id(session, &zone_id);

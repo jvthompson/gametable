@@ -5,8 +5,8 @@
 
 use gametable_core::deck_widget_zones::build_deck_widget_zone_id;
 use gametable_core::models::{
-    BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardWidgetInstance, BoardWidgetKind, CardInstance,
-    CardZone, DeckConfig, DeckEntry, SubDeck, WidgetSizeOverride, ZoneDefinition, ZoneKind,
+    BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardKind, BoardWidgetInstance, BoardWidgetKind,
+    CardInstance, CardZone, DeckConfig, DeckEntry, SubDeck, WidgetSizeOverride, ZoneDefinition, ZoneKind,
 };
 use gametable_core::util::trim_lua_whitespace;
 use gametable_core::uuid::new_v4_uuid;
@@ -21,6 +21,7 @@ use crate::screens::settings_dialog::{GameColors, SettingsDialog};
 use crate::screens::token_choosers::{ChooserResponse, STEPPER_WIDTH, TokenChooser, token_folder_images};
 use crate::sound::SoundEffect;
 use crate::table::actions::TableAction;
+use crate::table::board_layout::{BoardToggle, board_at, board_toggle, default_shared_board};
 use crate::table::screen::{TableEvent, TableScreen, top_card};
 use crate::table::view::{HitItem, ItemKind};
 use crate::ui::context::RegionOptions;
@@ -54,8 +55,26 @@ pub enum MenuAction {
     },
     SearchPile(String),
     SearchZone(String),
-    /// Puts the zones moved on this player's playmat back where the game places them.
-    ResetPlaymatZonePositions,
+    /// Shuffles one of the player's (or a shared) card zones and wiggles its pile.
+    ShuffleZone {
+        zone_id: String,
+        wiggle_key: String,
+    },
+    /// Puts the zones moved on the board holding this zone back where the game places them.
+    ResetBoardZonePositions {
+        owner_key: String,
+        zone_id: String,
+    },
+    /// Shows or hides the handle of one of this player's boards.
+    SwitchBoardLock(i64),
+    /// Puts one of this player's boards back where the game puts it.
+    ResetBoardPosition(i64),
+    /// F12 from the table menu: shows or hides the toggleable boards.
+    ToggleBoards,
+    /// Picks the player board to use (1-based), while none is placed.
+    ChoosePlayerBoard(i64),
+    /// The host picks the shared board (1-based), in a game with only shared boards.
+    ChooseSharedBoard(i64),
     FlipCards(Vec<String>),
     RotateRoots {
         root_ids: Vec<String>,
@@ -349,13 +368,81 @@ impl TableScreen {
                     .checked(self.state.current_player_id.as_deref() == Some(player.id.as_str()))
             })
             .collect();
-        let items = vec![
+        let mut items = vec![
             MenuItem::new("Tokens", MenuAction::OpenTokenPicker),
             MenuItem::submenu("Widgets", widget_items),
             MenuItem::new("Card Library", MenuAction::OpenLibrary),
             MenuItem::submenu("Pass Turn To", pass_turn),
         ];
+        items.extend(self.board_menu_items());
+        // Over one of this player's own boards: lock or unlock its handle, or put it back.
+        if let Some(board_index) = self.my_board_under(x, y) {
+            items.push(MenuItem::divider());
+            let locked = !self.unlocked_boards.contains(&board_index);
+            let label = if locked { "Unlock Board" } else { "Lock Board" };
+            let icon = if locked { "lock_open" } else { "lock" };
+            items.push(MenuItem::new(label, MenuAction::SwitchBoardLock(board_index)).icon(icon));
+            if self.has_moved_board(board_index) {
+                items.push(MenuItem::new("Reset Board Position", MenuAction::ResetBoardPosition(board_index)));
+            }
+        }
         self.open_menu(x, y, items);
+    }
+
+    /// The table menu's game board entries: Show/Hide Boards (what F12 does), and while no board
+    /// is placed, a Player Board submenu to pick which player board to use (the host's Shared
+    /// Board submenu, in a game with only shared boards).
+    fn board_menu_items(&self) -> Vec<MenuItem<MenuAction>> {
+        let mut items = Vec::new();
+        if let Some(shown) = self.board_toggle_state() {
+            let label = if shown { "Hide Boards (F12)" } else { "Show Boards (F12)" };
+            items.push(MenuItem::new(label, MenuAction::ToggleBoards));
+        }
+        let boards_of = |kind: BoardKind| -> Vec<i64> {
+            (1..=self.game.game_boards.len() as i64)
+                .filter(|&board_index| board_at(&self.game, board_index).is_some_and(|board| board.kind == kind))
+                .collect()
+        };
+        match board_toggle(&self.game) {
+            BoardToggle::DefaultPlayerBoard if self.player_by_id(&self.acting_player_id).is_some() => {
+                let current = self
+                    .player_by_id(&self.acting_player_id)
+                    .filter(|me| me.player_boards_shown)
+                    .and_then(|_| self.current_player_board());
+                let choices: Vec<MenuItem<MenuAction>> = boards_of(BoardKind::Player)
+                    .into_iter()
+                    .map(|board_index| {
+                        MenuItem::new(self.board_name(board_index), MenuAction::ChoosePlayerBoard(board_index))
+                            .checked(current == Some(board_index))
+                    })
+                    .collect();
+                if choices.len() > 1 {
+                    items.push(MenuItem::submenu("Player Board", choices));
+                }
+            }
+            BoardToggle::DefaultSharedBoard if self.can_load_scenario => {
+                let current = self
+                    .state
+                    .shared_boards_shown
+                    .then(|| default_shared_board(&self.game, self.state.chosen_shared_board))
+                    .flatten();
+                let choices: Vec<MenuItem<MenuAction>> = boards_of(BoardKind::Shared)
+                    .into_iter()
+                    .map(|board_index| {
+                        MenuItem::new(self.board_name(board_index), MenuAction::ChooseSharedBoard(board_index))
+                            .checked(current == Some(board_index))
+                    })
+                    .collect();
+                if choices.len() > 1 {
+                    items.push(MenuItem::submenu("Shared Board", choices));
+                }
+            }
+            _ => {}
+        }
+        if !items.is_empty() {
+            items.insert(0, MenuItem::divider());
+        }
+        items
     }
 
     fn counter_menu_items(widget: &BoardWidgetInstance, include_delete: bool) -> Vec<MenuItem<MenuAction>> {
@@ -422,13 +509,27 @@ impl TableScreen {
                     None => false,
                 }
             }
-            ItemKind::Zone { zone_id, zone, cards, shared, deck_widget, .. } => {
+            ItemKind::Zone { zone_id, zone, cards, shared, deck_widget, shuffle_wiggle_key, .. } => {
                 let mut items = vec![MenuItem::new("Search...", MenuAction::SearchZone(zone_id.clone()))];
+                if let Some(wiggle_key) = shuffle_wiggle_key
+                    && zone.shuffleable
+                    && cards.len() > 1
+                {
+                    items.push(MenuItem::new(
+                        "Shuffle Deck",
+                        MenuAction::ShuffleZone { zone_id: zone_id.clone(), wiggle_key: wiggle_key.clone() },
+                    ));
+                }
                 if !shared && !deck_widget && zone.deals_built_deck && cards.is_empty() {
                     items.push(MenuItem::new("Load Deck...", MenuAction::LoadDeck(zone.clone())));
                 }
-                if self.movable_playmat_zone(item).is_some() && self.has_moved_playmat_zones() {
-                    items.push(MenuItem::new("Reset Zone Positions", MenuAction::ResetPlaymatZonePositions));
+                if let Some((owner_key, zone_id)) = self.movable_board_zone(item)
+                    && self.has_moved_board_zones(&owner_key, &zone_id)
+                {
+                    items.push(MenuItem::new(
+                        "Reset Zone Positions",
+                        MenuAction::ResetBoardZonePositions { owner_key, zone_id },
+                    ));
                 }
                 self.open_menu(x, y, items);
                 true
@@ -515,6 +616,7 @@ impl TableScreen {
             }
             MenuAction::SearchPile(root_instance_id) => self.perform(TableAction::StartSearchPile { root_instance_id }),
             MenuAction::SearchZone(zone_id) => self.perform(TableAction::StartSearchZone { zone_id }),
+            MenuAction::ShuffleZone { zone_id, wiggle_key } => self.shuffle_zone(frame, &zone_id, Some(wiggle_key)),
             MenuAction::FlipCards(instance_ids) => {
                 for instance_id in instance_ids {
                     self.perform(TableAction::FlipCard { instance_id });
@@ -571,7 +673,14 @@ impl TableScreen {
             MenuAction::DeleteWidget(instance_id) => self.perform(TableAction::DeleteWidget { instance_id }),
             MenuAction::GeneratePack(set_id) => self.perform(TableAction::GeneratePack { set_id }),
             MenuAction::LoadDeck(zone) => self.prompt_load_deck(frame, zone),
-            MenuAction::ResetPlaymatZonePositions => self.reset_playmat_zone_positions(frame),
+            MenuAction::ResetBoardZonePositions { owner_key, zone_id } => {
+                self.reset_board_zone_positions(frame, &owner_key, &zone_id)
+            }
+            MenuAction::ToggleBoards => self.toggle_boards(frame),
+            MenuAction::SwitchBoardLock(board_index) => self.switch_board_lock(board_index),
+            MenuAction::ResetBoardPosition(board_index) => self.reset_board_position(frame, board_index),
+            MenuAction::ChoosePlayerBoard(board_index) => self.choose_player_board(frame, board_index),
+            MenuAction::ChooseSharedBoard(board_index) => self.choose_shared_board(frame, board_index),
             MenuAction::ChangeTokens(widget) => self.prompt_change_tokens(&widget),
             MenuAction::ResetBag(instance_id) => self.perform(TableAction::ResetBag { instance_id }),
             MenuAction::ReturnBagToken { widget_id, slot_id } => {

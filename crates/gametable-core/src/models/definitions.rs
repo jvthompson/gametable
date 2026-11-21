@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use super::json_fields::{FieldReader, SparseObjectWriter, string_list_to_json};
 use super::{
-    CardOrientation, DEFAULT_BOARD_WIDGET_BACKGROUND_COLOR, DEFAULT_BOARD_WIDGET_TEXT_COLOR, ModelError, PlaymatType,
+    BoardKind, CardOrientation, DEFAULT_BOARD_WIDGET_BACKGROUND_COLOR, DEFAULT_BOARD_WIDGET_TEXT_COLOR, ModelError,
     STANDARD_DECK_ID_PREFIX, SharedZoneSide, ZoneKind, ZoneWidgetKind,
 };
 use crate::color::ArgbColor;
@@ -32,9 +32,9 @@ impl Default for ZoneWidgetKind {
         ZoneWidgetKind::Counter
     }
 }
-impl Default for PlaymatType {
+impl Default for BoardKind {
     fn default() -> Self {
-        PlaymatType::Individual
+        BoardKind::Player
     }
 }
 
@@ -696,6 +696,35 @@ impl ScenarioTokenPlacement {
     }
 }
 
+/// One of a scenario's own zones set at a fixed spot on the table (a GameTable addition): once the
+/// scenario loads, the zone is drawn there, centred on the table fractions `x`, `y` as the first
+/// seat sees them, instead of in a sidebar. Players can't move it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScenarioZonePlacement {
+    pub zone_id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl ScenarioZonePlacement {
+    pub fn new(zone_id: impl Into<String>, x: f64, y: f64) -> Self {
+        Self { zone_id: zone_id.into(), x, y }
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
+        let fields = FieldReader::new(value, "ScenarioZonePlacement")?;
+        Ok(Self {
+            zone_id: fields.required_string("zoneId")?,
+            x: fields.required_number("x")?,
+            y: fields.required_number("y")?,
+        })
+    }
+
+    pub fn to_json(&self) -> JsonValue {
+        SparseObjectWriter::new().field("zoneId", &self.zone_id).field("x", self.x).field("y", self.y).finish_value()
+    }
+}
+
 /// A pre-built table setup the game owner can load.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Scenario {
@@ -704,6 +733,8 @@ pub struct Scenario {
     pub zones: Vec<ZoneDefinition>,
     pub placements: Vec<ScenarioPlacement>,
     pub token_placements: Vec<ScenarioTokenPlacement>,
+    /// Its zones set at fixed spots on the table (GameTable addition; `zonePlacements`).
+    pub zone_placements: Vec<ScenarioZonePlacement>,
     pub decks: Vec<SubDeck>,
     /// Relative to `_scenarios/`.
     pub guide_path: Option<String>,
@@ -722,6 +753,7 @@ impl Scenario {
             zones: fields.list_of("zones", ZoneDefinition::from_json)?,
             placements: fields.list_of("placements", ScenarioPlacement::from_json)?,
             token_placements: fields.list_of("tokenPlacements", ScenarioTokenPlacement::from_json)?,
+            zone_placements: fields.list_of("zonePlacements", ScenarioZonePlacement::from_json)?,
             decks: fields.list_of("decks", SubDeck::from_json)?,
             guide_path: fields.optional_string("guidePath")?,
         })
@@ -734,6 +766,7 @@ impl Scenario {
             .non_empty_list("zones", &self.zones, ZoneDefinition::to_json)
             .non_empty_list("placements", &self.placements, ScenarioPlacement::to_json)
             .non_empty_list("tokenPlacements", &self.token_placements, ScenarioTokenPlacement::to_json)
+            .non_empty_list("zonePlacements", &self.zone_placements, ScenarioZonePlacement::to_json)
             .non_empty_list("decks", &self.decks, SubDeck::to_json)
             .optional("guidePath", self.guide_path.as_ref())
             .finish_value()
@@ -746,29 +779,34 @@ impl Scenario {
     pub fn entries_for(&self, name: &str) -> &[DeckEntry] {
         self.subdeck(name).map(|deck| deck.entries.as_slice()).unwrap_or(&[])
     }
+
+    /// Where on the table this scenario sets its zone, if it does.
+    pub fn zone_placement_for(&self, zone_id: &str) -> Option<&ScenarioZonePlacement> {
+        self.zone_placements.iter().find(|placement| placement.zone_id == zone_id)
+    }
 }
 
 // ---------------------------------------------------------------------------
-// PlaymatDefinition
+// GameBoardDefinition (the original's playmats)
 // ---------------------------------------------------------------------------
 
-/// A zone drawn on a playmat instead of in the player area or a sidebar (a GameTable addition;
-/// the original CardTable ignores it). `x` and `y` are the zone's centre as fractions (0..1) of
-/// the mat, seen the right way up by the mat's owner.
+/// A zone drawn on a game board instead of in the player area or a sidebar (a GameTable
+/// addition). `x` and `y` are the zone's centre as fractions (0..1) of the board, seen the right
+/// way up by the board's owner (before any rotation on the table).
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlaymatZonePlacement {
+pub struct BoardZonePlacement {
     pub zone_id: String,
     pub x: f64,
     pub y: f64,
 }
 
-impl PlaymatZonePlacement {
+impl BoardZonePlacement {
     pub fn new(zone_id: impl Into<String>, x: f64, y: f64) -> Self {
         Self { zone_id: zone_id.into(), x, y }
     }
 
     pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
-        let fields = FieldReader::new(value, "PlaymatZonePlacement")?;
+        let fields = FieldReader::new(value, "BoardZonePlacement")?;
         Ok(Self {
             zone_id: fields.required_string("zoneId")?,
             x: fields.required_number("x")?,
@@ -781,47 +819,219 @@ impl PlaymatZonePlacement {
     }
 }
 
-/// A playmat image (relative to `_playmats/`), its scale, and the zones placed on it.
+/// Where the designer put a game board on the table, so it is there whenever the game loads.
+/// `x` and `y` are the board's centre in world units (the 2560 x 1440 table): for a shared board,
+/// on the table as the host sees it; for a player board, an offset from the player's seat origin
+/// (where their seat meets the table's middle line; positive `y` is toward the player), as that
+/// player sees it. `rotation` is 0, 90, 180 or 270
+/// degrees clockwise. A `toggleable` board is shown and hidden with F12; the others always show.
+/// A shared board sits locked in the middle of the table (ignoring `x` and `y`) until it is
+/// `unlocked_from_center`; player boards ignore that flag.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlaymatDefinition {
-    pub image_path: String,
-    pub scale: f64,
-    pub zone_placements: Vec<PlaymatZonePlacement>,
+pub struct BoardTablePlacement {
+    pub x: f64,
+    pub y: f64,
+    pub rotation: i64,
+    pub toggleable: bool,
+    pub unlocked_from_center: bool,
 }
 
-impl PlaymatDefinition {
-    pub fn new(image_path: impl Into<String>) -> Self {
-        Self { image_path: image_path.into(), scale: 1.0, zone_placements: Vec::new() }
+impl BoardTablePlacement {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y, rotation: 0, toggleable: false, unlocked_from_center: false }
     }
 
     pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
-        let fields = FieldReader::new(value, "PlaymatDefinition")?;
+        let fields = FieldReader::new(value, "BoardTablePlacement")?;
+        Ok(Self {
+            x: fields.required_number("x")?,
+            y: fields.required_number("y")?,
+            rotation: normalized_rotation(fields.optional_whole_number("rotation")?.unwrap_or(0)),
+            toggleable: fields.flag_is_exactly_true("toggleable"),
+            unlocked_from_center: fields.flag_is_exactly_true("unlockedFromCenter"),
+        })
+    }
+
+    pub fn to_json(&self) -> JsonValue {
+        SparseObjectWriter::new()
+            .field("x", self.x)
+            .field("y", self.y)
+            .unless_default("rotation", self.rotation, 0)
+            .flag_when_true("toggleable", self.toggleable)
+            .flag_when_true("unlockedFromCenter", self.unlocked_from_center)
+            .finish_value()
+    }
+
+    /// Turns the board another quarter turn clockwise.
+    pub fn rotate_clockwise(&mut self) {
+        self.rotation = normalized_rotation(self.rotation + 90);
+    }
+}
+
+/// A player board placed for one player only (by their place at the table: player 1 is the first
+/// seat), at its own spot on the table. It replaces that player's copy from the board's every-seat
+/// placement. `x` and `y` are the board's centre in world units on the table as the first seat
+/// sees it (players across the table see it turned around with the rest of the table);
+/// `rotation` and `toggleable` work as for [`BoardTablePlacement`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoardPlayerPlacement {
+    pub player: i64,
+    pub x: f64,
+    pub y: f64,
+    pub rotation: i64,
+    pub toggleable: bool,
+}
+
+impl BoardPlayerPlacement {
+    pub fn new(player: i64, x: f64, y: f64) -> Self {
+        Self { player, x, y, rotation: 0, toggleable: false }
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
+        let fields = FieldReader::new(value, "BoardPlayerPlacement")?;
+        Ok(Self {
+            player: fields.optional_whole_number("player")?.unwrap_or(1).max(1),
+            x: fields.required_number("x")?,
+            y: fields.required_number("y")?,
+            rotation: normalized_rotation(fields.optional_whole_number("rotation")?.unwrap_or(0)),
+            toggleable: fields.flag_is_exactly_true("toggleable"),
+        })
+    }
+
+    pub fn to_json(&self) -> JsonValue {
+        SparseObjectWriter::new()
+            .field("player", self.player)
+            .field("x", self.x)
+            .field("y", self.y)
+            .unless_default("rotation", self.rotation, 0)
+            .flag_when_true("toggleable", self.toggleable)
+            .finish_value()
+    }
+
+    /// Turns the board another quarter turn clockwise.
+    pub fn rotate_clockwise(&mut self) {
+        self.rotation = normalized_rotation(self.rotation + 90);
+    }
+}
+
+/// Snaps any angle to 0, 90, 180 or 270.
+pub fn normalized_rotation(degrees: i64) -> i64 {
+    ((degrees as f64 / 90.0).round() as i64).rem_euclid(4) * 90
+}
+
+/// A game board (a playmat, or a board game's board): its image (relative to the game's
+/// `_playmats/` folder, named from when boards were playmats), scale, kind, the zones placed on
+/// it, and optionally where it sits on the table: `table_placement` (a shared board's spot, or
+/// where every player gets their copy of a player board) and, for a player board,
+/// `player_placements` for single players.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GameBoardDefinition {
+    pub image_path: String,
+    pub scale: f64,
+    pub kind: BoardKind,
+    pub zone_placements: Vec<BoardZonePlacement>,
+    pub table_placement: Option<BoardTablePlacement>,
+    pub player_placements: Vec<BoardPlayerPlacement>,
+}
+
+impl GameBoardDefinition {
+    pub fn new(image_path: impl Into<String>) -> Self {
+        Self {
+            image_path: image_path.into(),
+            scale: 1.0,
+            kind: BoardKind::Player,
+            zone_placements: Vec::new(),
+            table_placement: None,
+            player_placements: Vec::new(),
+        }
+    }
+
+    /// Reads one board; `kind_when_missing` is the old game-wide `playmatType` for a game saved
+    /// with `playmats`.
+    fn from_json_with_default_kind(value: &JsonValue, kind_when_missing: BoardKind) -> Result<Self, ModelError> {
+        let fields = FieldReader::new(value, "GameBoardDefinition")?;
         Ok(Self {
             image_path: fields.required_string("imagePath")?,
             scale: fields.optional_number("scale")?.unwrap_or(1.0),
-            zone_placements: fields.list_of("zonePlacements", PlaymatZonePlacement::from_json)?,
+            kind: fields.enum_or_default("kind", kind_when_missing, "GameBoardDefinition.kind")?,
+            zone_placements: fields.list_of("zonePlacements", BoardZonePlacement::from_json)?,
+            table_placement: fields
+                .optional_value("tablePlacement")
+                .filter(|value| !matches!(value, JsonValue::Null))
+                .map(BoardTablePlacement::from_json)
+                .transpose()?,
+            player_placements: fields.list_of("playerPlacements", BoardPlayerPlacement::from_json)?,
         })
+    }
+
+    pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
+        GameBoardDefinition::from_json_with_default_kind(value, BoardKind::Player)
     }
 
     pub fn to_json(&self) -> JsonValue {
         SparseObjectWriter::new()
             .field("imagePath", &self.image_path)
             .unless_default("scale", self.scale, 1.0)
-            .non_empty_list("zonePlacements", &self.zone_placements, PlaymatZonePlacement::to_json)
+            .unless_default("kind", self.kind.as_json_str(), "player")
+            .non_empty_list("zonePlacements", &self.zone_placements, BoardZonePlacement::to_json)
+            .optional("tablePlacement", self.table_placement.as_ref().map(BoardTablePlacement::to_json))
+            .non_empty_list("playerPlacements", &self.player_placements, BoardPlayerPlacement::to_json)
             .finish_value()
     }
 
-    pub fn placement_for(&self, zone_id: &str) -> Option<&PlaymatZonePlacement> {
+    pub fn placement_for(&self, zone_id: &str) -> Option<&BoardZonePlacement> {
         self.zone_placements.iter().find(|placement| placement.zone_id == zone_id)
+    }
+
+    /// Placed on the table (for every player, or for some).
+    pub fn is_on_table(&self) -> bool {
+        self.table_placement.is_some() || !self.player_placements.is_empty()
+    }
+
+    /// Placed on the table, and shown or hidden with F12 (anywhere it is placed).
+    pub fn is_toggleable_on_table(&self) -> bool {
+        self.table_placement.as_ref().is_some_and(|placement| placement.toggleable)
+            || self.player_placements.iter().any(|placement| placement.toggleable)
+    }
+
+    /// The placement just for `player` (1-based seat), if there is one.
+    pub fn player_placement_for(&self, player: i64) -> Option<&BoardPlayerPlacement> {
+        self.player_placements.iter().find(|placement| placement.player == player)
+    }
+
+    /// For a player board: whether the player in seat `player` (1-based) gets it (their own
+    /// placement, else the every-seat one), and if so whether F12 shows and hides it.
+    pub fn toggleable_for_player(&self, player: i64) -> Option<bool> {
+        if self.kind != BoardKind::Player {
+            return None;
+        }
+        match self.player_placement_for(player) {
+            Some(placement) => Some(placement.toggleable),
+            None => self.table_placement.as_ref().map(|placement| placement.toggleable),
+        }
     }
 }
 
-/// Whether a zone may sit on this kind of playmat: individual mats hold each player's own
-/// zones, the shared mat holds shared zones (scenario zones are always shared).
-pub fn zone_fits_playmat_type(zone: &ZoneDefinition, playmat_type: PlaymatType) -> bool {
-    match playmat_type {
-        PlaymatType::Individual => !zone.shared,
-        PlaymatType::Shared => zone.shared,
+/// `gameBoards`, or for a game saved before boards (and by the original CardTable) its
+/// `playmats`, each taking its kind from the old game-wide `playmatType` ("individual" mats are
+/// player boards).
+fn read_game_boards(fields: &FieldReader) -> Result<Vec<GameBoardDefinition>, ModelError> {
+    if fields.optional_value("gameBoards").is_some() {
+        return fields.list_of("gameBoards", GameBoardDefinition::from_json);
+    }
+    let old_kind = match fields.optional_string("playmatType")?.as_deref() {
+        Some("shared") => BoardKind::Shared,
+        _ => BoardKind::Player,
+    };
+    fields.list_of("playmats", |value| GameBoardDefinition::from_json_with_default_kind(value, old_kind))
+}
+
+/// Whether a zone may sit on this kind of board: player boards hold each player's own zones,
+/// shared boards hold shared zones (scenario zones are always shared).
+pub fn zone_fits_board_kind(zone: &ZoneDefinition, kind: BoardKind) -> bool {
+    match kind {
+        BoardKind::Player => !zone.shared,
+        BoardKind::Shared => zone.shared,
     }
 }
 
@@ -862,8 +1072,8 @@ pub struct GameDefinition {
     pub table_color: Option<String>,
     pub playmat_border_color: Option<String>,
     pub current_turn_color: Option<String>,
-    pub playmat_type: PlaymatType,
-    pub playmats: Vec<PlaymatDefinition>,
+    /// The game's boards (the original's `playmats`; GameTable writes them as `gameBoards`).
+    pub game_boards: Vec<GameBoardDefinition>,
     pub has_scenarios: bool,
     pub scenarios: Vec<Scenario>,
     pub scenario_card_back_id: Option<String>,
@@ -991,12 +1201,7 @@ impl GameDefinition {
             table_color: fields.optional_string("tableColor")?,
             playmat_border_color: fields.optional_string("playmatBorderColor")?,
             current_turn_color: fields.optional_string("currentTurnColor")?,
-            playmat_type: fields.enum_or_default(
-                "playmatType",
-                PlaymatType::Individual,
-                "GameDefinition.playmatType",
-            )?,
-            playmats: fields.list_of("playmats", PlaymatDefinition::from_json)?,
+            game_boards: read_game_boards(&fields)?,
             has_scenarios: fields.flag_is_exactly_true("hasScenarios"),
             scenarios: fields.list_of("scenarios", Scenario::from_json)?,
             scenario_card_back_id: fields.optional_string("scenarioCardBackId")?,
@@ -1038,8 +1243,7 @@ impl GameDefinition {
             .optional("tableColor", self.table_color.as_ref())
             .optional("playmatBorderColor", self.playmat_border_color.as_ref())
             .optional("currentTurnColor", self.current_turn_color.as_ref())
-            .unless_default("playmatType", self.playmat_type.as_json_str(), "individual")
-            .non_empty_list("playmats", &self.playmats, PlaymatDefinition::to_json)
+            .non_empty_list("gameBoards", &self.game_boards, GameBoardDefinition::to_json)
             .flag_when_true("hasScenarios", self.has_scenarios)
             .non_empty_list("scenarios", &self.scenarios, Scenario::to_json)
             .optional("scenarioCardBackId", self.scenario_card_back_id.as_ref())

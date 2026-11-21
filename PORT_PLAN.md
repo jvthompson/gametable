@@ -462,9 +462,131 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
     - "Reset Zone Positions" in a moved zone's context menu puts back the designer's layout.
     - Tests: `gametable-core/tests/playmat_zone_positions.rs`, plus a Ctrl-drag test in
       `tests/table_playmat_zones.rs`.
+  - (Since renamed with playmats: see Game Boards below. The files are now `board_zone_placement.rs`,
+    `table/board_zones.rs`, `gametable-core/tests/board_zone_positions.rs` and `tests/table_game_boards.rs`.)
+- [x] **Game Boards** (playmats renamed, so they can also be a board game's boards). The editor tab is "Game
+  Boards" (`screens/gamedef/game_board_tab.rs`); the layout lives in `table/board_layout.rs`, shared by the table
+  and the editor.
+  - Each board has its own kind, **player** (every player gets their own copy) or **shared**, replacing the
+    game-wide playmat type: `GameBoardDefinition.kind`, JSON `"kind": "player"|"shared"` (player, the default, is
+    omitted). Zones placed on a board follow its kind (`zone_fits_board_kind`).
+  - JSON: the game writes `"gameBoards"` where `"playmats"` was and no longer writes `"playmatType"`. A game
+    without `gameBoards` reads `playmats`, each board taking its kind from the old `playmatType` ("individual" ->
+    player). Images stay in `_playmats/` and the settings keys keep their `playmat_` names, so libraries and
+    remembered choices carry over. The state and network names are unchanged too (`individualPlaymatOn`,
+    `requestSetSharedPlaymat`, `playmatZonePositions`, ...), keeping the Lua host-engine fixtures valid; their
+    Rust fields are renamed (`player_boards_shown`, `chosen_player_board`, `shared_boards_shown`,
+    `chosen_shared_board`, `board_zone_positions`).
+  - **Table Preview** (`table_board_placement.rs`), beside the Board Preview (the old table preview of one
+    board, where zones are placed). "Place on Table" chips put a board down, a shared board in the middle and a
+    player board in front of the viewer's seat; a 1-6 player switch previews the other seats' copies (dimmed,
+    turned across the table). Drag to move; the selected board's toolbar turns it 90 degrees, marks it "Can be
+    toggled (F12)", or takes it off the table. Stored as `GameBoardDefinition.table_placement`, JSON
+    `"tablePlacement": {x, y, rotation, toggleable}` (rotation 0/90/180/270 and toggleable omitted at their
+    defaults). A shared board's `x`/`y` is its centre on the table (world units, as the host sees it); a player
+    board's is an offset from its seat origin, the middle of that player's table edge.
+  - Seats: each row is split evenly across the table, like the hand areas, and a seat's origin is the middle of
+    its share (`seat_origin_xs`). Seats in the right half of the table, as their player sees it, get the
+    layout mirrored left to right (offset and quarter turns, `seat_mirrors_its_boards`), so boards sit
+    symmetrically around the table: placed toward the middle from your seat, they are toward the middle from
+    every seat. A seat in the middle isn't mirrored. The far row's boards are turned 180 degrees about
+    the far edge; a mirrored viewer sees shared boards turned too. Zones move with their board's turn; their
+    piles are drawn turned only on an upside-down board, so sideways boards keep cards readable.
+  - Placed boards are on the table from the start. A toggleable one shows while its owner's flag is on
+    (`player_boards_shown`, or for shared boards `shared_boards_shown`, host only); F12 flips it. Toggleable
+    placed boards start shown unless this computer last hid them (`boards_shown` now remembers hiding too).
+    With every placed board fixed, F12 does nothing.
+  - Nothing placed: the original's behaviour. F12 shows each player's chosen player board in the old row layout;
+    the table's right-click menu has a **Player Board** submenu (with more than one player board) to pick it,
+    and "Show/Hide Boards (F12)". A game with only shared boards keeps the centred shared board (host toggles;
+    Shared Board submenu).
+  - A zone on several shown boards of one owner sits on the first. Ctrl-drag works per board (the one holding
+    the zone), and "Reset Zone Positions" resets that board.
+  - The Lua golden model fixtures are compared with the `playmats` -> `gameBoards` rewrite applied
+    (`models_golden.rs::as_game_table_saves_it`); `tools/lua_golden/resave_library.sh` notes the same expected
+    difference.
+  - Tests: model round-trip and migration (`tests/models.rs`), `board_layout` and `board_zones` unit tests (seat
+    origins, far-side turning, quarter turns, visibility rules), an editor harness test (place, select, turn,
+    toggleable, drag, take off), and `tests/table_game_boards.rs` (a fixed placed board is there from the start
+    and untouched by F12; a toggleable one starts shown and F12 hides it; player boards toggle per player).
+  - Dev hooks: `GAMETABLE_GAMEDEF_TAB=boards,select,table` opens the tab's Table Preview;
+    `GAMETABLE_TABLE_SETUP=boards` (or `playmats`) shows every seat's boards.
+  - Editor follow-ups (2026-11-19): the chip rows are gone, to leave the previews more room. Right-clicking the
+    Board Preview offers **Add Zone...** and right-clicking the Table Preview **Add To Table...**; both open
+    `list_picker_dialog.rs` (a filter field over a scrolling list, for games with many zones). A zone added from
+    a right-click on the board lands there, else in the board's middle. Right-clicking a placed board gives
+    **Locked to Center** (shared boards), **Turn 90°**, **Can Be Toggled (F12)** and **Take Off Table** (the
+    toolbar is gone). Shared boards start locked to the table's middle (`BoardTablePlacement.unlocked_from_center`,
+    JSON `"unlockedFromCenter": true` once unlocked); locked, they ignore `x`/`y` and can't be dragged; locking
+    again puts them back in the middle. Both previews mark the table's centre with a small white +. The Table
+    Preview zooms (wheel at the mouse, zoom buttons, 50%–600%; clicking the percentage fits the table again) and
+    pans (drag the felt, or the middle button) via `PreviewCamera`.
+  - Player boards per player (2026-11-20). Besides its every-seat placement, a player board can be placed for
+    single players: `GameBoardDefinition.player_placements`, JSON `"playerPlacements": [{player, x, y, rotation,
+    toggleable}]` (`player` is the 1-based seat; `x`/`y` the board's centre on the table as the first seat sees
+    it, like a shared board, so players across the table see it turned with the table). One layout serves every
+    player count; a placement for a seat the game doesn't have is simply absent. A player's own placement
+    replaces their every-seat copy of that board (`toggleable_for_player`); a board placed only for some players
+    isn't shown for the others. In the Table Preview, right-clicking another seat's (dimmed) copy offers **Place
+    Separately For Player N** (your own copy's menu offers it for player 1), which keeps it where it was; the
+    table's menu has **Add For Player > Player N...** (the board goes where you right-clicked); a separately
+    placed board is draggable, labelled with its player, and its menu adds **Belongs To > Player N** and
+    "Take Off Table (Player N)". The preview grows to show a player given a board.
+  - Moving boards in the game (2026-11-20, `table/board_handle.rs`): right-clicking one of your own player
+    boards on the table offers **Unlock Board** / **Lock Board** (kept on this computer for the session), and
+    **Reset Board Position** once moved. Unlocked, the board shows a handle: a quarter of its width, 15 screen
+    pixels tall, 30 screen pixels beyond its bottom edge as it lies (so it turns with the board). Dragging the
+    handle moves the board (and the zones on it); Q / E while dragging turn it 90 degrees. On release the spot
+    goes to everyone: `PlayerInfo.moved_boards`, JSON `"movedBoards": [{boardIndex, x, y, rotation}]` (centre as
+    table fractions and turn as the first seat sees them) via the new `requestSetMovedBoard` (`{boardIndex, x, y,
+    rotation}`; without `x`/`y` it resets). The host only lets a player move their own player boards. A moved
+    board overrides the layout in both placed and default modes. Loose cards lying on a board don't move with
+    it. The server runs the host engine, so it needs redeploying with this.
+  - Boards carry what lies on them (2026-11-20). When a player moves, turns or resets one of their boards,
+    the table cards and free counters and tokens whose centre lies on it go with it, keeping their place on
+    the board and turning with it (cards and tokens gain the board's quarter turns, the short way round;
+    counters only move). Tokens attached to carried cards follow their cards. What lies on the board is
+    decided when the drag starts, and the items ride along live while dragging. Other players' cards and
+    tokens, docked widgets, arrows, pack generators, deck widgets and token bags stay put. The client sends
+    the items and the board's old and new spots as `carried` on `requestSetMovedBoard` (`{fromX, fromY,
+    fromRotation, toX, toY, toRotation, cardIds, widgetIds}`, spots as table fractions and degrees as the first
+    seat sees them; `BoardCarry`), and the session applies `table_actions::carry_with_board`, skipping
+    anything the mover may not move. Being on a board is geometric, not stored. Tests:
+    `carry_with_board` unit tests in `tests/table_actions.rs` and the board handle harness test.
+- [x] Zone piles without the count badge and shuffle button (2026-11-20). A card zone (and a deck widget's
+  sub-zones) no longer draws the black card count bubble; its hover tooltip reads "Name (N cards)" instead, for
+  every player's zones. The round shuffle button under a zone is gone: right-clicking a zone with 2+ cards whose
+  zone is Shuffleable offers **Shuffle Deck** (same shuffle, sound and wiggle). Table piles keep their badge and
+  shuffle button.
+- [x] No one-frame snap back on drop (2026-11-20). `TableScreen::draw` copied the session and derived before
+  handling input, so the frame that dropped a card (or board, widget...) drew the pre-drop copy with the drag
+  already ended: the item flashed at its old spot. `perform` now flags non-preview actions and `draw` re-reads
+  the session after input when flagged. Joined clients still wait a round trip for the host's update.
+- [x] Scenario Card Placement shows the game boards and zooms like the Table Preview (2026-11-20). The canvas
+  draws the placed boards (and the zones on them, and seat labels) read-only under the cards, laid out by the
+  table's own `layout_boards` for a chosen Players count (1-6, shown when any board is placed), so cards can be
+  set on a board exactly. It uses the Table Preview's `PreviewCamera`: wheel zooms around the cursor, dragging
+  bare felt or the middle button pans, zoom buttons and a fit-the-table percentage sit above it. Shared pieces
+  live in `table_board_placement.rs` (`draw_placed_boards`, `draw_zoom_controls`). Test: the scenario tab's
+  `the_placement_canvas_zooms_and_pans_like_the_table_preview`.
+- [x] Scenario zones set on the table (2026-11-20). Right-clicking the Card Placement canvas offers **Add Zone**,
+  a submenu of the scenario's zones not yet on the table; the zone lands where the canvas was clicked and drags
+  anywhere on the table (Delete takes it off; deleting the zone or duplicating the scenario keeps the spots in
+  step). Stored as `Scenario.zone_placements` (`zonePlacements`: `zoneId`, `x`, `y` table fractions as the first
+  seat sees them; omitted when empty, so files without it are unchanged). Once the scenario loads, the table
+  (`board_zones::scenario_zones_on_table`, `Derived.zones_on_table`) draws the zone at that spot for every viewer
+  (flipped with the table for mirrored seats), out of the sidebars and off any shared board that also holds it.
+  It takes drops, clicks and hotkeys like a shared zone, but sits on no board, so Ctrl-drag can't move it. No
+  protocol change: clients read the spots from the game definition (a lobby server that re-serializes games
+  needs the redeploy to keep `zonePlacements`). Tests: `scenario_zones_set_on_the_table_round_trip`,
+  `a_scenario_zone_is_added_from_the_right_click_menu_and_dragged_anywhere`,
+  `a_scenario_zone_set_on_the_table_sits_there_and_cannot_be_moved`.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
+- GameTable saves a game's boards as `gameBoards` (each with its `kind`), not the original's `playmatType` +
+  `playmats`, so the original CardTable shows no playmats for a game saved by GameTable. GameTable still reads
+  the old keys.
 - `PackSetting.count` may be fractional on the client (integer part guaranteed, fraction = chance of a bonus card). The Go
   server hands the set's raw `packSettings` JSON to the Lua pack generator, so fractions work there too; the Rust
   server does the same through the core pack generator.
@@ -778,3 +900,23 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   Windows (18.8 MB), Linux (20.3 MB) and macOS (34.1 MB) zips. The live server was redeployed with the new
   `requestSetPlaymatZonePositions` handling (dry run first; backup `~/backups/20261118-041542`). The library re-save
   check matched apart from the user's own Lorcana `zonePlacements`, which the original Lua models drop.
+- 2026-11-19: **Game Boards** (see "Beyond the port"): playmats renamed, each board a player or shared board,
+  boards placed on the table in the editor's new Table Preview (turned in 90-degree steps, optionally
+  toggleable), F12 only shows and hides toggleable boards, and with nothing placed a Player Board submenu picks
+  the board F12 shows.
+- 2026-11-19: Game Boards editor follow-ups (see "Beyond the port"): right-click Add Zone / Add To Table pickers,
+  board right-click menu with Locked to Center for shared boards, centre + markers, zoomable Table Preview.
+- 2026-11-20: Game Boards: player boards placed per player (Place Separately For Player N, Add For Player,
+  Belongs To; `playerPlacements`), and players move and turn their own boards in the game by an unlockable
+  handle (Q / E while dragging; `movedBoards`, `requestSetMovedBoard`). Tests: model round-trip, host engine
+  permission, layout (own placement replaces the copy, mirrored viewers, moved boards), handle geometry, an
+  editor harness test and a table harness test (unlock, drag, turn, reset, lock).
+- 2026-11-20: Zones drop the card count badge (count moves into the tooltip) and the shuffle button (now a
+  **Shuffle Deck** zone menu item for 2+ cards). Table piles unchanged.
+- 2026-11-20: Boards carry the cards, counters and tokens lying on them when moved, turned or reset
+  (`carried` on `requestSetMovedBoard`, `carry_with_board`); they ride along live while dragging.
+- 2026-11-20: Fixed the one-frame flash of a dropped item at its old spot (table re-read after input).
+- 2026-11-20: Scenarios' Card Placement draws the game boards as the table places them (Players count) and
+  gets the Table Preview's wheel zoom, felt-drag pan and zoom controls.
+- 2026-11-20: Scenario zones can be set at fixed spots on the table from the Card Placement canvas
+  (right-click > Add Zone; `zonePlacements`); in the game they sit there and can't be moved.

@@ -1,6 +1,6 @@
 //! The game definition editor. Port of `src/ui/screens/gamedef_editor.lua`
 //! (`game_definition_editor_entry_screen.dart`, `game_definition_editor_screen.dart`): pick (or
-//! create) a game definition, edit it across the General / Playmats / Zones / Sets / Cards tabs
+//! create) a game definition, edit it across the General / Game Boards / Zones / Sets / Cards tabs
 //! (plus Tokens and Scenarios while the game uses them), and save it back to its folder's
 //! `gamedef.json`.
 //!
@@ -8,14 +8,16 @@
 //! back unchanged. Like the original there is no unsaved-changes prompt, and the game's id stays
 //! whatever its folder or file gave it.
 
+pub mod board_zone_placement;
 pub mod card_view_tab;
 pub mod common;
 pub mod dialogs;
-pub mod playmat_tab;
-pub mod playmat_zone_placement;
+pub mod game_board_tab;
+pub mod list_picker_dialog;
 pub mod scenario_tab;
 pub mod sets_tab;
 pub mod settings_tab;
+pub mod table_board_placement;
 pub mod title_area_picker;
 pub mod title_suggestion_dialogs;
 pub mod tokens_tab;
@@ -44,7 +46,7 @@ use crate::ui::widgets::{ButtonOptions, ButtonVariant, IconButtonOptions};
 use self::card_view_tab::CardViewTab;
 use self::common::StableKeys;
 use self::dialogs::ToolDialog;
-use self::playmat_tab::PlaymatTab;
+use self::game_board_tab::GameBoardTab;
 use self::scenario_tab::ScenarioTab;
 use self::sets_tab::SetsTab;
 use self::settings_tab::SettingsTab;
@@ -170,7 +172,7 @@ fn show_open_picker(frame: &mut Frame, picker: &mut Option<FilePicker>) -> Optio
 // Editor
 // ---------------------------------------------------------------------------
 
-const TAB_LABELS: [&str; 5] = ["General", "Playmats", "Zones", "Sets", "Cards"];
+const TAB_LABELS: [&str; 5] = ["General", "Game Boards", "Zones", "Sets", "Cards"];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tool {
@@ -183,7 +185,7 @@ pub struct GameDefinitionEditor {
     /// 0-based; past the fixed tabs it counts the optional tabs that are on.
     tab: usize,
     settings_tab: SettingsTab,
-    playmat_tab: PlaymatTab,
+    game_board_tab: GameBoardTab,
     zones_tab: ZonesTab,
     sets_tab: SetsTab,
     cards_tab: CardViewTab,
@@ -210,7 +212,7 @@ impl GameDefinitionEditor {
             model: EditorModel { folder_path, game, card_keys },
             tab: 0,
             settings_tab: SettingsTab::default(),
-            playmat_tab: PlaymatTab::new(),
+            game_board_tab: GameBoardTab::new(),
             zones_tab: ZonesTab::default(),
             sets_tab: SetsTab::default(),
             tokens_tab: None,
@@ -223,22 +225,24 @@ impl GameDefinitionEditor {
         }
     }
 
-    /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,suggest][,placement|deck]`):
-    /// opens a tab; `select` selects the first card on the Cards tab and the first playmat on the
-    /// Playmats tab, `suggest` opens its Suggest
-    /// Title dialog, `placement`/`deck` pick the
-    /// Scenarios tab's sub-view.
+    /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,suggest][,placement|deck]
+    /// [,table]`): opens a tab (`boards`, or the old `playmats`, for Game Boards); `select` selects
+    /// the first card on the Cards tab and the first board on the Game Boards tab, `suggest` opens
+    /// its Suggest Title dialog, `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
+    /// switches the Game Boards tab to its Table Preview.
     pub fn apply_development_setup(&mut self, steps: &str) {
         for step in steps.split(',').map(str::trim) {
-            if let Some(position) = self.tab_labels().iter().position(|label| label.eq_ignore_ascii_case(step)) {
+            let label = if matches!(step, "boards" | "playmats") { "Game Boards" } else { step };
+            if let Some(position) = self.tab_labels().iter().position(|tab| tab.eq_ignore_ascii_case(label)) {
                 self.tab = position;
             }
             match step {
                 "select" => {
                     self.cards_tab.select_first(&self.model);
-                    self.playmat_tab.select_first(&self.model);
+                    self.game_board_tab.select_first(&self.model);
                 }
                 "suggest" => self.cards_tab.open_suggest_title_for_development(),
+                "table" => self.game_board_tab.show_table_preview_for_development(),
                 "placement" | "deck" => {
                     self.scenario_tab.get_or_insert_with(ScenarioTab::new).set_view_for_development(step)
                 }
@@ -420,7 +424,7 @@ impl Screen for GameDefinitionEditor {
         let model = &mut self.model;
         match active {
             "General" => self.settings_tab.draw(frame, model, x, body_y, width, body_height),
-            "Playmats" => self.playmat_tab.draw(frame, model, x, body_y, width, body_height),
+            "Game Boards" => self.game_board_tab.draw(frame, model, x, body_y, width, body_height),
             "Zones" => self.zones_tab.draw(frame, model, x, body_y, width, body_height),
             "Sets" => self.sets_tab.draw(frame, model, x, body_y, width, body_height),
             "Tokens" => {

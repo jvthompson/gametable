@@ -152,6 +152,7 @@ json_string_enum!(
     SearchTargetType { Zone => "zone", Pile => "pile" }
 );
 json_string_enum!(
-    /// Whether playmats are one shared mat or one per player.
-    PlaymatType { Shared => "shared", Individual => "individual" }
+    /// Whether a game board is one per player (each player gets their own copy) or one shared
+    /// by everyone.
+    BoardKind { Player => "player", Shared => "shared" }
 );

@@ -149,8 +149,7 @@ pub fn merge_local_image_paths(remote: &GameDefinition, local: &GameDefinition) 
     merged.scenario_card_back_id = remote.scenario_card_back_id.clone();
     merged.uses_tokens = remote.uses_tokens;
     merged.tokens = remote.tokens.clone();
-    merged.playmat_type = remote.playmat_type;
-    merged.playmats = remote.playmats.clone();
+    merged.game_boards = remote.game_boards.clone();
     merged.same_orientation_for_all = remote.same_orientation_for_all;
     merged
 }

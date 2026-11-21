@@ -17,10 +17,11 @@ use std::fmt;
 
 use crate::deck_widget_zones::{is_deck_widget_zone_id, parse_deck_widget_zone_id};
 use crate::models::{
-    BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardWidgetInstance, BoardWidgetKind, CardDefinition,
-    CardInstance, CardZone, DeckConfig, DeckEntry, GameDefinition, LogEntry, MAIN_DECK_SUBDECK_NAME, PlayerInfo,
-    PlayerRole, PlaymatZonePosition, SearchTargetType, TableState, WidgetSizeOverride, ZoneDefinition, ZoneKind,
-    ZoneWidgetKind, build_standard_deck_cards, replace_playmat_zone_positions,
+    BOARD_WIDGET_COUNTER_MAXIMUM, BOARD_WIDGET_COUNTER_MINIMUM, BoardCarry, BoardKind, BoardWidgetInstance,
+    BoardWidgetKind, BoardZonePosition, CardDefinition, CardInstance, CardZone, DeckConfig, DeckEntry, GameDefinition,
+    LogEntry, MAIN_DECK_SUBDECK_NAME, MovedBoard, PlayerInfo, PlayerRole, SearchTargetType, TableState,
+    WidgetSizeOverride, ZoneDefinition, ZoneKind, ZoneWidgetKind, build_standard_deck_cards,
+    replace_board_zone_positions,
 };
 use crate::pack_generator::select_pack_cards;
 use crate::stack_utils::{root_id_of, stack_of};
@@ -1158,8 +1159,8 @@ impl Session {
 
     /// Host-only (checked by the host engine).
     pub fn set_shared_playmat(&mut self, on: bool, index: i64) {
-        self.state.shared_playmat_on = on;
-        self.state.shared_playmat_index = index;
+        self.state.shared_boards_shown = on;
+        self.state.chosen_shared_board = index;
         self.state.revision += 1;
         self.notify();
     }
@@ -1176,25 +1177,49 @@ impl Session {
 
     /// Replaces where zones were moved on one playmat: a player's own (`Some(player id)`) or the
     /// shared mat (`None`, host-only, checked by the host engine).
-    pub fn set_playmat_zone_positions(
+    pub fn set_board_zone_positions(
         &mut self,
         player_id: Option<&str>,
-        playmat_index: i64,
-        positions: Vec<PlaymatZonePosition>,
+        board_index: i64,
+        positions: Vec<BoardZonePosition>,
     ) {
         match player_id {
             Some(player_id) => {
                 for player in self.state.players.iter_mut().filter(|player| player.id == player_id) {
-                    replace_playmat_zone_positions(
-                        &mut player.playmat_zone_positions,
-                        playmat_index,
-                        positions.clone(),
-                    );
+                    replace_board_zone_positions(&mut player.board_zone_positions, board_index, positions.clone());
                 }
             }
-            None => {
-                replace_playmat_zone_positions(&mut self.state.shared_playmat_zone_positions, playmat_index, positions)
-            }
+            None => replace_board_zone_positions(&mut self.state.shared_board_zone_positions, board_index, positions),
+        }
+        self.state.revision += 1;
+        self.notify();
+    }
+
+    /// Where a player moved one of their own player boards (`None` puts it back where the game
+    /// puts it). Each player may only move their own (checked by the host engine). `carried` are
+    /// the cards and tokens lying on the board, which move and turn with it (see
+    /// [`actions::carry_with_board`]).
+    pub fn set_moved_board(
+        &mut self,
+        player_id: &str,
+        board_index: i64,
+        moved: Option<MovedBoard>,
+        carried: Option<&BoardCarry>,
+    ) {
+        let is_player_board = usize::try_from(board_index - 1)
+            .ok()
+            .and_then(|index| self.game.game_boards.get(index))
+            .is_some_and(|board| board.kind == BoardKind::Player);
+        if !is_player_board {
+            return;
+        }
+        if let Some(carry) = carried {
+            self.state = actions::carry_with_board(&self.state, carry, player_id);
+        }
+        let moved = moved.and_then(MovedBoard::sanitized).map(|moved| MovedBoard { board_index, ..moved });
+        for player in self.state.players.iter_mut().filter(|player| player.id == player_id) {
+            player.moved_boards.retain(|existing| existing.board_index != board_index);
+            player.moved_boards.extend(moved.clone());
         }
         self.state.revision += 1;
         self.notify();
@@ -1203,8 +1228,8 @@ impl Session {
     /// Each player may only change their own playmat (checked by the host engine).
     pub fn set_individual_playmat(&mut self, player_id: &str, on: bool, index: i64) {
         for player in self.state.players.iter_mut().filter(|player| player.id == player_id) {
-            player.individual_playmat_on = on;
-            player.individual_playmat_index = index;
+            player.player_boards_shown = on;
+            player.chosen_player_board = index;
         }
         self.state.revision += 1;
         self.notify();

@@ -19,7 +19,7 @@ use crate::table::screen::{
     top_card,
 };
 use crate::table::selection::{box_hits, half_extents, rect_from_points};
-use crate::table::view::{DropZone, HitItem, ItemKind, ShuffleTarget};
+use crate::table::view::{DropZone, HitItem, ItemKind};
 use crate::ui::context::Rect;
 
 /// A card (or pile) being dragged and how it was grabbed.
@@ -1170,6 +1170,12 @@ impl TableScreen {
             return;
         }
 
+        // One of this player's boards being moved by its handle.
+        if self.board_drag.is_some() {
+            self.update_board_drag(frame, mouse_x, mouse_y);
+            return;
+        }
+
         // A zone being moved on its playmat (Ctrl + drag).
         if let Some(zone_move) = self.zone_move.clone() {
             frame.ui.set_cursor("sizeall");
@@ -1225,11 +1231,16 @@ impl TableScreen {
             }
         }
 
+        // A press on a board's handle (over whatever is under it) starts moving the board.
+        if free && frame.ui.mouse_pressed(1) && !self.spectator && self.start_board_drag(mouse_x, mouse_y) {
+            return;
+        }
+
         let Some(item) = item.filter(|_| free) else { return };
 
         if frame.ui.mouse_pressed(1) {
             if frame.keyboard.ctrl()
-                && let Some((owner_key, zone_id)) = self.movable_playmat_zone(&item)
+                && let Some((owner_key, zone_id)) = self.movable_board_zone(&item)
             {
                 let center = (item.shape.x + item.shape.width / 2.0, item.shape.y + item.shape.height / 2.0);
                 let grab_offset = (mouse_x - center.0, mouse_y - center.1);
@@ -1295,10 +1306,7 @@ impl TableScreen {
             && (clicked == item || (clicked.kind.name() == item.kind.name() && clicked.hit(mouse_x, mouse_y)))
         {
             match &clicked.kind {
-                ItemKind::Shuffle { key, target } => match target {
-                    ShuffleTarget::Pile { root_id } => self.shuffle_pile(frame, root_id),
-                    ShuffleTarget::Zone { zone_id } => self.shuffle_zone(frame, zone_id, Some(key.clone())),
-                },
+                ItemKind::Shuffle { root_id } => self.shuffle_pile(frame, root_id),
                 ItemKind::DeckSave { widget } => self.save_deck_widget(frame, widget),
                 ItemKind::Avatar { player_id } => {
                     let player_id = player_id.clone();
