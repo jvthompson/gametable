@@ -105,7 +105,29 @@ pub fn build_request_body(
         whole_card_instructions(game_name, card_id)
     };
     instructions.push_str(&style_instructions(style));
-    build_body_with_instructions(model, png_base64, instructions)
+    build_body_with_instructions(model, png_base64, instructions, "title")
+}
+
+/// What one card's extra-field request needs.
+#[derive(Debug, Clone)]
+pub struct ClaudeExtraFieldRequest {
+    pub api_key: String,
+    pub model: ClaudeModel,
+    /// The prompt, from [`super::extra_data::extra_field_instructions`].
+    pub instructions: String,
+    pub image_path: String,
+    /// Only this part of the image is sent, when set.
+    pub field_area: Option<TitleArea>,
+}
+
+/// Reads one extra field's value from a card's picture. `Ok(None)` when Claude finds none.
+pub fn suggest_extra_value_with_claude(request: &ClaudeExtraFieldRequest) -> Result<Option<String>, String> {
+    let image = load_card_image(&request.image_path, request.field_area)?.downscaled_to_fit(MAX_IMAGE_SIDE);
+    let png_base64 = BASE64.encode(image.encode_png()?);
+    let body = build_body_with_instructions(request.model, &png_base64, request.instructions.clone(), "value");
+    let body_text = encode_compact(&body).map_err(|_| "Could not build the request.".to_string())?;
+    let response = post_with_retries(&request.api_key, request.model, &body_text)?;
+    parse_answer(&response, "value")
 }
 
 /// The house-style part of the prompt: capitals, the name/subtitle separator, example titles.
@@ -146,7 +168,13 @@ fn whole_card_instructions(game_name: &str, card_id: &str) -> String {
     )
 }
 
-fn build_body_with_instructions(model: ClaudeModel, png_base64: &str, instructions: String) -> JsonValue {
+/// The request body; Claude answers `{"<answer_property>": string, "found": bool}`.
+fn build_body_with_instructions(
+    model: ClaudeModel,
+    png_base64: &str,
+    instructions: String,
+    answer_property: &str,
+) -> JsonValue {
     let image_block = JsonObject::new().with("type", "image").with(
         "source",
         JsonObject::new().with("type", "base64").with("media_type", "image/png").with("data", png_base64),
@@ -158,10 +186,10 @@ fn build_body_with_instructions(model: ClaudeModel, png_base64: &str, instructio
         .with(
             "properties",
             JsonObject::new()
-                .with("title", JsonObject::new().with("type", "string"))
+                .with(answer_property, JsonObject::new().with("type", "string"))
                 .with("found", JsonObject::new().with("type", "boolean")),
         )
-        .with("required", vec!["title", "found"])
+        .with("required", vec![answer_property, "found"])
         .with("additionalProperties", false);
     let output_config = JsonObject::new()
         .with("effort", "low")
@@ -179,6 +207,11 @@ fn build_body_with_instructions(model: ClaudeModel, png_base64: &str, instructio
 
 /// The title from a Messages API response.
 pub fn parse_title_response(response: &JsonValue) -> Result<Option<String>, String> {
+    parse_answer(response, "title")
+}
+
+/// The answer's `answer_property` text from a Messages API response; `None` when not found.
+pub fn parse_answer(response: &JsonValue, answer_property: &str) -> Result<Option<String>, String> {
     match response.get("stop_reason").and_then(JsonValue::as_str) {
         Some("refusal") => return Ok(None),
         Some("max_tokens") => return Err("Claude's answer was cut off.".to_string()),
@@ -197,8 +230,8 @@ pub fn parse_title_response(response: &JsonValue) -> Result<Option<String>, Stri
         .unwrap_or_default();
     let answer = json::decode(&text).map_err(|_| "Claude's answer was not in the expected format.".to_string())?;
     let found = answer.get("found").and_then(JsonValue::as_bool).unwrap_or(false);
-    let title = answer.get("title").and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
-    Ok((found && !title.is_empty()).then_some(title))
+    let text = answer.get(answer_property).and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
+    Ok((found && !text.is_empty()).then_some(text))
 }
 
 fn http_agent() -> ureq::Agent {

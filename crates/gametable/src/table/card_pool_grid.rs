@@ -6,6 +6,8 @@
 //! GameTable addition: a zoom (1 = the original size) enlarges or shrinks each tile's card and
 //! name text; [`CardZoom`] is the slider that sets it, remembered per screen in settings.
 
+use gametable_core::models::{CardDefinition, CardOrientation};
+
 use crate::app::Frame;
 use crate::data::settings::Settings;
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH};
@@ -22,6 +24,35 @@ pub const TILE_CARD_HEIGHT: f32 = CARD_HEIGHT * TILE_SCALE;
 pub const NAME_TEXT_SIZE: f32 = 11.0;
 /// Names never shrink below this, however far the grid is zoomed out.
 const SMALLEST_NAME_TEXT_SIZE: f32 = 9.0;
+/// The space between tiles, across and down.
+const TILE_GAP: f32 = 12.0;
+/// The extra width a tile wants beyond its (portrait) card.
+const TILE_SIDE_ROOM: f32 = 24.0;
+/// GameTable addition: the least clear space between two neighbouring card images. A turned
+/// (left or right) card is as wide as a portrait card is tall, so a grid holding turned cards
+/// spaces its columns for that wider footprint.
+pub const SMALLEST_SPACE_BETWEEN_CARDS: f32 = 5.0;
+
+/// Whether any of these cards is drawn turned (left or right), so the grid needs wider columns.
+pub fn any_card_turned<'a>(cards: impl IntoIterator<Item = &'a CardDefinition>) -> bool {
+    cards.into_iter().any(|card| card.orientation != CardOrientation::Portrait)
+}
+
+/// How many columns fit across `inner_width`, and each tile's width. Columns exactly fill the
+/// width; when the grid holds turned cards, there are few enough columns that two neighbouring
+/// turned cards keep [`SMALLEST_SPACE_BETWEEN_CARDS`] between them.
+fn grid_columns(inner_width: f32, card_width: f32, card_height: f32, has_turned_cards: bool) -> (usize, f32) {
+    let widest_tile = card_width + TILE_SIDE_ROOM;
+    let mut columns = ((inner_width + TILE_GAP) / (widest_tile + TILE_GAP)).ceil() as usize;
+    if has_turned_cards {
+        let turned_card_pitch = card_height + SMALLEST_SPACE_BETWEEN_CARDS;
+        let columns_that_keep_turned_cards_apart = ((inner_width + TILE_GAP) / turned_card_pitch).floor() as usize;
+        columns = columns.min(columns_that_keep_turned_cards_apart);
+    }
+    let columns = columns.max(1);
+    let tile_width = (inner_width - (columns as f32 - 1.0) * TILE_GAP) / columns as f32;
+    (columns, tile_width)
+}
 
 /// Where one tile goes, and how big its card and name are at the grid's zoom.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,7 +104,8 @@ impl Frame<'_> {
 
     /// `M.draw`: a scrollable grid of `count` tiles; `draw_tile` is called for each visible one.
     /// `padding` insets the tiles on both sides; the top inset is always 12. `zoom` scales each
-    /// tile's card and name (1 = the original size).
+    /// tile's card and name (1 = the original size). `has_turned_cards` (see [`any_card_turned`])
+    /// spaces the columns so turned cards don't overlap.
     #[allow(clippy::too_many_arguments)]
     pub fn card_pool_grid(
         &mut self,
@@ -85,14 +117,13 @@ impl Frame<'_> {
         height: f32,
         padding: f32,
         zoom: f32,
+        has_turned_cards: bool,
         mut draw_tile: impl FnMut(&mut Frame, PoolTile),
     ) {
         let (card_width, card_height) = (TILE_CARD_WIDTH * zoom, TILE_CARD_HEIGHT * zoom);
         let name_height = self.card_pool_name_height_at(zoom);
-        let (max_extent, row_height, gap) = (card_width + 24.0, card_height + 6.0 + name_height + 4.0, 12.0);
-        let inner = width - 2.0 * padding;
-        let columns = (((inner + gap) / (max_extent + gap)).ceil() as usize).max(1);
-        let tile_width = (inner - (columns as f32 - 1.0) * gap) / columns as f32;
+        let (row_height, gap) = (card_height + 6.0 + name_height + 4.0, TILE_GAP);
+        let (columns, tile_width) = grid_columns(width - 2.0 * padding, card_width, card_height, has_turned_cards);
         let offset = self.begin_scroll(scroll_id, x, y, width, height);
         for index in 0..count {
             let (column, row) = (index % columns, index / columns);
@@ -211,6 +242,22 @@ mod tests {
         assert_eq!(zoom.saved(&settings), CardZoom::MAXIMUM);
         zoom.save(&mut settings, 1.0);
         assert!(settings.get("test_zoom").is_none());
+    }
+
+    #[test]
+    fn turned_cards_keep_their_distance() {
+        for zoom in [CardZoom::MINIMUM, 1.0, 1.35, CardZoom::MAXIMUM] {
+            for inner_width in [300.0, 517.0, 800.0, 1234.0, 1900.0] {
+                let (card_width, card_height) = (TILE_CARD_WIDTH * zoom, TILE_CARD_HEIGHT * zoom);
+                let (columns, tile_width) = grid_columns(inner_width, card_width, card_height, true);
+                if columns > 1 {
+                    let space_between = tile_width + TILE_GAP - card_height;
+                    assert!(space_between >= SMALLEST_SPACE_BETWEEN_CARDS - 0.001, "{zoom} {inner_width}");
+                }
+                let (portrait_columns, _) = grid_columns(inner_width, card_width, card_height, false);
+                assert!(columns <= portrait_columns);
+            }
+        }
     }
 
     #[test]

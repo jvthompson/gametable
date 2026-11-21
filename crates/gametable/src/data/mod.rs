@@ -6,6 +6,7 @@ pub mod display_settings;
 pub mod file_system;
 pub mod game_loader;
 pub mod gamedef_ops;
+pub mod image_dimensions;
 pub mod image_resolver;
 pub mod image_utils;
 pub mod paths;

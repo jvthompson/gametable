@@ -45,6 +45,10 @@ pub mod keys {
     pub const SUGGEST_TITLE_SOURCE: &str = "suggest_title_source";
     /// Followed by `_<game id>`: the name/subtitle separator last used for that game's titles.
     pub const SUGGEST_TITLE_SEPARATOR_PREFIX: &str = "suggest_title_separator";
+    /// The last "Suggest Extra Data" reader: `"ocr"` or `"claude"`.
+    pub const SUGGEST_EXTRA_DATA_SOURCE: &str = "suggest_extra_data_source";
+    /// Followed by `_<game id>_<field key>`: the Claude instructions last used for that field.
+    pub const SUGGEST_EXTRA_DATA_INSTRUCTIONS_PREFIX: &str = "suggest_extra_data_instructions";
 }
 
 /// The settings file, loaded into memory once and rewritten after every change.

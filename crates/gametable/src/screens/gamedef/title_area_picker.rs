@@ -14,6 +14,21 @@ use crate::ui::widgets::{ButtonOptions, ButtonVariant};
 /// The tallest the card picture is drawn.
 pub const PICKER_MAX_IMAGE_HEIGHT: f32 = 320.0;
 
+/// What the picker calls the part of the card being boxed.
+#[derive(Debug, Clone, Copy)]
+pub struct AreaLabels<'a> {
+    /// The heading, e.g. "Title area".
+    pub heading: &'a str,
+    /// What is printed in the box, e.g. "the title".
+    pub subject: &'a str,
+    /// Whether a box must be drawn before reading (the hint stops saying "Optional").
+    pub required: bool,
+}
+
+impl AreaLabels<'static> {
+    pub const TITLE: AreaLabels<'static> = AreaLabels { heading: "Title area", subject: "the title", required: false };
+}
+
 #[derive(Debug, Default)]
 pub struct TitleAreaPicker {
     pub area: Option<TitleArea>,
@@ -22,13 +37,14 @@ pub struct TitleAreaPicker {
 }
 
 impl TitleAreaPicker {
-    /// Draws the heading, the hint and the card picture (`image_path`, already resolved) with the
+    /// Draws the heading (from `labels`), the hint and the card picture (`image_path`, already resolved) with the
     /// area on it; dragging over the picture draws a new area. Returns the height used.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         frame: &mut Frame,
         id: &str,
+        labels: AreaLabels,
         image_path: Option<&str>,
         card_name: &str,
         x: f32,
@@ -37,7 +53,7 @@ impl TitleAreaPicker {
     ) -> f32 {
         let palette = frame.palette();
         let mut row_y = y;
-        frame.text("Title area", x, row_y + 6.0, TextOptions::new().medium());
+        frame.text(labels.heading, x, row_y + 6.0, TextOptions::new().medium());
         if self.area.is_some() {
             let clear_id = format!("{id}:clear");
             let options = ButtonOptions::variant(ButtonVariant::Text).icon("clear").id(&clear_id);
@@ -51,10 +67,16 @@ impl TitleAreaPicker {
             format!(
                 "Only the boxed part is read, in the same place on every card. Drag again to redraw it. ({card_name})"
             )
+        } else if labels.required {
+            format!(
+                "Drag a box around {} on this card ({card_name}). It is read in the same place on every card.",
+                labels.subject
+            )
         } else {
             format!(
-                "Optional: drag a box around the title on this card ({card_name}). It is read in the same place on \
-                 every card; without a box the whole card is read."
+                "Optional: drag a box around {} on this card ({card_name}). It is read in the same place on \
+                 every card; without a box the whole card is read.",
+                labels.subject
             )
         };
         let hint_options = TextOptions::new().width(width).size(12.0).color(palette.on_surface_variant);

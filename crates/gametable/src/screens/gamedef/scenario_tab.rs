@@ -36,7 +36,7 @@ use crate::screens::gamedef::zones_tab::{
 };
 use crate::screens::token_choosers::{ChooserResponse, TokenChooser};
 use crate::table::board_layout::has_placed_boards;
-use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE};
+use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE, any_card_turned};
 use crate::table::card_render::{
     CARD_HEIGHT, CARD_WIDTH, CardDraw, PreviewFace, definition_faces, orientation_turns, shown_orientation,
 };
@@ -978,6 +978,7 @@ impl ScenarioTab {
         let display_backs = display_card_backs(&model.folder_path, &game.card_backs);
         let mut hovered = None;
         let mut clicked = None;
+        let has_turned_cards = any_card_turned(visible.iter().copied());
         frame.card_pool_grid(
             "scendeckpool",
             visible.len(),
@@ -987,6 +988,7 @@ impl ScenarioTab {
             y + height - row_y,
             12.0,
             1.0,
+            has_turned_cards,
             |frame, tile| {
                 let card = visible[tile.index];
                 let region = frame.ui.region(
@@ -1272,6 +1274,7 @@ impl ScenarioTab {
         let display_backs = display_card_backs(&model.folder_path, &game.card_backs);
         let mut hovered = None;
         let mut pressed = None;
+        let has_turned_cards = any_card_turned(visible.iter().copied());
         frame.card_pool_grid(
             "scenplacelib:grid",
             visible.len(),
@@ -1281,6 +1284,7 @@ impl ScenarioTab {
             y + height - row_y,
             12.0,
             1.0,
+            has_turned_cards,
             |frame, tile| {
                 let card = visible[tile.index];
                 let region = frame.ui.region(

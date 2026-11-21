@@ -11,17 +11,16 @@ use crate::data::title_suggestion::title_style::{
     LineSeparator, TitleStyle, detect_line_separator, pick_example_titles,
 };
 use crate::data::title_suggestion::{
-    CardToSuggest, ClaudeAccess, ImageEngine, SuggestionContext, SuggestionJob, TitleSource, is_untitled, suggest_title,
+    CardToSuggest, ClaudeAccess, ImageEngine, SuggestionContext, SuggestionJob, SuggestionTarget, TitleSource,
+    is_untitled, suggest_title,
 };
 use crate::screens::gamedef::EditorModel;
-use crate::screens::gamedef::common::display_card;
-use crate::screens::gamedef::title_area_picker::TitleAreaPicker;
-use crate::table::card_render::{CARD_HEIGHT, CardDraw};
+use crate::screens::gamedef::suggestion_review::{ReviewCards, ReviewRow, draw_review_rows};
+use crate::screens::gamedef::title_area_picker::{AreaLabels, TitleAreaPicker};
 use crate::ui::draw::TextOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
-use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::Weight;
-use crate::ui::widgets::{ButtonOptions, ButtonVariant, Choice, ToggleOptions};
+use crate::ui::widgets::Choice;
 
 /// Which cards a run covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,15 +66,6 @@ impl SourceChoice {
             _ => SourceChoice::FromId,
         }
     }
-}
-
-/// One suggestion in the review list.
-#[derive(Debug, Clone)]
-struct ReviewRow {
-    key: u64,
-    old_title: String,
-    new_title: String,
-    apply: bool,
 }
 
 enum Stage {
@@ -257,7 +247,16 @@ impl SuggestTitleFlow {
                 };
                 frame.text(&separator_note, x, row_y, note_options);
                 row_y += 18.0 + 16.0;
-                row_y += title_area.draw(frame, "suggesttitle:area", image_path.as_deref(), card_name, x, row_y, width);
+                row_y += title_area.draw(
+                    frame,
+                    "suggesttitle:area",
+                    AreaLabels::TITLE,
+                    image_path.as_deref(),
+                    card_name,
+                    x,
+                    row_y,
+                    width,
+                );
             }
             row_y - y
         });
@@ -281,6 +280,7 @@ impl SuggestTitleFlow {
         let cards = cards_in_scope(model, scope, self.current_card, &self.selected_cards);
         let context = SuggestionContext {
             game_name: model.game.name.clone(),
+            target: SuggestionTarget::Title,
             title_area: if source == SourceChoice::FromId { None } else { self.title_area.area },
             title_style: title_style_for(model, self.line_separator.unwrap_or_default()),
             claude: claude_api_key(frame).map(|api_key| ClaudeAccess {
@@ -321,7 +321,7 @@ impl SuggestTitleFlow {
                 let old_title = model.game.cards()[index].card_title.clone();
                 match outcome.suggestion {
                     Ok(Some(title)) if title != old_title => {
-                        rows.push(ReviewRow { key: outcome.key, old_title, new_title: title, apply: true })
+                        rows.push(ReviewRow { key: outcome.key, old_text: old_title, new_text: title, apply: true })
                     }
                     Ok(_) => nothing_found += 1,
                     Err(error) => {
@@ -392,92 +392,23 @@ impl SuggestTitleFlow {
             actions: &actions,
             ..DialogSpec::default()
         };
-        let palette = frame.palette();
-        let (_, screen_height) = frame.ui.screen_size();
         let display_backs =
             crate::screens::gamedef::common::display_card_backs(&model.folder_path, &model.game.card_backs);
-        let game = &model.game;
-        let folder_path = &model.folder_path;
-        let card_keys = &model.card_keys;
+        let review_cards = ReviewCards {
+            game: &model.game,
+            folder_path: &model.folder_path,
+            card_keys: &model.card_keys,
+            display_backs: &display_backs,
+        };
         let response = frame.dialog("suggestreview", &spec, |frame, x, y, width| {
-            let mut row_y = y;
-            let summary_options = TextOptions::new().width(width).size(12.0).color(palette.on_surface_variant);
-            frame.text(summary, x, row_y, summary_options);
-            row_y += frame.text_height(summary, width, 12.0, Weight::Regular) + 8.0;
-            let all_ticked = rows.iter().all(|row| row.apply);
-            let toggle_label = if all_ticked { "Select None" } else { "Select All" };
-            if frame.button(
-                toggle_label,
-                x - 12.0,
-                row_y,
-                None,
-                Some(32.0),
-                &ButtonOptions::variant(ButtonVariant::Text).id("suggestreview:all"),
-            ) {
-                for row in rows.iter_mut() {
-                    row.apply = !all_ticked;
-                }
-            }
-            row_y += 32.0 + 8.0;
-            let row_height = 64.0;
-            let thumbnail_height = 56.0;
-            let thumbnail_width = thumbnail_height * 0.716;
-            for row in rows.iter_mut() {
-                // Only rows on screen are drawn; long reviews stay quick.
-                if row_y + row_height >= 0.0 && row_y <= screen_height {
-                    row.apply = frame.checkbox(
-                        &format!("suggestreview:{}:apply", row.key),
-                        x,
-                        row_y + 19.0,
-                        row.apply,
-                        &ToggleOptions::default(),
-                    );
-                    if let Some(index) = card_keys.index_of(row.key) {
-                        let card = &game.cards()[index];
-                        let display = display_card(folder_path, card);
-                        let draw = CardDraw::new(
-                            Some(&display),
-                            true,
-                            x + 32.0 + thumbnail_width / 2.0,
-                            row_y + row_height / 2.0,
-                            &display_backs,
-                            game.scenario_card_back_id.as_deref(),
-                        )
-                        .scale(thumbnail_height / CARD_HEIGHT);
-                        frame.draw_card(&draw);
-                    }
-                    let text_x = x + 32.0 + thumbnail_width + 12.0;
-                    let column_width = (x + width - text_x - 8.0) / 2.0;
-                    let old_options = TextOptions::new()
-                        .width(column_width)
-                        .middle_of(row_height)
-                        .ellipsis()
-                        .color(palette.on_surface_variant);
-                    frame.text(&row.old_title, text_x, row_y, old_options);
-                    let field_options = TextFieldOptions {
-                        height: Some(44.0),
-                        label_background: Some(palette.surface_container_high),
-                        ..TextFieldOptions::label("New title")
-                    };
-                    frame.text_field(
-                        &format!("suggestreview:{}:title", row.key),
-                        text_x + column_width + 8.0,
-                        row_y + 10.0,
-                        column_width,
-                        &mut row.new_title,
-                        &field_options,
-                    );
-                }
-                row_y += row_height;
-            }
-            row_y - y
+            draw_review_rows(frame, "suggestreview", "New title", summary, rows, &review_cards, x, y, width)
         });
         match response {
             DialogResponse::Action(1) => {
                 let cards = model.game.cards_mut();
-                for row in rows.iter().filter(|row| row.apply && !row.new_title.trim().is_empty()) {
+                for row in rows.iter().filter(|row| row.apply && !row.new_text.trim().is_empty()) {
                     if let Some(index) = model.card_keys.index_of(row.key) {
-                        cards[index].card_title = row.new_title.trim().to_string();
+                        cards[index].card_title = row.new_text.trim().to_string();
                     }
                 }
                 frame.ui.toast(&format!("Updated {ticked} card title{}.", if ticked == 1 { "" } else { "s" }), None);

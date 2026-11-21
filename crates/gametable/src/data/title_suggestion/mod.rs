@@ -3,6 +3,7 @@
 //! Suggestions run on background threads; the editor polls [`SuggestionJob`] each frame.
 
 pub mod claude_vision;
+pub mod extra_data;
 pub mod from_id;
 pub mod local_ocr;
 pub mod title_style;
@@ -14,7 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use gametable_core::models::CardDefinition;
 
-use claude_vision::{ClaudeCardRequest, ClaudeModel, suggest_title_with_claude};
+use claude_vision::{
+    ClaudeCardRequest, ClaudeExtraFieldRequest, ClaudeModel, suggest_extra_value_with_claude, suggest_title_with_claude,
+};
 
 use crate::graphics::image_data::RgbaImage;
 use title_style::TitleStyle;
@@ -116,12 +119,24 @@ pub fn load_card_image(image_path: &str, title_area: Option<TitleArea>) -> Resul
     })
 }
 
+/// What a job reads from each card.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SuggestionTarget {
+    /// The card's title ("Suggest Title").
+    #[default]
+    Title,
+    /// One extra field's value ("Suggest Extra Data"); `example_values` come from other cards and
+    /// `custom_instructions` (the user's own, possibly empty) are added to Claude's prompt.
+    ExtraField { key: String, example_values: Vec<String>, custom_instructions: String },
+}
+
 /// Everything an engine needs besides the card.
 #[derive(Debug, Clone)]
 pub struct SuggestionContext {
     pub game_name: String,
+    pub target: SuggestionTarget,
     pub claude: Option<ClaudeAccess>,
-    /// Only this part of each card's image is read, when set.
+    /// Only this part of each card's image is read, when set (the title's, or the field's, area).
     pub title_area: Option<TitleArea>,
     /// How the game writes titles (name/subtitle separator, examples for Claude).
     pub title_style: TitleStyle,
@@ -129,7 +144,59 @@ pub struct SuggestionContext {
     pub ocr_models_folder: std::path::PathBuf,
 }
 
-/// One card's suggestion, run on the calling thread.
+/// One card's suggestion for the context's target, run on the calling thread.
+pub fn suggest_card_text(
+    item: &CardToSuggest,
+    source: TitleSource,
+    context: &SuggestionContext,
+) -> Result<Option<String>, String> {
+    match &context.target {
+        SuggestionTarget::Title => suggest_title(item, source, context),
+        SuggestionTarget::ExtraField { key, example_values, custom_instructions } => {
+            suggest_extra_field_value(item, source, context, key, example_values, custom_instructions)
+        }
+    }
+}
+
+/// One card's extra field value, read from its picture (an ID holds no extra data).
+fn suggest_extra_field_value(
+    item: &CardToSuggest,
+    source: TitleSource,
+    context: &SuggestionContext,
+    field_key: &str,
+    example_values: &[String],
+    custom_instructions: &str,
+) -> Result<Option<String>, String> {
+    let TitleSource::FromImage(engine) = source else { return Ok(None) };
+    let Some(image_path) = &item.image_path else { return Ok(None) };
+    match engine {
+        ImageEngine::Claude => {
+            let Some(access) = &context.claude else {
+                return Err("Add a Claude API key in Settings first.".to_string());
+            };
+            suggest_extra_value_with_claude(&ClaudeExtraFieldRequest {
+                api_key: access.api_key.clone(),
+                model: access.model,
+                instructions: extra_data::extra_field_instructions(
+                    &context.game_name,
+                    &item.card,
+                    field_key,
+                    context.title_area.is_some(),
+                    example_values,
+                    custom_instructions,
+                ),
+                image_path: image_path.clone(),
+                field_area: context.title_area,
+            })
+        }
+        ImageEngine::LocalOcr => {
+            let lines = local_ocr::recognized_lines(image_path, context.title_area, &context.ocr_models_folder)?;
+            Ok(extra_data::join_value_lines(lines))
+        }
+    }
+}
+
+/// One card's title suggestion, run on the calling thread.
 pub fn suggest_title(
     item: &CardToSuggest,
     source: TitleSource,
@@ -233,7 +300,7 @@ fn run_worker(
 ) {
     while !cancelled.load(Ordering::Relaxed) {
         let Some(item) = queue.lock().ok().and_then(|mut queue| queue.pop_front()) else { return };
-        let suggestion = suggest_title(&item, source, context);
+        let suggestion = suggest_card_text(&item, source, context);
         if sender.send(SuggestionOutcome { key: item.key, suggestion }).is_err() {
             return;
         }
@@ -270,6 +337,7 @@ mod tests {
             .collect();
         let context = SuggestionContext {
             game_name: "Test".into(),
+            target: SuggestionTarget::Title,
             claude: None,
             title_area: None,
             title_style: TitleStyle::default(),
@@ -305,6 +373,7 @@ mod tests {
         let item = CardToSuggest { key: 1, card: CardDefinition::new("a", "a"), image_path: Some("a.png".into()) };
         let context = SuggestionContext {
             game_name: "Test".into(),
+            target: SuggestionTarget::Title,
             claude: None,
             title_area: None,
             title_style: TitleStyle::default(),

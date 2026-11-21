@@ -174,8 +174,27 @@ impl RgbaImage {
             return self;
         }
         let scale = max_dimension as f64 / larger as f64;
-        let target_width = ((source_width as f64 * scale + 0.5).floor() as usize).max(1);
-        let target_height = ((source_height as f64 * scale + 0.5).floor() as usize).max(1);
+        let target_width = ((source_width as f64 * scale + 0.5).floor() as u32).max(1);
+        let target_height = ((source_height as f64 * scale + 0.5).floor() as u32).max(1);
+        self.area_averaged_to_size(target_width, target_height)
+    }
+
+    /// Area-average downscale so the height is at most `max_height`, keeping the aspect ratio;
+    /// unchanged when it is already short enough.
+    pub fn downscaled_to_max_height(self, max_height: u32) -> RgbaImage {
+        if self.height <= max_height {
+            return self;
+        }
+        let scale = max_height as f64 / self.height as f64;
+        let target_width = ((self.width as f64 * scale + 0.5).floor() as u32).max(1);
+        self.area_averaged_to_size(target_width, max_height.max(1))
+    }
+
+    /// Each target pixel is the average of the source pixels in its box. Only for shrinking:
+    /// the target must be no larger than the source on either side.
+    fn area_averaged_to_size(&self, target_width: u32, target_height: u32) -> RgbaImage {
+        let (source_width, source_height) = (self.width as usize, self.height as usize);
+        let (target_width, target_height) = (target_width as usize, target_height as usize);
         let step_x = source_width as f64 / target_width as f64;
         let step_y = source_height as f64 / target_height as f64;
         let mut pixels = vec![0u8; target_width * target_height * 4];
@@ -242,6 +261,17 @@ mod tests {
         assert_eq!(odd.pixels[0], 0);
         assert_eq!(odd.pixels[4], 15); // (10 + 20) / 2
         assert!(source.clone().downscaled_to_fit(1024) == source);
+    }
+
+    #[test]
+    fn downscale_to_max_height_keeps_the_aspect_ratio() {
+        let tall = image(750, 1050, |_, _| [9, 9, 9, 255]).downscaled_to_max_height(1024);
+        // 750 × 1024 / 1050 = 731.4 -> 731.
+        assert_eq!((tall.width, tall.height), (731, 1024));
+        let wide = image(3000, 2000, |_, _| [9, 9, 9, 255]).downscaled_to_max_height(1024);
+        assert_eq!((wide.width, wide.height), (1536, 1024));
+        let short = image(800, 600, |_, _| [9, 9, 9, 255]);
+        assert!(short.clone().downscaled_to_max_height(1024) == short);
     }
 
     #[test]

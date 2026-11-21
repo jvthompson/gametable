@@ -15,7 +15,7 @@ use crate::graphics::tessellation::DrawMode;
 use crate::net::server_client::{SharedServer, response_ok};
 use crate::net::server_models::{ServerUser, TradeOffer, local_time_label, quantities};
 use crate::screens::server::collection::draw_hovered_card_preview;
-use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE};
+use crate::table::card_pool_grid::{NAME_LINES, TILE_CARD_HEIGHT, TILE_CARD_WIDTH, TILE_SCALE, any_card_turned};
 use crate::table::card_render::{CardDraw, orientation_turns};
 use crate::ui::card_filter_bar::CardFilterState;
 use crate::ui::components::{Flow, TAB_BAR_HEIGHT};
@@ -295,39 +295,51 @@ impl TradeScreen {
         let mut hovered = None;
         let mut pressed = None;
         let grid_id = format!("tr:grid:{scope}");
-        frame.card_pool_grid(&grid_id, visible.len(), x, row_y, width, y + height - row_y, 0.0, 1.0, |frame, tile| {
-            let definition = visible[tile.index];
-            let name_height = frame.card_pool_name_height();
-            let count = owned.get(&definition.id).copied().unwrap_or(0);
-            let region_options = if theirs { RegionOptions::hand() } else { RegionOptions::default() };
-            let region = frame.ui.region(
-                &format!("tr:card:{scope}:{}", definition.id),
-                tile.center_x - TILE_CARD_WIDTH / 2.0,
-                tile.y,
-                TILE_CARD_WIDTH,
-                TILE_CARD_HEIGHT + 6.0 + name_height,
-                region_options,
-            );
-            let center_y = tile.y + TILE_CARD_HEIGHT / 2.0;
-            let draw = CardDraw::new(Some(definition), true, tile.center_x, center_y, &game.card_backs, None)
-                .scale(TILE_SCALE)
-                .angle(orientation_turns(definition.orientation) * 2.0 * PI);
-            frame.draw_card(&draw);
-            let badge_x = tile.center_x + TILE_CARD_WIDTH / 2.0 + 6.0 - 11.0;
-            frame.circle(DrawMode::Fill, badge_x, tile.y - 6.0 + 11.0, 11.0, Color::rgba(0.0, 0.0, 0.0, 0.87));
-            let label = if definition.is_free_card { "∞".to_string() } else { format!("×{count}") };
-            let options =
-                TextOptions::new().size(11.0).bold().width(22.0).middle_of(22.0).centered().color(fixed::WHITE);
-            frame.text(&label, tile.center_x + TILE_CARD_WIDTH / 2.0 - 16.0, tile.y - 6.0, options);
-            let options = TextOptions::new().size(11.0).width(tile.width).centered().max_lines(NAME_LINES as usize);
-            frame.text(&definition.card_title, tile.x, tile.y + TILE_CARD_HEIGHT + 6.0, options);
-            if region.hovered {
-                hovered = Some(definition.id.clone());
-            }
-            if theirs && region.pressed {
-                pressed = Some((definition.id.clone(), tile.center_x, center_y));
-            }
-        });
+        let has_turned_cards = any_card_turned(visible.iter().copied());
+        frame.card_pool_grid(
+            &grid_id,
+            visible.len(),
+            x,
+            row_y,
+            width,
+            y + height - row_y,
+            0.0,
+            1.0,
+            has_turned_cards,
+            |frame, tile| {
+                let definition = visible[tile.index];
+                let name_height = frame.card_pool_name_height();
+                let count = owned.get(&definition.id).copied().unwrap_or(0);
+                let region_options = if theirs { RegionOptions::hand() } else { RegionOptions::default() };
+                let region = frame.ui.region(
+                    &format!("tr:card:{scope}:{}", definition.id),
+                    tile.center_x - TILE_CARD_WIDTH / 2.0,
+                    tile.y,
+                    TILE_CARD_WIDTH,
+                    TILE_CARD_HEIGHT + 6.0 + name_height,
+                    region_options,
+                );
+                let center_y = tile.y + TILE_CARD_HEIGHT / 2.0;
+                let draw = CardDraw::new(Some(definition), true, tile.center_x, center_y, &game.card_backs, None)
+                    .scale(TILE_SCALE)
+                    .angle(orientation_turns(definition.orientation) * 2.0 * PI);
+                frame.draw_card(&draw);
+                let badge_x = tile.center_x + TILE_CARD_WIDTH / 2.0 + 6.0 - 11.0;
+                frame.circle(DrawMode::Fill, badge_x, tile.y - 6.0 + 11.0, 11.0, Color::rgba(0.0, 0.0, 0.0, 0.87));
+                let label = if definition.is_free_card { "∞".to_string() } else { format!("×{count}") };
+                let options =
+                    TextOptions::new().size(11.0).bold().width(22.0).middle_of(22.0).centered().color(fixed::WHITE);
+                frame.text(&label, tile.center_x + TILE_CARD_WIDTH / 2.0 - 16.0, tile.y - 6.0, options);
+                let options = TextOptions::new().size(11.0).width(tile.width).centered().max_lines(NAME_LINES as usize);
+                frame.text(&definition.card_title, tile.x, tile.y + TILE_CARD_HEIGHT + 6.0, options);
+                if region.hovered {
+                    hovered = Some(definition.id.clone());
+                }
+                if theirs && region.pressed {
+                    pressed = Some((definition.id.clone(), tile.center_x, center_y));
+                }
+            },
+        );
         self.hovered_id = hovered;
         if let Some((card_id, center_x, center_y)) = pressed
             && self.pressing.is_none()

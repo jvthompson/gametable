@@ -5,18 +5,21 @@
 //! `gamedef.json`.
 //!
 //! The editor's game is loaded WITHOUT resolving image paths, so saving writes the bare file names
-//! back unchanged. Like the original there is no unsaved-changes prompt, and the game's id stays
-//! whatever its folder or file gave it.
+//! back unchanged. The game's id stays whatever its folder or file gave it. Unlike the original,
+//! leaving (Back, quitting, New, Open) with unsaved changes asks first.
 
 pub mod board_zone_placement;
 pub mod card_view_tab;
 pub mod common;
 pub mod dialogs;
+pub mod extra_data_suggestion_dialogs;
 pub mod game_board_tab;
 pub mod list_picker_dialog;
 pub mod scenario_tab;
 pub mod sets_tab;
 pub mod settings_tab;
+pub mod shrink_card_art_dialog;
+pub mod suggestion_review;
 pub mod table_board_placement;
 pub mod title_area_picker;
 pub mod title_suggestion_dialogs;
@@ -174,6 +177,15 @@ fn show_open_picker(frame: &mut Frame, picker: &mut Option<FilePicker>) -> Optio
 
 const TAB_LABELS: [&str; 5] = ["General", "Game Boards", "Zones", "Sets", "Cards"];
 
+/// What the user was doing when the unsaved-changes prompt appeared; carried out on "Discard".
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LeaveAction {
+    Back,
+    Quit,
+    NewGame,
+    OpenExisting,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tool {
     DuplicateIds,
@@ -198,6 +210,10 @@ pub struct GameDefinitionEditor {
     tool_dialog: Option<ToolDialog>,
     /// "Cards Without a Set" warning text while it is shown.
     save_warning: Option<String>,
+    /// The game as it was last loaded or saved, to tell whether there are unsaved changes.
+    saved_game: GameDefinition,
+    /// Set while the "Unsaved Changes" prompt is shown.
+    pending_leave: Option<LeaveAction>,
 }
 
 impl GameDefinitionEditor {
@@ -209,6 +225,7 @@ impl GameDefinitionEditor {
         GameDefinitionEditor {
             rulebook: RulebookViewer::new(&game),
             cards_tab: CardViewTab::new(&game),
+            saved_game: game.clone(),
             model: EditorModel { folder_path, game, card_keys },
             tab: 0,
             settings_tab: SettingsTab::default(),
@@ -222,13 +239,60 @@ impl GameDefinitionEditor {
             tools_menu: None,
             tool_dialog: None,
             save_warning: None,
+            pending_leave: None,
+        }
+    }
+
+    /// Whether the game differs from what was last loaded or saved.
+    fn has_unsaved_changes(&self) -> bool {
+        self.model.game != self.saved_game
+    }
+
+    /// Carries out `action` now, or asks first when there are unsaved changes.
+    fn leave_or_confirm(&mut self, frame: &mut Frame, action: LeaveAction) {
+        if self.has_unsaved_changes() {
+            self.pending_leave = Some(action);
+        } else {
+            self.carry_out_leave(frame, action);
+        }
+    }
+
+    fn carry_out_leave(&mut self, frame: &mut Frame, action: LeaveAction) {
+        match action {
+            LeaveAction::Back => frame.commands.push(ScreenCommand::Pop),
+            LeaveAction::Quit => frame.commands.push(ScreenCommand::Quit),
+            LeaveAction::NewGame => self.new_game = Some(NewGameDialog::new(frame)),
+            LeaveAction::OpenExisting => self.open_picker = Some(open_existing_picker(frame)),
+        }
+    }
+
+    /// The "Unsaved Changes" prompt, while one is pending.
+    fn draw_unsaved_changes_prompt(&mut self, frame: &mut Frame) {
+        let Some(action) = self.pending_leave else { return };
+        let name = if self.model.game.name.trim().is_empty() { "this game" } else { self.model.game.name.as_str() };
+        let message = format!("You have unsaved changes to {name}. If you leave now, they will be lost.");
+        let actions = [DialogAction::text("Cancel"), DialogAction::new("Discard Changes", ButtonVariant::Danger)];
+        let spec = DialogSpec {
+            title: Some("Unsaved Changes"),
+            message: Some(&message),
+            width: 440.0,
+            actions: &actions,
+            ..DialogSpec::default()
+        };
+        match frame.dialog("unsavedchanges", &spec, |_, _, _, _| 0.0) {
+            DialogResponse::Open | DialogResponse::Enter => {}
+            DialogResponse::Action(1) => {
+                self.pending_leave = None;
+                self.carry_out_leave(frame, action);
+            }
+            _ => self.pending_leave = None,
         }
     }
 
     /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,suggest][,placement|deck]
     /// [,table]`): opens a tab (`boards`, or the old `playmats`, for Game Boards); `select` selects
     /// the first card on the Cards tab and the first board on the Game Boards tab, `suggest` opens
-    /// its Suggest Title dialog, `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
+    /// its Suggest Title dialog, `shrinkart` opens Shrink Card Art, `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
     /// switches the Game Boards tab to its Table Preview.
     pub fn apply_development_setup(&mut self, steps: &str) {
         for step in steps.split(',').map(str::trim) {
@@ -242,6 +306,7 @@ impl GameDefinitionEditor {
                     self.game_board_tab.select_first(&self.model);
                 }
                 "suggest" => self.cards_tab.open_suggest_title_for_development(),
+                "shrinkart" => self.cards_tab.open_shrink_card_art_for_development(&self.model),
                 "table" => self.game_board_tab.show_table_preview_for_development(),
                 "placement" | "deck" => {
                     self.scenario_tab.get_or_insert_with(ScenarioTab::new).set_view_for_development(step)
@@ -300,7 +365,10 @@ impl GameDefinitionEditor {
         let result = write_game_definition(&self.model.folder_path, &self.model.game);
         clear_existence_cache();
         match result {
-            Ok(()) => frame.ui.toast(&format!("Saved to {}", self.model.folder_path), None),
+            Ok(()) => {
+                self.saved_game = self.model.game.clone();
+                frame.ui.toast(&format!("Saved to {}", self.model.folder_path), None)
+            }
             Err(error) => frame.ui.toast(&format!("Could not save: {error}"), None),
         }
     }
@@ -359,12 +427,26 @@ impl GameDefinitionEditor {
                 _ => self.save_warning = None,
             }
         }
+        self.draw_unsaved_changes_prompt(frame);
     }
 }
 
 impl Screen for GameDefinitionEditor {
     fn title(&self) -> String {
         "Game Definition Editor".to_string()
+    }
+
+    fn on_back(&mut self, frame: &mut Frame) {
+        self.leave_or_confirm(frame, LeaveAction::Back);
+    }
+
+    /// Closing the app with unsaved changes asks first (and cancels this quit).
+    fn quit(&mut self, _frame: &mut Frame) -> bool {
+        if self.has_unsaved_changes() {
+            self.pending_leave = Some(LeaveAction::Quit);
+            return true;
+        }
+        false
     }
 
     fn update(&mut self, frame: &mut Frame, _dt: f32) {
@@ -443,8 +525,8 @@ impl Screen for GameDefinitionEditor {
             }
         }
         match clicked {
-            Some(0) => self.new_game = Some(NewGameDialog::new(frame)),
-            Some(1) => self.open_picker = Some(open_existing_picker(frame)),
+            Some(0) => self.leave_or_confirm(frame, LeaveAction::NewGame),
+            Some(1) => self.leave_or_confirm(frame, LeaveAction::OpenExisting),
             Some(2) => self.toggle_rulebook(frame),
             Some(3) => {
                 let (mouse_x, mouse_y) = frame.ui.mouse();

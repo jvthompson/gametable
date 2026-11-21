@@ -406,6 +406,24 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
         with the separator first.
     - Tests: `TitleArea` maths, line joining, the Claude prompt, and a dialog harness test that draws, keeps and
       clears a box. The ignored `real_card_title` takes `GAMETABLE_OCR_AREA=x,y,width,height`.
+- [x] Card View **Suggest Extra Data** (`screens/gamedef/extra_data_suggestion_dialogs.rs`,
+  `data/title_suggestion/extra_data.rs`). A "Suggest Extra Data..." button on the bulk form (two or more cards
+  selected) reads one extra field from each selected card's picture. The field is picked from the game's existing
+  fields (`extra_field_names`) or typed in through "Create new extra data field..."; a typed key that matches an
+  existing one ignoring case takes its spelling. It is read with local OCR (every line inside the box, top to bottom;
+  numbers and symbols kept, no title-casing) or Claude (the field name plus up to 8 other cards' values as examples;
+  answer `{value, found}`). A field area is drawn on the first selected card: required for OCR, optional for Claude.
+  It runs on the same `SuggestionJob` (`SuggestionTarget::ExtraField`) and ends in the shared review list
+  (`screens/gamedef/suggestion_review.rs`, also used by Suggest Title). Apply updates an existing key in place
+  (case-insensitive) or adds it, storing the value as a string like the Extra Data tab. The reader is remembered in
+  `suggest_extra_data_source`.
+  - With Claude, an optional "Instructions for Claude" box adds the user's own guidance to the prompt ("Additional
+    instructions for this field: ..."). They are remembered per game and field
+    (`suggest_extra_data_instructions_<game id>_<field key, lower case>`), saved when a run starts, and loaded
+    when that field is chosen.
+- [x] **Unsaved-changes prompt in the game definition editor** (`screens/gamedef/mod.rs`). The editor keeps the game
+  as last loaded or saved (`saved_game`). Back, closing the app, New and Open ask "Unsaved Changes" (Cancel /
+  Discard Changes) when the game differs from it. The original had no prompt.
 - [x] **UI scale and Text size sliders** (Settings → Display). UI scale is a slider from 50% to 200% in 5% steps
   (the original's dropdown had fixed choices), applied when the slider is released. Text size (`text_scale`,
   75%–150%) enlarges interface text only: `FontLibrary::set_text_scale` multiplies the size of fonts whose
@@ -419,6 +437,11 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   (`deck_editor_card_zoom`, `card_view_card_zoom`), saved when the slider is released. `card_pool_grid` takes the
   zoom and hands each tile its card size, card scale and name position; the other grids (scenario, collection,
   trade, multi-select preview) pass 1.
+- [x] **Turned cards don't overlap in card grids**: a left/right card is as wide as a portrait card is tall, so
+  `card_pool_grid` takes `has_turned_cards` (from `any_card_turned`) and, when set, uses few enough columns that
+  neighbouring turned cards keep at least 5 px apart (`SMALLEST_SPACE_BETWEEN_CARDS`). All-portrait grids are
+  unchanged. Every grid caller (deck editor, Cards tab and its multi-select preview, scenario deck pool and placement
+  library, collection, trade) passes it.
 - [x] **Zones on playmats** (`screens/gamedef/playmat_zone_placement.rs`, `table/playmat_zones.rs`). In the
   Playmats tab, a "Zones on This Mat" row of chips places a zone in the middle of the selected mat. In the table
   preview it can then be dragged around, dragged off the mat, or taken off with its × button. Placed zones are
@@ -581,6 +604,21 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   needs the redeploy to keep `zonePlacements`). Tests: `scenario_zones_set_on_the_table_round_trip`,
   `a_scenario_zone_is_added_from_the_right_click_menu_and_dragged_anywhere`,
   `a_scenario_zone_set_on_the_table_sits_there_and_cannot_be_moved`.
+- [x] Card View **Shrink Card Art...** (2026-11-21; `screens/gamedef/shrink_card_art_dialog.rs`). A button beside
+  Add Card rewrites every card's art (and each existing unique `_BACK` image) so none is taller than 1024 px. Each
+  image's width follows from its own aspect ratio (area-average downscale, `RgbaImage::downscaled_to_max_height`);
+  images already short enough are untouched. PNG and JPEG keep their format (JPEG re-encoded at quality 90);
+  other formats (WebP, GIF, BMP) are skipped and counted. A confirmation first, then worker threads with a
+  progress dialog and Cancel, then a summary; files are written to a temporary file and renamed over the original
+  (`image_utils::shrink_image_to_max_height`). Cached textures reload as each file changes. The game definition
+  itself doesn't change. Dev hook: `GAMETABLE_GAMEDEF_TAB=cards,shrinkart`. Tests:
+  `downscale_to_max_height_keeps_the_aspect_ratio`, `tall_png_and_jpeg_shrink_to_the_maximum_height`,
+  `art_paths_cover_fronts_and_existing_unique_backs_once`, `summary_counts_each_kind_of_result`.
+- [x] Card View preview shows the selected card's **image resolution** (2026-11-21), e.g. "750 × 1050 px" under the
+  image, or "Front · …" / "Back · …" when the back is shown too. Sizes come from the file headers without decoding
+  (`data/image_dimensions.rs`: PNG, JPEG incl. progressive and large EXIF, GIF, BMP, WebP), cached per path and
+  re-read when the file's modified time changes, so they update after Shrink Card Art. Tests in that module;
+  checked by screenshot on Lorcana and Middle Earth against the real files.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -670,6 +708,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   player names are unique; `adminFileDelete` refuses a non-empty folder ("Delete the files inside it first."); a
   waiting room closes when its owner disconnects. The Go server hashes its library before listening (several seconds
   for a 200 MB game on first start).
+- The original game definition editor had no unsaved-changes prompt; GameTable asks before Back, quitting, New
+  or Open would drop unsaved edits (a deliberate change requested by the user).
 
 ## Build and tooling notes
 
@@ -926,3 +966,14 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   The live server was redeployed (dry run first: all six games loaded, no errors; backup
   `~/backups/20261121-042846`), so server games get `requestSetMovedBoard` with `carried` and keep
   `zonePlacements`.
+- 2026-11-20: Card grids space their columns for turned (left/right) cards so they no longer overlap: at least 5 px
+  between neighbouring card images when any card in the grid is turned (`table/card_pool_grid.rs::grid_columns`).
+- 2026-11-20: **Suggest Extra Data** on the Card View bulk form and an **unsaved-changes prompt** in the game
+  definition editor (see "Beyond the port"). Fixed `App::handle_event`: a native window close (`Event::Quit`, e.g.
+  Alt+F4 with the native frame) was ignored unless a screen cancelled it, and then quit anyway. Not yet tried in
+  the running app.
+- 2026-11-20: Suggest Extra Data gets an optional "Instructions for Claude" box, remembered per game and field.
+- 2026-11-21: **Shrink Card Art...** on the Card View (see "Beyond the port"). Button and confirmation checked by
+  screenshot on Lorcana; the shrinking itself is covered by unit tests but not yet run from the app on a real game
+  (the real library is read-only).
+- 2026-11-21: Card View preview shows the card image's resolution (see "Beyond the port").

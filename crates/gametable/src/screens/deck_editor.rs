@@ -17,7 +17,7 @@ use crate::graphics::tessellation::DrawMode;
 use crate::screens::deck_library_dialog::{DeckLibraryDialog, LoadDeckResponse, SaveDeckDialog, SaveDeckResponse};
 use crate::screens::game_picker::GamePicker;
 use crate::screens::rulebook_viewer::RulebookViewer;
-use crate::table::card_pool_grid::CardZoom;
+use crate::table::card_pool_grid::{CardZoom, any_card_turned};
 use crate::table::card_render::{CardDraw, definition_faces, orientation_turns};
 use crate::ui::card_filter_bar::CardFilterState;
 use crate::ui::components::{EDITOR_TOOLBAR_HEIGHT, ToolbarAction};
@@ -384,60 +384,72 @@ impl DeckEditor {
         let mut removed = None;
         let builder = &self.builder;
         let mut hovered = None;
-        frame.card_pool_grid("de:pool", visible.len(), x, grid_y, width, grid_height, 12.0, zoom, |frame, tile| {
-            let Some(definition) = game.card_by_id(&visible[tile.index]) else { return };
-            let region = frame.ui.region(
-                &format!("de:card:{}", definition.id),
-                tile.center_x - tile.card_width / 2.0,
-                tile.y,
-                tile.card_width,
-                tile.card_height + 6.0 + tile.name_height,
-                RegionOptions::hand(),
-            );
-            // Collection mode: a green badge counts the owned copies not yet in the deck, and the
-            // card dims once they're all used.
-            let limit = builder.owned_limit(&definition.id);
-            let unused = limit.map(|limit| (limit - builder.copies_in_deck(&definition.id)).max(0));
-            let draw =
-                CardDraw::new(Some(definition), true, tile.center_x, tile.card_center_y(), &game.card_backs, None)
-                    .scale(tile.card_scale)
-                    .alpha(if unused == Some(0) { 0.35 } else { 1.0 })
-                    .angle(orientation_turns(definition.orientation) * 2.0 * PI);
-            frame.draw_card(&draw);
-            let in_deck = builder.active().quantity.get(&definition.id).copied();
-            let count = in_deck.or(builder.owned_quantities.as_ref().map(|_| 0));
-            if let Some(count) = count {
-                let (badge_x, badge_y) = (tile.center_x + tile.card_width / 2.0 + 6.0 - 11.0, tile.y - 6.0 + 11.0);
-                DeckEditor::badge(
-                    frame,
-                    badge_x,
-                    badge_y,
-                    Color::rgba(0.0, 0.0, 0.0, 0.87),
-                    &count.to_string(),
-                    fixed::WHITE,
+        let has_turned_cards = any_card_turned(visible.iter().filter_map(|id| game.card_by_id(id)));
+        frame.card_pool_grid(
+            "de:pool",
+            visible.len(),
+            x,
+            grid_y,
+            width,
+            grid_height,
+            12.0,
+            zoom,
+            has_turned_cards,
+            |frame, tile| {
+                let Some(definition) = game.card_by_id(&visible[tile.index]) else { return };
+                let region = frame.ui.region(
+                    &format!("de:card:{}", definition.id),
+                    tile.center_x - tile.card_width / 2.0,
+                    tile.y,
+                    tile.card_width,
+                    tile.card_height + 6.0 + tile.name_height,
+                    RegionOptions::hand(),
                 );
-            }
-            if let Some(unused) = unused {
-                let (badge_x, badge_y) = (tile.center_x - tile.card_width / 2.0 - 6.0 + 11.0, tile.y - 6.0 + 11.0);
-                DeckEditor::badge(frame, badge_x, badge_y, NEON_CYAN, &unused.to_string(), fixed::BLACK);
-            }
-            let label = match limit {
-                Some(limit) => {
-                    format!("{} ({}/{limit})", definition.card_title, builder.copies_in_deck(&definition.id))
+                // Collection mode: a green badge counts the owned copies not yet in the deck, and the
+                // card dims once they're all used.
+                let limit = builder.owned_limit(&definition.id);
+                let unused = limit.map(|limit| (limit - builder.copies_in_deck(&definition.id)).max(0));
+                let draw =
+                    CardDraw::new(Some(definition), true, tile.center_x, tile.card_center_y(), &game.card_backs, None)
+                        .scale(tile.card_scale)
+                        .alpha(if unused == Some(0) { 0.35 } else { 1.0 })
+                        .angle(orientation_turns(definition.orientation) * 2.0 * PI);
+                frame.draw_card(&draw);
+                let in_deck = builder.active().quantity.get(&definition.id).copied();
+                let count = in_deck.or(builder.owned_quantities.as_ref().map(|_| 0));
+                if let Some(count) = count {
+                    let (badge_x, badge_y) = (tile.center_x + tile.card_width / 2.0 + 6.0 - 11.0, tile.y - 6.0 + 11.0);
+                    DeckEditor::badge(
+                        frame,
+                        badge_x,
+                        badge_y,
+                        Color::rgba(0.0, 0.0, 0.0, 0.87),
+                        &count.to_string(),
+                        fixed::WHITE,
+                    );
                 }
-                None => definition.card_title.clone(),
-            };
-            frame.text(&label, tile.x, tile.name_y, tile.name_options());
-            if region.hovered {
-                hovered = Some(definition.id.clone());
-            }
-            if region.clicked {
-                added = Some(definition.id.clone());
-            }
-            if region.right_clicked {
-                removed = Some(definition.id.clone());
-            }
-        });
+                if let Some(unused) = unused {
+                    let (badge_x, badge_y) = (tile.center_x - tile.card_width / 2.0 - 6.0 + 11.0, tile.y - 6.0 + 11.0);
+                    DeckEditor::badge(frame, badge_x, badge_y, NEON_CYAN, &unused.to_string(), fixed::BLACK);
+                }
+                let label = match limit {
+                    Some(limit) => {
+                        format!("{} ({}/{limit})", definition.card_title, builder.copies_in_deck(&definition.id))
+                    }
+                    None => definition.card_title.clone(),
+                };
+                frame.text(&label, tile.x, tile.name_y, tile.name_options());
+                if region.hovered {
+                    hovered = Some(definition.id.clone());
+                }
+                if region.clicked {
+                    added = Some(definition.id.clone());
+                }
+                if region.right_clicked {
+                    removed = Some(definition.id.clone());
+                }
+            },
+        );
         if hovered.is_some() {
             self.hovered_id = hovered;
         }

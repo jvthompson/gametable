@@ -5,9 +5,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::f32::consts::PI;
+use std::path::Path;
+use std::time::SystemTime;
 
 use gametable_core::card_filters::CardSortOrder;
-use gametable_core::json::{JsonObject, JsonValue, encode_compact};
+use gametable_core::json::JsonObject;
 use gametable_core::models::{
     CardBackDefinition, CardDefinition, CardOrientation, GameDefinition, UNIQUE_CARD_BACK_ID,
 };
@@ -16,15 +18,19 @@ use gametable_core::uuid::new_v4_uuid;
 
 use crate::app::Frame;
 use crate::data::file_system::join_path;
+use crate::data::image_dimensions::image_dimensions;
 use crate::data::image_resolver::resolve_card_back_image_path;
 use crate::data::settings::keys;
+use crate::data::title_suggestion::extra_data::extra_value_text;
 use crate::graphics::draw_list::Color;
 use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::{
     FileImport, GAP, ImportResponse, display_card, display_card_backs, orientation_choices,
 };
+use crate::screens::gamedef::extra_data_suggestion_dialogs::SuggestExtraDataFlow;
+use crate::screens::gamedef::shrink_card_art_dialog::ShrinkCardArtFlow;
 use crate::screens::gamedef::title_suggestion_dialogs::SuggestTitleFlow;
-use crate::table::card_pool_grid::{CardZoom, NAME_LINES, TILE_CARD_HEIGHT, TILE_SCALE};
+use crate::table::card_pool_grid::{CardZoom, NAME_LINES, TILE_CARD_HEIGHT, TILE_SCALE, any_card_turned};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw, orientation_turns};
 use crate::ui::card_filter_bar::{CardFilterState, LeadingButton};
 use crate::ui::components::{CHIP_HEIGHT, ChipOptions, Flow, TAB_BAR_HEIGHT};
@@ -53,23 +59,42 @@ struct ExtraRows {
     source: Option<JsonObject>,
 }
 
-/// A value as Lua's `tostring` shows it.
-fn value_text(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(text) => text.clone(),
-        JsonValue::Number(number) if number.fract() == 0.0 && number.abs() < 1e15 => format!("{}", *number as i64),
-        JsonValue::Number(number) => number.to_string(),
-        JsonValue::Bool(flag) => flag.to_string(),
-        other => encode_compact(other).unwrap_or_default(),
-    }
-}
-
 /// `turnsOf(orientation)`.
 fn quarter_turns_of(orientation: CardOrientation) -> i32 {
     match orientation {
         CardOrientation::Right => 1,
         CardOrientation::Left => -1,
         CardOrientation::Portrait => 0,
+    }
+}
+
+/// Image file sizes for the preview's resolution labels, re-read when a file's modified time
+/// changes (after Shrink Card Art, say).
+#[derive(Debug, Default)]
+struct ImageSizeCache {
+    sizes_by_path: HashMap<String, CachedImageSize>,
+}
+
+/// A file's modified time when it was read, and the (width, height) found then.
+type CachedImageSize = (Option<SystemTime>, Option<(u32, u32)>);
+
+impl ImageSizeCache {
+    fn size_of(&mut self, path: &str) -> Option<(u32, u32)> {
+        let modified = std::fs::metadata(path).and_then(|metadata| metadata.modified()).ok();
+        if let Some((cached_modified, cached_size)) = self.sizes_by_path.get(path)
+            && *cached_modified == modified
+        {
+            return *cached_size;
+        }
+        let size = modified.and_then(|_| image_dimensions(Path::new(path)));
+        self.sizes_by_path.insert(path.to_string(), (modified, size));
+        size
+    }
+
+    /// "750 × 1050 px", or `None` without a readable image.
+    fn resolution_text(&mut self, path: Option<&str>) -> Option<String> {
+        let (width, height) = self.size_of(path?)?;
+        Some(format!("{width} × {height} px"))
     }
 }
 
@@ -93,12 +118,18 @@ pub struct CardViewTab {
     confirm_delete: Option<u64>,
     /// The open "Suggest Title" dialogs.
     suggest_title: Option<SuggestTitleFlow>,
+    /// The open "Suggest Extra Data" dialogs.
+    suggest_extra_data: Option<SuggestExtraDataFlow>,
+    /// The open "Shrink Card Art" dialogs.
+    shrink_card_art: Option<ShrinkCardArtFlow>,
     /// Development hook: open Suggest Title on the next frame.
     open_suggest_title_next_frame: bool,
     /// The card grid's zoom slider (GameTable addition).
     card_zoom: CardZoom,
     /// Split handles: last mouse x while held.
     split_drag: HashMap<&'static str, f32>,
+    /// Pixel sizes shown under the preview.
+    image_sizes: ImageSizeCache,
 }
 
 impl CardViewTab {
@@ -117,9 +148,12 @@ impl CardViewTab {
             import: None,
             confirm_delete: None,
             suggest_title: None,
+            suggest_extra_data: None,
+            shrink_card_art: None,
             open_suggest_title_next_frame: false,
             card_zoom: CardZoom::new(keys::CARD_VIEW_CARD_ZOOM),
             split_drag: HashMap::new(),
+            image_sizes: ImageSizeCache::default(),
         }
     }
 
@@ -300,6 +334,7 @@ impl CardViewTab {
         let grid_y = y + 4.0;
         let zoom = self.card_zoom.current(frame.settings);
         let mut clicked = None;
+        let has_turned_cards = any_card_turned(visible.iter().map(|&(index, _)| &game.cards()[index]));
         frame.card_pool_grid(
             "cv:pool",
             visible.len(),
@@ -309,6 +344,7 @@ impl CardViewTab {
             y + height - grid_y,
             12.0,
             zoom,
+            has_turned_cards,
             |frame, tile| {
                 let (index, key) = visible[tile.index];
                 let card = &game.cards()[index];
@@ -472,6 +508,7 @@ impl CardViewTab {
         let options = TextOptions::new().width(width).middle_of(24.0).centered().color(palette.on_surface);
         frame.text(&format!("{} cards selected", selected.len()), x, y, options);
         let game = &model.game;
+        let has_turned_cards = any_card_turned(selected.iter().map(|&index| &game.cards()[index]));
         frame.card_pool_grid(
             "cv:multipreview",
             selected.len(),
@@ -481,6 +518,7 @@ impl CardViewTab {
             height - 28.0,
             12.0,
             1.0,
+            has_turned_cards,
             |frame, tile| {
                 let card = &game.cards()[selected[tile.index]];
                 let display = display_card(&model.folder_path, card);
@@ -532,11 +570,25 @@ impl CardViewTab {
             Some(card) => {
                 let shows_back = card.card_back_id.is_some()
                     || (card.is_scenario_card && model.game.scenario_card_back_id.is_some());
+                let label_height = 8.0 + 16.0;
+                let label_options =
+                    TextOptions::new().size(12.0).centered().color(palette.on_surface_variant).ellipsis();
+                let display = display_card(&model.folder_path, card);
+                let front_resolution = self.image_sizes.resolution_text(display.image_path.as_deref());
                 if !shows_back {
-                    CardViewTab::draw_front_pane(frame, model, backs, card, x, y, width, pane_height);
+                    CardViewTab::draw_front_pane(frame, model, backs, card, x, y, width, pane_height - label_height);
+                    if let Some(resolution) = &front_resolution {
+                        frame.text(resolution, x, y + pane_height - 16.0, label_options.width(width));
+                    }
                 } else {
                     let pane_width = (width - 12.0) / 2.0;
-                    let label_height = 8.0 + 16.0;
+                    let scenario_back = model.game.scenario_card_back_id.as_deref();
+                    let back_path = resolve_card_back_image_path(backs, Some(&display), scenario_back).path;
+                    let back_resolution = self.image_sizes.resolution_text(back_path.as_deref());
+                    let with_resolution = |side: &str, resolution: Option<String>| match resolution {
+                        Some(resolution) => format!("{side} · {resolution}"),
+                        None => side.to_string(),
+                    };
                     CardViewTab::draw_front_pane(
                         frame,
                         model,
@@ -547,9 +599,8 @@ impl CardViewTab {
                         pane_width,
                         pane_height - label_height,
                     );
-                    let options =
-                        TextOptions::new().width(pane_width).size(12.0).centered().color(palette.on_surface_variant);
-                    frame.text("Front", x, y + pane_height - 16.0, options);
+                    let options = label_options.width(pane_width);
+                    frame.text(&with_resolution("Front", front_resolution), x, y + pane_height - 16.0, options);
                     CardViewTab::draw_back_pane(
                         frame,
                         model,
@@ -560,7 +611,8 @@ impl CardViewTab {
                         pane_width,
                         pane_height - label_height,
                     );
-                    frame.text("Back", x + pane_width + 12.0, y + pane_height - 16.0, options);
+                    let back_label = with_resolution("Back", back_resolution);
+                    frame.text(&back_label, x + pane_width + 12.0, y + pane_height - 16.0, options);
                 }
             }
         }
@@ -741,6 +793,19 @@ impl CardViewTab {
         ) {
             let keys = selected.iter().map(|&index| model.card_keys.key(index)).collect();
             self.suggest_title = Some(SuggestTitleFlow::open(frame, None, keys));
+        }
+        let extra_options = ButtonOptions::variant(ButtonVariant::Tonal).icon("auto_fix_high").id("cv:bulk:suggestextra");
+        let extra_width = frame.button_width("Suggest Extra Data...", &extra_options);
+        if frame.button(
+            "Suggest Extra Data...",
+            form_x + form_width - suggest_width - 8.0 - extra_width,
+            row_y - 6.0,
+            Some(extra_width),
+            Some(40.0),
+            &extra_options,
+        ) {
+            let keys = selected.iter().map(|&index| model.card_keys.key(index)).collect();
+            self.suggest_extra_data = Some(SuggestExtraDataFlow::open(frame, model, keys));
         }
         row_y += 28.0 + GAP;
 
@@ -1126,7 +1191,7 @@ impl CardViewTab {
         let current = model.game.cards()[index].extra_fields.clone();
         let mut extra = std::mem::take(frame.ui.state::<ExtraRows>(&state_id));
         if extra.source.as_ref() != Some(&current) {
-            extra.rows = current.iter().map(|(field, value)| (field.clone(), value_text(value))).collect();
+            extra.rows = current.iter().map(|(field, value)| (field.clone(), extra_value_text(value))).collect();
             extra.source = Some(current);
         }
         let value_height = frame.text_area_height(3, None);
@@ -1224,6 +1289,12 @@ impl CardViewTab {
         self.open_suggest_title_next_frame = true;
     }
 
+    /// Development hook (`GAMETABLE_GAMEDEF_TAB=cards,shrinkart`): opens the Shrink Card Art
+    /// confirmation.
+    pub fn open_shrink_card_art_for_development(&mut self, model: &EditorModel) {
+        self.shrink_card_art = Some(ShrinkCardArtFlow::open(&model.folder_path, &model.game));
+    }
+
     fn finish_dialogs(&mut self, frame: &mut Frame, model: &mut EditorModel) {
         if std::mem::take(&mut self.open_suggest_title_next_frame) {
             self.suggest_title = Some(SuggestTitleFlow::open(frame, self.selected, Vec::new()));
@@ -1232,6 +1303,16 @@ impl CardViewTab {
             && !flow.show(frame, model)
         {
             self.suggest_title = None;
+        }
+        if let Some(flow) = &mut self.suggest_extra_data
+            && !flow.show(frame, model)
+        {
+            self.suggest_extra_data = None;
+        }
+        if let Some(flow) = &mut self.shrink_card_art
+            && !flow.show(frame)
+        {
+            self.shrink_card_art = None;
         }
         if let Some((import, key)) = &mut self.import {
             let key = *key;
@@ -1276,8 +1357,17 @@ impl CardViewTab {
         self.selected = (selected.len() == 1).then(|| model.card_keys.key(selected[0]));
         let display_backs = display_card_backs(&model.folder_path, &model.game.card_backs);
 
-        let leading =
-            [LeadingButton { label: "Add Card", icon: Some("add"), id: "cv:add", variant: ButtonVariant::Tonal }];
+        const ADD_CARD_BUTTON: usize = 0;
+        const SHRINK_CARD_ART_BUTTON: usize = 1;
+        let leading = [
+            LeadingButton { label: "Add Card", icon: Some("add"), id: "cv:add", variant: ButtonVariant::Tonal },
+            LeadingButton {
+                label: "Shrink Card Art...",
+                icon: Some("photo_size_select_large"),
+                id: "cv:shrinkart",
+                variant: ButtonVariant::Tonal,
+            },
+        ];
         let game = model.game.clone();
         let (filters_bottom, leading_clicked) =
             frame.card_filters("cv", &mut self.filters, &game, x + 12.0, y, width - 24.0, true, &leading);
@@ -1294,8 +1384,12 @@ impl CardViewTab {
             None,
         );
         self.card_zoom.control(frame, "cv:zoom", x + width - 12.0 - CardZoom::WIDTH, filters_bottom + 12.0);
-        if leading_clicked.is_some() {
-            self.add_blank_card(model);
+        match leading_clicked {
+            Some(ADD_CARD_BUTTON) => self.add_blank_card(model),
+            Some(SHRINK_CARD_ART_BUTTON) => {
+                self.shrink_card_art = Some(ShrinkCardArtFlow::open(&model.folder_path, &model.game));
+            }
+            _ => {}
         }
         if row_y > y {
             row_y += 4.0;

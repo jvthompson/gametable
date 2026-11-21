@@ -606,7 +606,8 @@ impl App {
     /// Returns false when the app should exit.
     fn handle_event(&mut self, event: Event) -> bool {
         match event {
-            Event::Quit { .. } => return !self.screens_cancel_quit(),
+            // Keep running only when a screen cancelled the quit.
+            Event::Quit { .. } => return self.screens_cancel_quit(),
             Event::KeyDown { keycode: Some(keycode), repeat, .. } => {
                 let key = key_name(keycode as u32);
                 self.keyboard.press(key);
