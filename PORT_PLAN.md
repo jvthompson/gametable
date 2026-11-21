@@ -618,7 +618,23 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   image, or "Front · …" / "Back · …" when the back is shown too. Sizes come from the file headers without decoding
   (`data/image_dimensions.rs`: PNG, JPEG incl. progressive and large EXIF, GIF, BMP, WebP), cached per path and
   re-read when the file's modified time changes, so they update after Shrink Card Art. Tests in that module;
-  checked by screenshot on Lorcana and Middle Earth against the real files.
+  checked by screenshot on Lorcana and Middle Earth against the real files. The label also gives the file size
+  ("367 × 512 px · 288 KB"; KB rounded up below 1 MB, then MB to one decimal), re-read when the file's modified time
+  or length changes (`ImageFileInfoCache` in `card_view_tab.rs`).
+- [x] Card View **Convert to WebP...** (2026-11-21; `screens/gamedef/convert_to_webp_dialog.rs`,
+  `data/card_art_files.rs`). Rewrites every card's art, and each card's unique `_BACK` image, as lossy WebP
+  (quality 90, `webp::encode_lossy` via the runtime-loaded libwebp's `WebPEncodeRGBA`); PNG, JPEG, GIF and BMP
+  convert, already-WebP images are skipped. A front and its unique back convert together or not at all (the back's
+  name follows the front's extension). Worker threads write `<name>.webp` beside each original (never over an
+  existing `.webp`); then the editor points the cards at the new files, in both the edited game and the saved copy,
+  and writes the saved copy straight to `gamedef.json` so the file on disk never names a deleted image while other
+  unsaved edits stay unsaved. Only after that save are the originals deleted, except any still used (e.g. by a card
+  back definition). The summary gives converted/updated counts, MB before and after, deletions, skips and failures.
+  Shrink Card Art and Convert to WebP share `screens/gamedef/card_art_job.rs` (worker threads + progress dialog)
+  and `card_art_groups`. Dev hooks: `GAMETABLE_GAMEDEF_TAB=cards,towebp[,start]` (`start` clicks Convert), and
+  `GAMETABLE_GAME` may now be a full folder path. Checked end to end on a scratch copy of Megaman: 558 JPEGs, 135.9
+  MB -> 67.1 MB, `gamedef.json` identical apart from the 558 `imagePath`s, cards and resolution labels show from the
+  WebP files. Players need libwebp to see WebP art (bundled on Windows; from the system on Linux and macOS).
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -977,3 +993,5 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   screenshot on Lorcana; the shrinking itself is covered by unit tests but not yet run from the app on a real game
   (the real library is read-only).
 - 2026-11-21: Card View preview shows the card image's resolution (see "Beyond the port").
+- 2026-11-21: **Convert to WebP...** on the Card View (see "Beyond the port"), tested on a scratch copy of Megaman.
+- 2026-11-21: The Card View preview's resolution label also shows the image's file size.

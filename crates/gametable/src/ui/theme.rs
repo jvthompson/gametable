@@ -261,6 +261,7 @@ pub fn icon_codepoint(name: &str) -> Option<char> {
         "menu_book" => 0xea19,
         "auto_fix_high" => 0xe663,
         "photo_size_select_large" => 0xe433,
+        "transform" => 0xe428,
         "rotate_right" => 0xe41a,
         "lock" => 0xe897,
         "lock_open" => 0xe898,

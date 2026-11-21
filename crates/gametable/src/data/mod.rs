@@ -1,5 +1,6 @@
 //! Files and settings the client keeps on disk.
 
+pub mod card_art_files;
 pub mod deck_library;
 pub mod deck_store;
 pub mod display_settings;

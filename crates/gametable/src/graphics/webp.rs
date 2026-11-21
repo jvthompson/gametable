@@ -1,4 +1,4 @@
-//! WebP decoding through `libwebp`, loaded at runtime like the original (`image_utils.lua`): the
+//! WebP decoding (and, for the editor's "Convert to WebP", lossy encoding) through `libwebp`, loaded at runtime like the original (`image_utils.lua`): the
 //! app works without it and reports WebP images as needing `libwebp.dll` (`libwebp.so`,
 //! `libwebp.dylib`) next to the app. SDL_image's bundled build has no WebP support. Where it is
 //! searched for: [`crate::native_libraries`].
@@ -11,9 +11,13 @@ use crate::native_libraries;
 
 type DecodeRgba = unsafe extern "C" fn(*const u8, usize, *mut i32, *mut i32) -> *mut u8;
 type Free = unsafe extern "C" fn(*mut std::ffi::c_void);
+/// `WebPEncodeRGBA(rgba, width, height, stride, quality_factor, &output) -> output size`.
+type EncodeRgba = unsafe extern "C" fn(*const u8, i32, i32, i32, f32, *mut *mut u8) -> usize;
 
 struct WebpLibrary {
     decode_rgba: DecodeRgba,
+    /// Missing from decode-only builds of the library.
+    encode_rgba: Option<EncodeRgba>,
     free: Free,
     /// Kept loaded for the functions above (and `libsharpyuv`, which `libwebp` imports).
     _libraries: Vec<libloading::Library>,
@@ -42,8 +46,9 @@ fn load_library() -> Option<WebpLibrary> {
             decode.ok().zip(free.ok())
         };
         if let Some((decode_rgba, free)) = functions {
+            let encode_rgba = unsafe { library.get::<EncodeRgba>(b"WebPEncodeRGBA\0").map(|symbol| *symbol).ok() };
             libraries.push(library);
-            return Some(WebpLibrary { decode_rgba, free, _libraries: libraries });
+            return Some(WebpLibrary { decode_rgba, encode_rgba, free, _libraries: libraries });
         }
     }
     None
@@ -87,6 +92,30 @@ pub fn decode(bytes: &[u8]) -> Result<RgbaImage, String> {
     Ok(RgbaImage { width: width as u32, height: height as u32, pixels: copied })
 }
 
+/// Encodes RGBA pixels as a lossy WebP file. `quality` is 0-100; fully opaque images are
+/// written without an alpha channel.
+pub fn encode_lossy(image: &RgbaImage, quality: f32) -> Result<Vec<u8>, String> {
+    let library = library().ok_or_else(missing_library_message)?;
+    let encode_rgba = library.encode_rgba.ok_or("this copy of libwebp can't write WebP images")?;
+    let expected_length = image.width as usize * image.height as usize * 4;
+    if image.pixels.len() != expected_length || image.width == 0 || image.height == 0 {
+        return Err("invalid image size".to_string());
+    }
+    let (width, height) = (image.width as i32, image.height as i32);
+    let mut output: *mut u8 = std::ptr::null_mut();
+    let length = unsafe { encode_rgba(image.pixels.as_ptr(), width, height, width * 4, quality, &mut output) };
+    if output.is_null() || length == 0 {
+        if !output.is_null() {
+            unsafe { (library.free)(output.cast()) };
+        }
+        // libwebp limits each side to 16383 pixels, among other failures.
+        return Err(format!("WebP encoding failed ({} × {} px)", image.width, image.height));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(output, length) }.to_vec();
+    unsafe { (library.free)(output.cast()) };
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +144,26 @@ mod tests {
         let image = decode(&tiny).unwrap();
         assert_eq!((image.width, image.height), (1, 1));
         assert!(decode(b"RIFF\0\0\0\0WEBPjunk").is_err());
+    }
+
+    #[test]
+    fn lossy_encoding_round_trips_with_the_bundled_library() {
+        if !is_available() {
+            eprintln!("libwebp not found; skipping");
+            return;
+        }
+        let mut pixels = Vec::new();
+        for y in 0..40u32 {
+            for x in 0..30u32 {
+                pixels.extend_from_slice(&[(x * 8) as u8, (y * 6) as u8, 90, 255]);
+            }
+        }
+        let image = RgbaImage { width: 30, height: 40, pixels };
+        let bytes = encode_lossy(&image, 90.0).unwrap();
+        assert!(is_webp(&bytes));
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!((decoded.width, decoded.height), (30, 40));
+        // Lossy, but close: the top-left pixel stays near its colour.
+        assert!(decoded.pixels[0..3].iter().zip([0u8, 0, 90]).all(|(&got, want)| got.abs_diff(want) < 16));
     }
 }

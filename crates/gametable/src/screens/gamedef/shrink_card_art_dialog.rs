@@ -5,45 +5,22 @@
 //! The flow is a confirmation, then a progress dialog while worker threads shrink the files,
 //! then a summary. Card definitions don't change, only the image files on disk.
 
-use std::collections::{HashSet, VecDeque};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
 
-use gametable_core::models::{GameDefinition, UNIQUE_CARD_BACK_ID};
+use gametable_core::models::GameDefinition;
 
 use crate::app::Frame;
-use crate::data::image_resolver::{resolve_bare_image_path, unique_card_back_path_for};
+use crate::data::card_art_files::card_art_groups;
 use crate::data::image_utils::{ShrinkOutcome, shrink_image_to_max_height};
-use crate::ui::draw::TextOptions;
-use crate::ui::overlays::{ConfirmResponse, DialogAction, DialogResponse, DialogSpec};
+use crate::screens::gamedef::card_art_job::CardArtJob;
+use crate::ui::overlays::ConfirmResponse;
 
 /// The tallest card art may be after shrinking, in pixels.
 pub const MAX_CARD_ART_HEIGHT: u32 = 1024;
 
-/// The most images shrunk at once.
-const MAX_WORKER_THREADS: usize = 4;
-
-/// Every image file the game's cards show (fronts, and unique backs that exist), resolved to
-/// full paths, each once.
+/// Every image file the game's cards show (each unique back before its front), each once.
 pub fn card_art_paths(folder_path: &str, game: &GameDefinition) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut paths = Vec::new();
-    for card in game.cards() {
-        let Some(bare_image_path) = &card.image_path else { continue };
-        let front_path = resolve_bare_image_path(folder_path, bare_image_path, card.set_id.as_deref());
-        if card.card_back_id.as_deref() == Some(UNIQUE_CARD_BACK_ID) {
-            let unique_back_path = unique_card_back_path_for(&front_path);
-            if Path::new(&unique_back_path).is_file() && seen.insert(unique_back_path.clone()) {
-                paths.push(unique_back_path);
-            }
-        }
-        if seen.insert(front_path.clone()) {
-            paths.push(front_path);
-        }
-    }
-    paths
+    card_art_groups(folder_path, game).iter().flat_map(|group| group.paths().cloned().collect::<Vec<_>>()).collect()
 }
 
 /// What happened to one image file.
@@ -54,7 +31,7 @@ enum FileResult {
     Failed(String),
 }
 
-fn shrink_one_file(path: &str) -> FileResult {
+fn shrink_one_file(path: &String) -> FileResult {
     if !Path::new(path).is_file() {
         return FileResult::Missing;
     }
@@ -64,77 +41,7 @@ fn shrink_one_file(path: &str) -> FileResult {
     }
 }
 
-/// Worker threads taking paths from a shared queue until it is empty or the job is cancelled.
-struct ShrinkJob {
-    total: usize,
-    results: Vec<(String, FileResult)>,
-    receiver: Receiver<(String, FileResult)>,
-    cancelled: Arc<AtomicBool>,
-    /// Threads still running; each sends `()` through `finished_receiver` as it ends.
-    running_threads: usize,
-    finished_receiver: Receiver<()>,
-    /// How many of `results` have had their cached textures dropped.
-    results_reloaded: usize,
-}
-
-impl ShrinkJob {
-    fn start(paths: Vec<String>) -> ShrinkJob {
-        let total = paths.len();
-        let queue = Arc::new(Mutex::new(VecDeque::from(paths)));
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let (sender, receiver) = mpsc::channel();
-        let (finished_sender, finished_receiver) = mpsc::channel();
-        let processors = std::thread::available_parallelism().map_or(2, |count| count.get());
-        let thread_count = processors.saturating_sub(1).clamp(1, MAX_WORKER_THREADS).min(total.max(1));
-        for index in 0..thread_count {
-            let queue = queue.clone();
-            let cancelled = cancelled.clone();
-            let sender = sender.clone();
-            let finished_sender = finished_sender.clone();
-            std::thread::Builder::new()
-                .name(format!("shrink-card-art-{index}"))
-                .spawn(move || {
-                    while !cancelled.load(Ordering::Relaxed) {
-                        let next_path = queue.lock().ok().and_then(|mut queue| queue.pop_front());
-                        let Some(path) = next_path else { break };
-                        let result = shrink_one_file(&path);
-                        if sender.send((path, result)).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = finished_sender.send(());
-                })
-                .expect("spawn card art shrinker");
-        }
-        ShrinkJob {
-            total,
-            results: Vec::new(),
-            receiver,
-            cancelled,
-            running_threads: thread_count,
-            finished_receiver,
-            results_reloaded: 0,
-        }
-    }
-
-    /// Collects finished files; true once every thread has stopped.
-    fn poll(&mut self) -> bool {
-        while let Ok(result) = self.receiver.try_recv() {
-            self.results.push(result);
-        }
-        while self.finished_receiver.try_recv().is_ok() {
-            self.running_threads -= 1;
-        }
-        if self.running_threads == 0 {
-            // Anything sent between the two drains above.
-            while let Ok(result) = self.receiver.try_recv() {
-                self.results.push(result);
-            }
-            return true;
-        }
-        false
-    }
-}
+type ShrinkJob = CardArtJob<String, FileResult>;
 
 /// Counts for the closing summary.
 #[derive(Debug, Default, PartialEq)]
@@ -235,7 +142,8 @@ impl ShrinkCardArtFlow {
                     ConfirmResponse::Cancelled => false,
                     ConfirmResponse::Confirmed => {
                         let paths = std::mem::take(paths);
-                        self.stage = Stage::Running { job: ShrinkJob::start(paths) };
+                        self.stage =
+                            Stage::Running { job: ShrinkJob::start(paths, "shrink-card-art", shrink_one_file) };
                         true
                     }
                 }
@@ -243,38 +151,17 @@ impl ShrinkCardArtFlow {
             Stage::Running { job } => {
                 let finished = job.poll();
                 // The images on screen reload from the smaller files as each one is rewritten.
-                for (path, result) in &job.results[job.results_reloaded..] {
+                for (path, result) in job.new_results() {
                     if matches!(result, FileResult::Processed(ShrinkOutcome::Shrunk { .. })) {
                         frame.images.invalidate(path);
                     }
                 }
-                job.results_reloaded = job.results.len();
-                let (done, total) = (job.results.len(), job.total);
-                let cancelled = job.cancelled.load(Ordering::Relaxed);
                 if finished {
-                    let stopped_early = (done < total).then_some((done, total));
-                    let message = ShrinkSummary::from_results(&job.results).message(stopped_early);
+                    let message = ShrinkSummary::from_results(job.results()).message(job.stopped_early());
                     self.stage = Stage::Finished { message };
                     return true;
                 }
-                let status = if cancelled { "Stopping...".to_string() } else { format!("{done} of {total} images") };
-                let actions = [DialogAction::text("Cancel").disabled(cancelled)];
-                let spec = DialogSpec {
-                    title: Some("Shrinking Card Art"),
-                    width: 420.0,
-                    actions: &actions,
-                    dismissible: false,
-                    ..DialogSpec::default()
-                };
-                let progress = if total == 0 { None } else { Some(done as f32 / total as f32) };
-                let response = frame.dialog("shrinkartprogress", &spec, |frame, x, y, width| {
-                    frame.text(&status, x, y, TextOptions::new().width(width));
-                    frame.progress_bar(x, y + 28.0, width, 4.0, progress, None);
-                    40.0
-                });
-                if response == DialogResponse::Action(0) {
-                    job.cancelled.store(true, Ordering::Relaxed);
-                }
+                job.show_progress(frame, "shrinkartprogress", "Shrinking Card Art");
                 true
             }
             Stage::Finished { message } => !frame.alert_dialog("shrinkartdone", "Shrink Card Art", message),
@@ -285,7 +172,8 @@ impl ShrinkCardArtFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gametable_core::models::CardDefinition;
+    use crate::data::image_resolver::resolve_bare_image_path;
+    use gametable_core::models::{CardDefinition, UNIQUE_CARD_BACK_ID};
 
     #[test]
     fn art_paths_cover_fronts_and_existing_unique_backs_once() {

@@ -9,8 +9,10 @@
 //! leaving (Back, quitting, New, Open) with unsaved changes asks first.
 
 pub mod board_zone_placement;
+pub mod card_art_job;
 pub mod card_view_tab;
 pub mod common;
+pub mod convert_to_webp_dialog;
 pub mod dialogs;
 pub mod extra_data_suggestion_dialogs;
 pub mod game_board_tab;
@@ -48,6 +50,7 @@ use crate::ui::widgets::{ButtonOptions, ButtonVariant, IconButtonOptions};
 
 use self::card_view_tab::CardViewTab;
 use self::common::StableKeys;
+use self::convert_to_webp_dialog::{apply_webp_conversion, summary_message};
 use self::dialogs::ToolDialog;
 use self::game_board_tab::GameBoardTab;
 use self::scenario_tab::ScenarioTab;
@@ -292,7 +295,7 @@ impl GameDefinitionEditor {
     /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,suggest][,placement|deck]
     /// [,table]`): opens a tab (`boards`, or the old `playmats`, for Game Boards); `select` selects
     /// the first card on the Cards tab and the first board on the Game Boards tab, `suggest` opens
-    /// its Suggest Title dialog, `shrinkart` opens Shrink Card Art, `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
+    /// its Suggest Title dialog, `shrinkart` opens Shrink Card Art, `towebp` Convert to WebP (`start` clicks Convert), `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
     /// switches the Game Boards tab to its Table Preview.
     pub fn apply_development_setup(&mut self, steps: &str) {
         for step in steps.split(',').map(str::trim) {
@@ -307,6 +310,8 @@ impl GameDefinitionEditor {
                 }
                 "suggest" => self.cards_tab.open_suggest_title_for_development(),
                 "shrinkart" => self.cards_tab.open_shrink_card_art_for_development(&self.model),
+                "towebp" => self.cards_tab.open_convert_to_webp_for_development(&self.model),
+                "start" => self.cards_tab.start_convert_to_webp_for_development(),
                 "table" => self.game_board_tab.show_table_preview_for_development(),
                 "placement" | "deck" => {
                     self.scenario_tab.get_or_insert_with(ScenarioTab::new).set_view_for_development(step)
@@ -359,6 +364,18 @@ impl GameDefinitionEditor {
             lost.len(),
             names.join(", ")
         ));
+    }
+
+    /// Card View "Convert to WebP": once its files are written, points the cards (here and in the
+    /// saved copy) at them, saves that change alone and deletes the originals.
+    fn apply_finished_webp_conversion(&mut self, frame: &mut Frame) {
+        let Some(converted) = self.cards_tab.take_webp_conversion_to_apply() else { return };
+        let folder_path = self.model.folder_path.clone();
+        let applied = apply_webp_conversion(&mut self.model.game, &mut self.saved_game, &folder_path, &converted);
+        for original in &converted.originals {
+            frame.images.invalidate(original);
+        }
+        self.cards_tab.show_webp_conversion_summary(summary_message(&converted, &applied));
     }
 
     fn write(&mut self, frame: &mut Frame) {
@@ -518,6 +535,7 @@ impl Screen for GameDefinitionEditor {
             _ => self.cards_tab.draw(frame, model, x, body_y, width, body_height),
         }
         frame.ui.pop_clip();
+        self.apply_finished_webp_conversion(frame);
         if self.rulebook.is_open() {
             let close = frame.overlay(|frame| self.rulebook.draw(frame, None));
             if close {

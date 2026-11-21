@@ -28,6 +28,7 @@ use crate::screens::gamedef::common::{
     FileImport, GAP, ImportResponse, display_card, display_card_backs, orientation_choices,
 };
 use crate::screens::gamedef::extra_data_suggestion_dialogs::SuggestExtraDataFlow;
+use crate::screens::gamedef::convert_to_webp_dialog::{ConvertToWebpFlow, ConvertedCardArt};
 use crate::screens::gamedef::shrink_card_art_dialog::ShrinkCardArtFlow;
 use crate::screens::gamedef::title_suggestion_dialogs::SuggestTitleFlow;
 use crate::table::card_pool_grid::{CardZoom, NAME_LINES, TILE_CARD_HEIGHT, TILE_SCALE, any_card_turned};
@@ -68,33 +69,62 @@ fn quarter_turns_of(orientation: CardOrientation) -> i32 {
     }
 }
 
-/// Image file sizes for the preview's resolution labels, re-read when a file's modified time
-/// changes (after Shrink Card Art, say).
-#[derive(Debug, Default)]
-struct ImageSizeCache {
-    sizes_by_path: HashMap<String, CachedImageSize>,
+/// An image file's pixel size and how big the file is on disk.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ImageFileInfo {
+    /// `None` when the header can't be read.
+    dimensions: Option<(u32, u32)>,
+    file_bytes: u64,
 }
 
-/// A file's modified time when it was read, and the (width, height) found then.
-type CachedImageSize = (Option<SystemTime>, Option<(u32, u32)>);
+/// "85 KB" below a megabyte (rounded up, so a tiny file isn't "0 KB"), else "1.4 MB".
+fn file_size_text(bytes: u64) -> String {
+    const KILOBYTE: u64 = 1024;
+    const MEGABYTE: u64 = 1024 * 1024;
+    if bytes < MEGABYTE {
+        format!("{} KB", bytes.div_ceil(KILOBYTE))
+    } else {
+        format!("{:.1} MB", bytes as f64 / MEGABYTE as f64)
+    }
+}
 
-impl ImageSizeCache {
-    fn size_of(&mut self, path: &str) -> Option<(u32, u32)> {
-        let modified = std::fs::metadata(path).and_then(|metadata| metadata.modified()).ok();
-        if let Some((cached_modified, cached_size)) = self.sizes_by_path.get(path)
+/// Image file details for the preview's labels, re-read when a file's modified time changes
+/// (after Shrink Card Art, say).
+#[derive(Debug, Default)]
+struct ImageFileInfoCache {
+    info_by_path: HashMap<String, CachedImageFileInfo>,
+}
+
+/// A file's modified time when it was read, and what was found then (`None`: no such file).
+type CachedImageFileInfo = (Option<SystemTime>, Option<ImageFileInfo>);
+
+impl ImageFileInfoCache {
+    fn info_of(&mut self, path: &str) -> Option<ImageFileInfo> {
+        let metadata = std::fs::metadata(path).ok().filter(|metadata| metadata.is_file());
+        let modified = metadata.as_ref().and_then(|metadata| metadata.modified().ok());
+        if let Some((cached_modified, cached_info)) = self.info_by_path.get(path)
             && *cached_modified == modified
+            && cached_info.map(|info| info.file_bytes) == metadata.as_ref().map(|metadata| metadata.len())
         {
-            return *cached_size;
+            return *cached_info;
         }
-        let size = modified.and_then(|_| image_dimensions(Path::new(path)));
-        self.sizes_by_path.insert(path.to_string(), (modified, size));
-        size
+        let info = metadata.map(|metadata| ImageFileInfo {
+            dimensions: image_dimensions(Path::new(path)),
+            file_bytes: metadata.len(),
+        });
+        self.info_by_path.insert(path.to_string(), (modified, info));
+        info
     }
 
-    /// "750 × 1050 px", or `None` without a readable image.
-    fn resolution_text(&mut self, path: Option<&str>) -> Option<String> {
-        let (width, height) = self.size_of(path?)?;
-        Some(format!("{width} × {height} px"))
+    /// "750 × 1050 px · 312 KB" (just the size when the header can't be read), or `None`
+    /// without an image file.
+    fn label_text(&mut self, path: Option<&str>) -> Option<String> {
+        let info = self.info_of(path?)?;
+        let size = file_size_text(info.file_bytes);
+        Some(match info.dimensions {
+            Some((width, height)) => format!("{width} × {height} px · {size}"),
+            None => size,
+        })
     }
 }
 
@@ -122,14 +152,16 @@ pub struct CardViewTab {
     suggest_extra_data: Option<SuggestExtraDataFlow>,
     /// The open "Shrink Card Art" dialogs.
     shrink_card_art: Option<ShrinkCardArtFlow>,
+    /// The open "Convert to WebP" dialogs.
+    convert_to_webp: Option<ConvertToWebpFlow>,
     /// Development hook: open Suggest Title on the next frame.
     open_suggest_title_next_frame: bool,
     /// The card grid's zoom slider (GameTable addition).
     card_zoom: CardZoom,
     /// Split handles: last mouse x while held.
     split_drag: HashMap<&'static str, f32>,
-    /// Pixel sizes shown under the preview.
-    image_sizes: ImageSizeCache,
+    /// Resolutions and file sizes shown under the preview.
+    image_files: ImageFileInfoCache,
 }
 
 impl CardViewTab {
@@ -150,10 +182,11 @@ impl CardViewTab {
             suggest_title: None,
             suggest_extra_data: None,
             shrink_card_art: None,
+            convert_to_webp: None,
             open_suggest_title_next_frame: false,
             card_zoom: CardZoom::new(keys::CARD_VIEW_CARD_ZOOM),
             split_drag: HashMap::new(),
-            image_sizes: ImageSizeCache::default(),
+            image_files: ImageFileInfoCache::default(),
         }
     }
 
@@ -574,18 +607,18 @@ impl CardViewTab {
                 let label_options =
                     TextOptions::new().size(12.0).centered().color(palette.on_surface_variant).ellipsis();
                 let display = display_card(&model.folder_path, card);
-                let front_resolution = self.image_sizes.resolution_text(display.image_path.as_deref());
+                let front_details = self.image_files.label_text(display.image_path.as_deref());
                 if !shows_back {
                     CardViewTab::draw_front_pane(frame, model, backs, card, x, y, width, pane_height - label_height);
-                    if let Some(resolution) = &front_resolution {
+                    if let Some(resolution) = &front_details {
                         frame.text(resolution, x, y + pane_height - 16.0, label_options.width(width));
                     }
                 } else {
                     let pane_width = (width - 12.0) / 2.0;
                     let scenario_back = model.game.scenario_card_back_id.as_deref();
                     let back_path = resolve_card_back_image_path(backs, Some(&display), scenario_back).path;
-                    let back_resolution = self.image_sizes.resolution_text(back_path.as_deref());
-                    let with_resolution = |side: &str, resolution: Option<String>| match resolution {
+                    let back_details = self.image_files.label_text(back_path.as_deref());
+                    let with_details = |side: &str, resolution: Option<String>| match resolution {
                         Some(resolution) => format!("{side} · {resolution}"),
                         None => side.to_string(),
                     };
@@ -600,7 +633,7 @@ impl CardViewTab {
                         pane_height - label_height,
                     );
                     let options = label_options.width(pane_width);
-                    frame.text(&with_resolution("Front", front_resolution), x, y + pane_height - 16.0, options);
+                    frame.text(&with_details("Front", front_details), x, y + pane_height - 16.0, options);
                     CardViewTab::draw_back_pane(
                         frame,
                         model,
@@ -611,7 +644,7 @@ impl CardViewTab {
                         pane_width,
                         pane_height - label_height,
                     );
-                    let back_label = with_resolution("Back", back_resolution);
+                    let back_label = with_details("Back", back_details);
                     frame.text(&back_label, x + pane_width + 12.0, y + pane_height - 16.0, options);
                 }
             }
@@ -1295,6 +1328,30 @@ impl CardViewTab {
         self.shrink_card_art = Some(ShrinkCardArtFlow::open(&model.folder_path, &model.game));
     }
 
+    /// Development hook (`GAMETABLE_GAMEDEF_TAB=cards,towebp`): opens the Convert to WebP
+    /// confirmation.
+    pub fn open_convert_to_webp_for_development(&mut self, model: &EditorModel) {
+        self.convert_to_webp = Some(ConvertToWebpFlow::open(&model.folder_path, &model.game));
+    }
+
+    /// Development hook (`GAMETABLE_GAMEDEF_TAB=cards,towebp,start`).
+    pub fn start_convert_to_webp_for_development(&mut self) {
+        if let Some(flow) = &mut self.convert_to_webp {
+            flow.start_without_confirming_for_development();
+        }
+    }
+
+    /// A finished "Convert to WebP" for the editor to apply (it also updates the saved game).
+    pub fn take_webp_conversion_to_apply(&mut self) -> Option<ConvertedCardArt> {
+        self.convert_to_webp.as_mut()?.take_conversion_to_apply()
+    }
+
+    pub fn show_webp_conversion_summary(&mut self, message: String) {
+        if let Some(flow) = &mut self.convert_to_webp {
+            flow.show_summary(message);
+        }
+    }
+
     fn finish_dialogs(&mut self, frame: &mut Frame, model: &mut EditorModel) {
         if std::mem::take(&mut self.open_suggest_title_next_frame) {
             self.suggest_title = Some(SuggestTitleFlow::open(frame, self.selected, Vec::new()));
@@ -1313,6 +1370,11 @@ impl CardViewTab {
             && !flow.show(frame)
         {
             self.shrink_card_art = None;
+        }
+        if let Some(flow) = &mut self.convert_to_webp
+            && !flow.show(frame)
+        {
+            self.convert_to_webp = None;
         }
         if let Some((import, key)) = &mut self.import {
             let key = *key;
@@ -1359,12 +1421,19 @@ impl CardViewTab {
 
         const ADD_CARD_BUTTON: usize = 0;
         const SHRINK_CARD_ART_BUTTON: usize = 1;
+        const CONVERT_TO_WEBP_BUTTON: usize = 2;
         let leading = [
             LeadingButton { label: "Add Card", icon: Some("add"), id: "cv:add", variant: ButtonVariant::Tonal },
             LeadingButton {
                 label: "Shrink Card Art...",
                 icon: Some("photo_size_select_large"),
                 id: "cv:shrinkart",
+                variant: ButtonVariant::Tonal,
+            },
+            LeadingButton {
+                label: "Convert to WebP...",
+                icon: Some("transform"),
+                id: "cv:towebp",
                 variant: ButtonVariant::Tonal,
             },
         ];
@@ -1388,6 +1457,9 @@ impl CardViewTab {
             Some(ADD_CARD_BUTTON) => self.add_blank_card(model),
             Some(SHRINK_CARD_ART_BUTTON) => {
                 self.shrink_card_art = Some(ShrinkCardArtFlow::open(&model.folder_path, &model.game));
+            }
+            Some(CONVERT_TO_WEBP_BUTTON) => {
+                self.convert_to_webp = Some(ConvertToWebpFlow::open(&model.folder_path, &model.game));
             }
             _ => {}
         }
@@ -1450,5 +1522,38 @@ impl CardViewTab {
         }
         frame.ui.pop_clip();
         self.finish_dialogs(frame, model);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_sizes_read_as_kilobytes_then_megabytes() {
+        assert_eq!(file_size_text(0), "0 KB");
+        assert_eq!(file_size_text(1), "1 KB");
+        assert_eq!(file_size_text(87_000), "85 KB");
+        assert_eq!(file_size_text(1024 * 1024 - 1), "1024 KB");
+        assert_eq!(file_size_text(1_468_006), "1.4 MB");
+    }
+
+    #[test]
+    fn labels_follow_the_file_as_it_changes() {
+        let folder = std::env::temp_dir().join(format!("gametable_file_info_{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("card.png");
+        let path_text = path.to_string_lossy().into_owned();
+        crate::graphics::image_data::RgbaImage { width: 20, height: 28, pixels: vec![9; 20 * 28 * 4] }
+            .save_png(&path)
+            .unwrap();
+        let mut cache = ImageFileInfoCache::default();
+        let label = cache.label_text(Some(&path_text)).unwrap();
+        assert!(label.starts_with("20 × 28 px · "), "{label}");
+        std::fs::write(&path, vec![0u8; 3000]).unwrap();
+        assert_eq!(cache.label_text(Some(&path_text)).as_deref(), Some("3 KB"));
+        assert_eq!(cache.label_text(Some(folder.join("missing.png").to_str().unwrap())), None);
+        assert_eq!(cache.label_text(None), None);
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

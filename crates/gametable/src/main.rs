@@ -85,11 +85,13 @@ fn main() {
                 }
                 Box::new(editor)
             }),
-            // `GAMETABLE_GAME=<game folder name>`, `GAMETABLE_GAMEDEF_TAB=<tab>[,select]`.
+            // `GAMETABLE_GAME=<game folder name, or a full folder path>`,
+            // `GAMETABLE_GAMEDEF_TAB=<tab>[,select]`.
             Ok("gamedef") => app.push_with_frame(|frame| {
                 let wanted = std::env::var("GAMETABLE_GAME").unwrap_or_default();
                 let library = frame.paths.games_folder(frame.settings).to_string_lossy().into_owned();
-                let folder = join_path(&[&library, &wanted]);
+                let folder =
+                    if std::path::Path::new(&wanted).is_absolute() { wanted } else { join_path(&[&library, &wanted]) };
                 let game = find_game_definition_file(&folder)
                     .and_then(|path| load_game_definition_file(&path, &folder).ok())
                     .unwrap_or_else(load_standard_deck);
