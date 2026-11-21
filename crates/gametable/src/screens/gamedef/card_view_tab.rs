@@ -27,8 +27,8 @@ use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::{
     FileImport, GAP, ImportResponse, display_card, display_card_backs, orientation_choices,
 };
-use crate::screens::gamedef::extra_data_suggestion_dialogs::SuggestExtraDataFlow;
 use crate::screens::gamedef::convert_to_webp_dialog::{ConvertToWebpFlow, ConvertedCardArt};
+use crate::screens::gamedef::extra_data_suggestion_dialogs::SuggestExtraDataFlow;
 use crate::screens::gamedef::shrink_card_art_dialog::ShrinkCardArtFlow;
 use crate::screens::gamedef::title_suggestion_dialogs::SuggestTitleFlow;
 use crate::table::card_pool_grid::{CardZoom, NAME_LINES, TILE_CARD_HEIGHT, TILE_SCALE, any_card_turned};
@@ -827,7 +827,8 @@ impl CardViewTab {
             let keys = selected.iter().map(|&index| model.card_keys.key(index)).collect();
             self.suggest_title = Some(SuggestTitleFlow::open(frame, None, keys));
         }
-        let extra_options = ButtonOptions::variant(ButtonVariant::Tonal).icon("auto_fix_high").id("cv:bulk:suggestextra");
+        let extra_options =
+            ButtonOptions::variant(ButtonVariant::Tonal).icon("auto_fix_high").id("cv:bulk:suggestextra");
         let extra_width = frame.button_width("Suggest Extra Data...", &extra_options);
         if frame.button(
             "Suggest Extra Data...",

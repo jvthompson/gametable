@@ -33,7 +33,7 @@ pub fn rotate_landscape_image(path: &str) -> Result<bool, String> {
 /// Writes an image over `path` in the format its extension names (`.png`, `.jpg` or `.jpeg`).
 /// The new image goes to a temporary file first and then replaces the original, so a failed
 /// write never leaves a half-written card image behind.
-fn replace_image_file(path: &str, image: &RgbaImage) -> Result<(), String> {
+pub(crate) fn replace_image_file(path: &str, image: &RgbaImage) -> Result<(), String> {
     let temporary_path = format!("{path}.gametable-tmp");
     let written = if lowercase_extension(path) == ".png" {
         image.encode_png().and_then(|bytes| std::fs::write(&temporary_path, bytes).map_err(|error| error.to_string()))

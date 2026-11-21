@@ -194,6 +194,7 @@ pub fn icon_codepoint(name: &str) -> Option<char> {
         "folder_open" => 0xe2c8,
         "delete_outline" => 0xe92e,
         "save" => 0xe161,
+        "folder_zip" => 0xeb2c,
         "refresh" => 0xe5d5,
         "filter_alt_off" => 0xeb32,
         "shuffle" => 0xe043,

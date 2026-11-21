@@ -2,36 +2,58 @@
 //! folder of card art: its name becomes the set id (and default name), its images are copied into
 //! `<game folder>/<id>/`, and one card is made per image. Port of
 //! `src/ui/screens/gamedef/sets_tab.lua` (`widgets/sets_tab.dart`).
+//!
+//! GameTable addition: before copying, a dialog offers to shrink the art to
+//! [`MAX_CARD_ART_HEIGHT`] pixels tall and convert it to WebP, and the copy runs on background
+//! threads behind a progress dialog.
 
 use gametable_core::models::{GameDefinition, GameSet, PackSetting};
 use gametable_core::tag_match::parse_tag_entry;
 
 use crate::app::Frame;
 use crate::data::file_system::join_path;
-use crate::data::gamedef_ops::{
-    build_cards_from_image_folder, copy_set_images, derive_id_from_folder_path, rarity_tags,
-};
+use crate::data::gamedef_ops::{build_cards_from_image_folder, derive_id_from_folder_path, rarity_tags};
 use crate::data::image_resolver::clear_existence_cache;
+use crate::data::set_image_import::{
+    SetImageImport, SetImageToImport, SetImportOptions, images_to_import, import_problems_message, import_set_image,
+    imported_file_names,
+};
+use crate::graphics::webp;
 use crate::screens::file_picker::{FilePicker, FilePickerResponse, PickerMode};
 use crate::screens::gamedef::EditorModel;
+use crate::screens::gamedef::card_art_job::CardArtJob;
 use crate::screens::gamedef::common::{FIELD_HEIGHT, GAP, PAD, SectionAction, StableKeys, TypedText, column};
+use crate::screens::gamedef::shrink_card_art_dialog::MAX_CARD_ART_HEIGHT;
 use crate::ui::components::{Reorder, move_item};
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
-use crate::ui::overlays::ConfirmResponse;
+use crate::ui::overlays::{ConfirmResponse, DialogAction, DialogResponse, DialogSpec};
 use crate::ui::panel::{Pane, clamp_selection};
 use crate::ui::text_field::TextFieldOptions;
-use crate::ui::theme::with_alpha;
-use crate::ui::widgets::{ButtonOptions, ButtonVariant, ScrollbarStyle};
+use crate::ui::theme::{Weight, with_alpha};
+use crate::ui::widgets::{ButtonOptions, ButtonVariant, ScrollbarStyle, ToggleOptions};
 
 const LIST_WIDTH: f32 = 300.0;
 const ROW_HEIGHT: f32 = 56.0;
 
-/// A set folder waiting to be copied (a couple of frames later, so the spinner shows first).
-struct PendingAdd {
+/// A picked set folder, waiting for the user to choose how its images are imported.
+struct PickedSetFolder {
     source_path: String,
     id: String,
-    frames: u32,
+}
+
+/// A set whose images are being copied in on background threads.
+struct SetBeingAdded {
+    source_path: String,
+    id: String,
+    job: CardArtJob<SetImageToImport, SetImageImport>,
+}
+
+/// The import choices, kept for the rest of the session.
+#[derive(Default)]
+struct ImportChoices {
+    shrink_card_art: bool,
+    convert_to_webp: bool,
 }
 
 #[derive(Default)]
@@ -40,7 +62,9 @@ pub struct SetsTab {
     selected: Option<u64>,
     pub busy: bool,
     folder_picker: Option<FilePicker>,
-    pending_add: Option<PendingAdd>,
+    picked_folder: Option<PickedSetFolder>,
+    import_choices: ImportChoices,
+    set_being_added: Option<SetBeingAdded>,
     /// The set awaiting the Remove Set confirmation.
     confirm_delete: Option<u64>,
 }
@@ -68,33 +92,113 @@ fn format_count(value: f64) -> String {
 }
 
 impl SetsTab {
-    /// `T:update()`: copies a picked set folder once its frames have passed.
+    /// `T:update()`: adds the set once its images have all been copied in (or the copy was
+    /// cancelled, in which case the images that made it in still get their cards).
     pub fn update(&mut self, frame: &mut Frame, model: &mut EditorModel) {
-        let Some(pending) = &mut self.pending_add else { return };
-        pending.frames -= 1;
-        if pending.frames > 0 {
+        let Some(adding) = &mut self.set_being_added else { return };
+        if !adding.job.poll() {
             return;
         }
-        let Some(pending) = self.pending_add.take() else { return };
-        let destination = join_path(&[&model.folder_path, &pending.id]);
-        let result = copy_set_images(&pending.source_path, &destination).map(|_| {
-            let existing: Vec<String> = model.game.cards().iter().map(|card| card.id.clone()).collect();
-            let new_cards = build_cards_from_image_folder(&pending.source_path, Some(&pending.id), &existing);
-            model.game.sets.push(GameSet {
-                id: pending.id.clone(),
-                name: pending.id.clone(),
-                pack_settings: Vec::new(),
-            });
-            model.game.cards_mut().extend(new_cards);
-            model.card_keys.sync(model.game.cards().len());
-            self.keys.sync(model.game.sets.len());
-            self.selected = Some(self.keys.key(model.game.sets.len() - 1));
-        });
+        let Some(mut adding) = self.set_being_added.take() else { return };
+        let results = adding.job.take_results();
+        let imported_names = imported_file_names(&results);
+        let existing: Vec<String> = model.game.cards().iter().map(|card| card.id.clone()).collect();
+        let new_cards: Vec<_> = build_cards_from_image_folder(&adding.source_path, Some(&adding.id), &existing)
+            .into_iter()
+            .filter_map(|mut card| {
+                let imported_name = imported_names.get(card.image_path.as_deref()?)?;
+                card.image_path = Some(imported_name.clone());
+                Some(card)
+            })
+            .collect();
+        model.game.sets.push(GameSet { id: adding.id.clone(), name: adding.id.clone(), pack_settings: Vec::new() });
+        model.game.cards_mut().extend(new_cards);
+        model.card_keys.sync(model.game.cards().len());
+        self.keys.sync(model.game.sets.len());
+        self.selected = Some(self.keys.key(model.game.sets.len() - 1));
         clear_existence_cache();
-        if let Err(error) = result {
-            frame.ui.toast(&format!("Could not add set: {error}"), None);
+        if let Some((done, total)) = adding.job.stopped_early() {
+            frame.ui.toast(&format!("Add Set was cancelled: {done} of {total} images were copied in."), None);
+        } else if let Some(problems) = import_problems_message(&results) {
+            frame.ui.toast(&format!("Added set \"{}\": {problems}", adding.id), None);
         }
         self.busy = false;
+    }
+
+    /// Development hook: as if `source_path` had just been picked with "Add Set...".
+    pub fn open_import_options_for_development(&mut self, source_path: String) {
+        let id = derive_id_from_folder_path(&source_path);
+        self.picked_folder = Some(PickedSetFolder { source_path, id });
+    }
+
+    /// Development hook: ticks both import options and clicks "Add Set".
+    pub fn add_set_with_every_option_for_development(&mut self, model: &EditorModel) {
+        self.import_choices = ImportChoices { shrink_card_art: true, convert_to_webp: true };
+        if let Some(picked) = self.picked_folder.take() {
+            self.start_adding_set(model, picked);
+        }
+    }
+
+    /// Starts copying the picked folder's images into `<game folder>/<id>/`.
+    fn start_adding_set(&mut self, model: &EditorModel, picked: PickedSetFolder) {
+        let options = SetImportOptions {
+            max_height: self.import_choices.shrink_card_art.then_some(MAX_CARD_ART_HEIGHT),
+            convert_to_webp: self.import_choices.convert_to_webp && webp::is_available(),
+        };
+        let destination = join_path(&[&model.folder_path, &picked.id]);
+        let images = images_to_import(&picked.source_path, &destination, options);
+        self.busy = true;
+        self.set_being_added = Some(SetBeingAdded {
+            source_path: picked.source_path,
+            id: picked.id,
+            job: CardArtJob::start(images, "import-set", import_set_image),
+        });
+    }
+
+    /// The choices offered before a set's images are copied in.
+    fn show_import_options(&mut self, frame: &mut Frame, model: &EditorModel) {
+        let Some(picked) = &self.picked_folder else { return };
+        let title = format!("Add Set \"{}\"", picked.id);
+        let actions = [DialogAction::text("Cancel"), DialogAction::filled("Add Set")];
+        let spec = DialogSpec { title: Some(&title), width: 460.0, actions: &actions, ..DialogSpec::default() };
+        let webp_available = webp::is_available();
+        let choices = &mut self.import_choices;
+        let response = frame.dialog("st:importoptions", &spec, |frame, x, y, width| {
+            let palette = frame.palette();
+            let intro = "The folder's images are copied into this game's folder. On the way in, they can also be:";
+            let intro_options = TextOptions::new().width(width).color(palette.on_surface_variant);
+            frame.text(intro, x, y, intro_options);
+            let intro_height = frame.text_height(intro, width, 14.0, Weight::Regular);
+            let mut row_y = y + intro_height + 16.0;
+            let shrink_label = format!("Shrunk to no taller than {MAX_CARD_ART_HEIGHT} px");
+            let shrink_options = ToggleOptions::label(&shrink_label);
+            choices.shrink_card_art =
+                frame.checkbox("st:import:shrink", x + 2.0, row_y, choices.shrink_card_art, &shrink_options);
+            row_y += 36.0;
+            let webp_label = if webp_available {
+                "Converted to WebP (lossy, quality 90)"
+            } else {
+                "Converted to WebP (the WebP library isn't available)"
+            };
+            let webp_options = ToggleOptions::label(webp_label).disabled(!webp_available);
+            let convert = choices.convert_to_webp && webp_available;
+            choices.convert_to_webp = frame.checkbox("st:import:webp", x + 2.0, row_y, convert, &webp_options);
+            row_y += 36.0;
+            let note = "The folder you picked is left as it is.";
+            let note_options = TextOptions::new().width(width).size(12.0).color(palette.on_surface_variant);
+            frame.text(note, x, row_y, note_options);
+            let note_height = frame.text_height(note, width, 12.0, Weight::Regular);
+            row_y + note_height - y
+        });
+        match response {
+            DialogResponse::Open => {}
+            DialogResponse::Action(1) | DialogResponse::Enter => {
+                if let Some(picked) = self.picked_folder.take() {
+                    self.start_adding_set(model, picked);
+                }
+            }
+            _ => self.picked_folder = None,
+        }
     }
 
     fn draw_list(&mut self, frame: &mut Frame, model: &mut EditorModel, x: f32, y: f32, width: f32, height: f32) {
@@ -356,11 +460,15 @@ impl SetsTab {
                     if model.game.sets.iter().any(|set| set.id == id) {
                         frame.ui.toast(&format!("A set named \"{id}\" already exists."), None);
                     } else {
-                        self.busy = true;
-                        self.pending_add = Some(PendingAdd { source_path, id, frames: 2 });
+                        self.picked_folder = Some(PickedSetFolder { source_path, id });
                     }
                 }
             }
+        }
+        self.show_import_options(frame, model);
+        if let Some(adding) = &mut self.set_being_added {
+            let title = format!("Adding Set \"{}\"", adding.id);
+            adding.job.show_progress(frame, "st:importprogress", &title);
         }
         let Some(key) = self.confirm_delete else { return };
         let Some(index) = self.keys.index_of(key) else {

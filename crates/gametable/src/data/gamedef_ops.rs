@@ -75,24 +75,6 @@ pub fn copy_picked_file(
     Ok(file_name)
 }
 
-/// `O.copySetImages`: copies every image in a folder, turning landscape ones portrait.
-pub fn copy_set_images(source_folder: &str, destination_folder: &str) -> Result<(), String> {
-    if is_same_path(source_folder, destination_folder) {
-        return Ok(());
-    }
-    let Some(entries) = list_folder(Path::new(source_folder)) else { return Ok(()) };
-    std::fs::create_dir_all(destination_folder).map_err(|error| error.to_string())?;
-    let mut copied = Vec::new();
-    for entry in entries.iter().filter(|entry| !entry.is_folder && is_image_file(&entry.name)) {
-        let destination = join_path(&[destination_folder, &entry.name]);
-        if std::fs::copy(join_path(&[source_folder, &entry.name]), &destination).is_ok() {
-            copied.push(destination);
-        }
-    }
-    rotate_landscape_images(&copied);
-    Ok(())
-}
-
 /// `O.buildCardsFromImageFolder`: one card per image (sorted by byte order), skipping `*_BACK`
 /// art, with ids made unique against `existing_card_ids`.
 pub fn build_cards_from_image_folder(

@@ -635,6 +635,23 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   `GAMETABLE_GAME` may now be a full folder path. Checked end to end on a scratch copy of Megaman: 558 JPEGs, 135.9
   MB -> 67.1 MB, `gamedef.json` identical apart from the 558 `imagePath`s, cards and resolution labels show from the
   WebP files. Players need libwebp to see WebP art (bundled on Windows; from the system on Linux and macOS).
+- [x] Sets tab **Add Set...** import options (2026-11-21; `data/set_image_import.rs`). After picking the folder, a
+  dialog offers "Shrunk to no taller than 1024 px" and "Converted to WebP (lossy, quality 90)" (unticked by default,
+  remembered for the session; WebP greyed out without libwebp). The copy now runs on `CardArtJob` worker threads
+  behind a progress dialog with Cancel (cancelled: the images that made it in still get cards). Each image is
+  decoded once, turned portrait (PNG/JPEG, as before), shrunk, then written as `<name>.webp` or in its own format;
+  `_BACK` art becomes `<name>_BACK.webp`, so unique backs still match. An image that can't be processed is copied
+  unchanged and a toast says so. The picked folder is never changed (unless it already is the set's folder in the
+  game). Replaces `copy_set_images`. Dev hooks: `GAMETABLE_GAMEDEF_TAB=sets,addset[,importall]` with
+  `GAMETABLE_SET_FOLDER`.
+- [x] Editor toolbar **Save to Zip** (2026-11-21; `data/game_package.rs`, `screens/gamedef/save_to_zip_dialog.rs`).
+  A `folder_zip` button left of Save packs the whole game folder into `<folder name>.gamedef` beside it in the game
+  library (`lorcana` -> `<library>/lorcana.gamedef`). It is a plain zip with the folder at its root, the layout
+  `validate_game_zip` / the admin game upload expect; images are stored, other files deflated, `.gametable-tmp`
+  leftovers skipped. Unsaved changes are saved first (the "Cards Without a Set" warning still applies; Cancel there
+  stops the zip). Asks before replacing an existing package; packs on a background thread behind a progress dialog
+  with Cancel, writing to a temporary file that only replaces the package once complete. Dev hook:
+  `GAMETABLE_GAMEDEF_TAB=savetozip`.
 
 ## Quirks log (original behaviours to preserve or consciously handle)
 
@@ -995,3 +1012,7 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - 2026-11-21: Card View preview shows the card image's resolution (see "Beyond the port").
 - 2026-11-21: **Convert to WebP...** on the Card View (see "Beyond the port"), tested on a scratch copy of Megaman.
 - 2026-11-21: The Card View preview's resolution label also shows the image's file size.
+- 2026-11-21: Add Set can shrink and convert the art to WebP as it imports (see "Beyond the port"); checked on a
+  scratch copy of Megaman with 24 Lorcana PNGs (7.1 MB -> 1.2 MB, 24 cards pointing at the `.webp` files).
+- 2026-11-21: **Save to Zip** on the editor toolbar (see "Beyond the port"); checked on the scratch Megaman copy:
+  585 files, 68.5 MB `megaman.gamedef`, archive tests clean.

@@ -17,6 +17,7 @@ pub mod dialogs;
 pub mod extra_data_suggestion_dialogs;
 pub mod game_board_tab;
 pub mod list_picker_dialog;
+pub mod save_to_zip_dialog;
 pub mod scenario_tab;
 pub mod sets_tab;
 pub mod settings_tab;
@@ -53,6 +54,7 @@ use self::common::StableKeys;
 use self::convert_to_webp_dialog::{apply_webp_conversion, summary_message};
 use self::dialogs::ToolDialog;
 use self::game_board_tab::GameBoardTab;
+use self::save_to_zip_dialog::SaveToZipFlow;
 use self::scenario_tab::ScenarioTab;
 use self::sets_tab::SetsTab;
 use self::settings_tab::SettingsTab;
@@ -217,6 +219,10 @@ pub struct GameDefinitionEditor {
     saved_game: GameDefinition,
     /// Set while the "Unsaved Changes" prompt is shown.
     pending_leave: Option<LeaveAction>,
+    /// "Save to Zip" while it runs.
+    save_to_zip: Option<SaveToZipFlow>,
+    /// "Save to Zip" saved first and is waiting on the "Cards Without a Set" warning.
+    save_to_zip_after_saving: bool,
 }
 
 impl GameDefinitionEditor {
@@ -243,6 +249,8 @@ impl GameDefinitionEditor {
             tool_dialog: None,
             save_warning: None,
             pending_leave: None,
+            save_to_zip: None,
+            save_to_zip_after_saving: false,
         }
     }
 
@@ -295,7 +303,9 @@ impl GameDefinitionEditor {
     /// Development hook (`GAMETABLE_GAMEDEF_TAB=<tab label>[,select][,suggest][,placement|deck]
     /// [,table]`): opens a tab (`boards`, or the old `playmats`, for Game Boards); `select` selects
     /// the first card on the Cards tab and the first board on the Game Boards tab, `suggest` opens
-    /// its Suggest Title dialog, `shrinkart` opens Shrink Card Art, `towebp` Convert to WebP (`start` clicks Convert), `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
+    /// its Suggest Title dialog, `shrinkart` opens Shrink Card Art, `towebp` Convert to WebP (`start` clicks Convert), `addset` opens the Sets tab's import options
+    /// for the folder in `GAMETABLE_SET_FOLDER` (`importall` ticks both options and adds it), `savetozip`
+    /// clicks Save to Zip, `placement`/`deck` pick the Scenarios tab's sub-view, and `table`
     /// switches the Game Boards tab to its Table Preview.
     pub fn apply_development_setup(&mut self, steps: &str) {
         for step in steps.split(',').map(str::trim) {
@@ -312,6 +322,13 @@ impl GameDefinitionEditor {
                 "shrinkart" => self.cards_tab.open_shrink_card_art_for_development(&self.model),
                 "towebp" => self.cards_tab.open_convert_to_webp_for_development(&self.model),
                 "start" => self.cards_tab.start_convert_to_webp_for_development(),
+                "addset" => {
+                    if let Ok(folder) = std::env::var("GAMETABLE_SET_FOLDER") {
+                        self.sets_tab.open_import_options_for_development(folder);
+                    }
+                }
+                "importall" => self.sets_tab.add_set_with_every_option_for_development(&self.model),
+                "savetozip" => self.save_to_zip = Some(SaveToZipFlow::open(&self.model.folder_path)),
                 "table" => self.game_board_tab.show_table_preview_for_development(),
                 "placement" | "deck" => {
                     self.scenario_tab.get_or_insert_with(ScenarioTab::new).set_view_for_development(step)
@@ -390,6 +407,26 @@ impl GameDefinitionEditor {
         }
     }
 
+    /// Toolbar "Save to Zip": saves any unsaved changes first, so the package holds what is on
+    /// screen, then packs the game folder.
+    fn save_to_zip(&mut self, frame: &mut Frame) {
+        if self.has_unsaved_changes() {
+            self.save(frame);
+            if self.save_warning.is_some() {
+                self.save_to_zip_after_saving = true;
+                return;
+            }
+        }
+        self.start_save_to_zip_if_saved();
+    }
+
+    /// Packs the folder, unless the save before it failed or was cancelled.
+    fn start_save_to_zip_if_saved(&mut self) {
+        if !self.has_unsaved_changes() {
+            self.save_to_zip = Some(SaveToZipFlow::open(&self.model.folder_path));
+        }
+    }
+
     fn toggle_rulebook(&mut self, frame: &mut Frame) {
         self.rulebook.toggle(frame);
     }
@@ -443,6 +480,15 @@ impl GameDefinitionEditor {
                 }
                 _ => self.save_warning = None,
             }
+        }
+        if self.save_to_zip_after_saving && self.save_warning.is_none() {
+            self.save_to_zip_after_saving = false;
+            self.start_save_to_zip_if_saved();
+        }
+        if let Some(flow) = &mut self.save_to_zip
+            && !flow.show(frame)
+        {
+            self.save_to_zip = None;
         }
         self.draw_unsaved_changes_prompt(frame);
     }
@@ -498,6 +544,7 @@ impl Screen for GameDefinitionEditor {
     fn draw(&mut self, frame: &mut Frame, x: f32, y: f32, width: f32, height: f32) {
         self.model.card_keys.sync(self.model.game.cards().len());
         let busy = self.sets_tab.busy;
+        let can_save_to_zip = !busy && self.save_to_zip.is_none() && !self.model.folder_path.is_empty();
         let name = &self.model.game.name;
         let title = if name.is_empty() { "Game Definition Editor".to_string() } else { name.clone() };
         let actions = [
@@ -505,6 +552,12 @@ impl Screen for GameDefinitionEditor {
             ToolbarAction { icon: "folder_open", tooltip: "Open Existing...", id: Some("gde:open"), disabled: busy },
             ToolbarAction { icon: "menu_book", tooltip: "Rulebook (Ctrl+R)", id: Some("gde:rulebook"), disabled: busy },
             ToolbarAction { icon: "build", tooltip: "Tools", id: Some("gde:tools"), disabled: busy },
+            ToolbarAction {
+                icon: "folder_zip",
+                tooltip: "Save to Zip (a .gamedef file in the game library)",
+                id: Some("gde:savetozip"),
+                disabled: !can_save_to_zip,
+            },
             ToolbarAction { icon: "save", tooltip: "Save", id: Some("gde:save"), disabled: busy },
         ];
         let clicked = frame.editor_toolbar(x, y, width, &title, &actions);
@@ -556,7 +609,8 @@ impl Screen for GameDefinitionEditor {
                 menu.width = Some(300.0);
                 self.tools_menu = Some(menu);
             }
-            Some(4) => self.save(frame),
+            Some(4) => self.save_to_zip(frame),
+            Some(5) => self.save(frame),
             _ => {}
         }
         self.draw_dialogs(frame);
