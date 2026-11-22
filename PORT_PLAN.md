@@ -1051,3 +1051,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - 2026-11-21: Save to Zip crawled on Spellfire once it reached `_cache/atlases` (76 extension-less files, 1.3 GB,
   deflated by an unoptimized compressor). Those folders are now left out, and the zip crates build optimized in dev:
   116 MB of those atlases now pack in ~4.5 s.
+- 2026-11-21: Convert to WebP no longer stalls at the end on big games: checking whether each original was still
+  used walked every card of both games per file (quadratic, on the UI thread). Now `images_used_by_game` builds the
+  set once, and the originals are deleted on a background thread behind a "Removing the original files: n of m"
+  progress dialog (`ConvertToWebpFlow::finish`). Checked on a scratch copy of On The Edge (409 PNGs in four new
+  sets, added to the real game's gamedef.json at the user's request; backup kept in the session scratchpad).

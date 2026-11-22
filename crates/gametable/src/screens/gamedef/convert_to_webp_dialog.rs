@@ -5,23 +5,28 @@
 //! The flow is a confirmation, then a progress dialog while worker threads write the `.webp`
 //! files beside the originals, then the editor applies the result ([`apply_webp_conversion`]):
 //! the new image paths go into the cards and straight into `gamedef.json`, so the saved game
-//! never points at a deleted file, and only then are the originals deleted. Other unsaved edits
-//! stay unsaved. Last, a summary.
+//! never points at a deleted file. Other unsaved edits stay unsaved. Only then are the originals
+//! deleted, on a background thread behind its own progress dialog (thousands of deletions can
+//! take a while). Last, a summary.
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
 
 use gametable_core::models::GameDefinition;
 
 use crate::app::Frame;
 use crate::data::card_art_files::{
-    CardArtGroup, GroupConversion, WEBP_QUALITY, card_art_groups, convert_group_to_webp, game_uses_image,
+    CardArtGroup, GroupConversion, WEBP_QUALITY, card_art_groups, convert_group_to_webp, images_used_by_game,
     point_cards_at_webp, with_webp_extension,
 };
 use crate::data::gamedef_ops::write_game_definition;
 use crate::data::image_resolver::clear_existence_cache;
 use crate::graphics::webp;
 use crate::screens::gamedef::card_art_job::CardArtJob;
-use crate::ui::overlays::ConfirmResponse;
+use crate::ui::draw::TextOptions;
+use crate::ui::overlays::{ConfirmResponse, DialogSpec};
 
 type ConversionResult = Result<GroupConversion, String>;
 
@@ -72,6 +77,8 @@ impl ConvertedCardArt {
 #[derive(Debug, Default, PartialEq)]
 pub struct AppliedConversion {
     pub cards_updated: usize,
+    /// Originals nothing uses any more, to be deleted by [`delete_original_files`].
+    pub originals_to_delete: Vec<String>,
     pub originals_deleted: usize,
     /// Originals left because something in the game still shows them (a card back, say).
     pub originals_still_in_use: usize,
@@ -79,10 +86,10 @@ pub struct AppliedConversion {
     pub save_error: Option<String>,
 }
 
-/// Points the cards of both the edited game and the last saved one at the new `.webp` files,
-/// writes the saved one (with only that change) to `gamedef.json`, then deletes the originals
-/// nothing uses any more. The caller keeps `saved_game` as the editor's saved copy, so unsaved
-/// edits stay unsaved.
+/// Points the cards of both the edited game and the last saved one at the new `.webp` files and
+/// writes the saved one (with only that change) to `gamedef.json`, then lists the originals
+/// nothing uses any more for deletion. The caller keeps `saved_game` as the editor's saved copy,
+/// so unsaved edits stay unsaved.
 pub fn apply_webp_conversion(
     edited_game: &mut GameDefinition,
     saved_game: &mut GameDefinition,
@@ -102,17 +109,57 @@ pub fn apply_webp_conversion(
         return applied;
     }
     *saved_game = updated_saved_game;
+    let mut used = images_used_by_game(edited_game, folder_path);
+    used.extend(images_used_by_game(saved_game, folder_path));
     for original in &converted.originals {
-        let still_used =
-            game_uses_image(edited_game, folder_path, original) || game_uses_image(saved_game, folder_path, original);
-        if still_used {
+        if used.contains(original) {
             applied.originals_still_in_use += 1;
-        } else if std::fs::remove_file(original).is_ok() {
-            applied.originals_deleted += 1;
+        } else {
+            applied.originals_to_delete.push(original.clone());
         }
     }
-    clear_existence_cache();
     applied
+}
+
+/// Deletes the files, counting each one handled in `files_done`; returns how many were deleted.
+pub fn delete_original_files(paths: &[String], files_done: &AtomicUsize) -> usize {
+    let mut deleted = 0;
+    for path in paths {
+        if std::fs::remove_file(path).is_ok() {
+            deleted += 1;
+        }
+        files_done.fetch_add(1, Ordering::Relaxed);
+    }
+    deleted
+}
+
+/// The originals being deleted on a background thread.
+struct OriginalsDeletion {
+    converted: ConvertedCardArt,
+    applied: AppliedConversion,
+    total: usize,
+    files_done: Arc<AtomicUsize>,
+    finished: Receiver<usize>,
+}
+
+impl OriginalsDeletion {
+    fn start(converted: ConvertedCardArt, applied: AppliedConversion) -> OriginalsDeletion {
+        let paths = applied.originals_to_delete.clone();
+        let total = paths.len();
+        let files_done = Arc::new(AtomicUsize::new(0));
+        let (sender, finished) = mpsc::channel();
+        let counter = files_done.clone();
+        let spawned = std::thread::Builder::new().name("delete-originals".to_string()).spawn(move || {
+            let _ = sender.send(delete_original_files(&paths, &counter));
+        });
+        if spawned.is_err() {
+            // No thread: do it here rather than leave the files behind.
+            let (sender, receiver) = mpsc::channel();
+            let _ = sender.send(delete_original_files(&applied.originals_to_delete, &files_done));
+            return OriginalsDeletion { converted, applied, total, files_done, finished: receiver };
+        }
+        OriginalsDeletion { converted, applied, total, files_done, finished }
+    }
 }
 
 fn megabytes(bytes: u64) -> String {
@@ -182,6 +229,8 @@ enum Stage {
     },
     /// Waiting for the editor to take the result and apply it.
     ReadyToApply(ConvertedCardArt),
+    /// Deleting the replaced originals, with a progress dialog.
+    DeletingOriginals(OriginalsDeletion),
     Finished {
         message: String,
     },
@@ -229,9 +278,14 @@ impl ConvertToWebpFlow {
         }
     }
 
-    /// Shows the summary after the editor has applied the conversion.
-    pub fn show_summary(&mut self, message: String) {
-        self.stage = Stage::Finished { message };
+    /// After the editor has applied the conversion: deletes the unused originals behind a
+    /// progress dialog (straight to the summary when there are none), then shows the summary.
+    pub fn finish(&mut self, converted: ConvertedCardArt, applied: AppliedConversion) {
+        self.stage = if applied.originals_to_delete.is_empty() {
+            Stage::Finished { message: summary_message(&converted, &applied) }
+        } else {
+            Stage::DeletingOriginals(OriginalsDeletion::start(converted, applied))
+        };
     }
 
     /// Draws the current dialog; false once the flow is over.
@@ -267,8 +321,33 @@ impl ConvertToWebpFlow {
                 job.show_progress(frame, "towebpprogress", "Converting to WebP");
                 true
             }
-            // The editor applies it this frame and calls `show_summary`.
+            // The editor applies it this frame and calls `finish`.
             Stage::ReadyToApply(_) => true,
+            Stage::DeletingOriginals(deletion) => {
+                if let Ok(deleted) = deletion.finished.try_recv() {
+                    clear_existence_cache();
+                    deletion.applied.originals_deleted = deleted;
+                    let message = summary_message(&deletion.converted, &deletion.applied);
+                    self.stage = Stage::Finished { message };
+                    return true;
+                }
+                let done = deletion.files_done.load(Ordering::Relaxed);
+                let total = deletion.total;
+                let status = format!("Removing the original files: {done} of {total}");
+                let spec = DialogSpec {
+                    title: Some("Converting to WebP"),
+                    width: 420.0,
+                    dismissible: false,
+                    ..DialogSpec::default()
+                };
+                let progress = if total == 0 { None } else { Some(done as f32 / total as f32) };
+                frame.dialog("towebpdeleting", &spec, |frame, x, y, width| {
+                    frame.text(&status, x, y, TextOptions::new().width(width));
+                    frame.progress_bar(x, y + 28.0, width, 4.0, progress, None);
+                    40.0
+                });
+                true
+            }
             Stage::Finished { message } => !frame.alert_dialog("towebpdone", "Convert to WebP", message),
         }
     }
@@ -324,8 +403,18 @@ mod tests {
         let applied = apply_webp_conversion(&mut edited_game, &mut saved_game, &folder_path, &converted);
         assert_eq!(
             applied,
-            AppliedConversion { cards_updated: 2, originals_deleted: 1, originals_still_in_use: 1, save_error: None }
+            AppliedConversion {
+                cards_updated: 2,
+                originals_to_delete: vec![crate::data::file_system::join_path(&[&folder_path, "goblin.png"])],
+                originals_deleted: 0,
+                originals_still_in_use: 1,
+                save_error: None
+            }
         );
+        assert!(folder.join("goblin.png").exists(), "nothing is deleted until the deletion step");
+        let files_done = AtomicUsize::new(0);
+        assert_eq!(delete_original_files(&applied.originals_to_delete, &files_done), 1);
+        assert_eq!(files_done.load(Ordering::Relaxed), 1);
         assert!(!folder.join("goblin.png").exists());
         assert!(folder.join("goblin.webp").is_file());
         assert!(folder.join("shared.png").is_file());

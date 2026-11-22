@@ -56,7 +56,7 @@ use crate::ui::widgets::{ButtonOptions, ButtonVariant, IconButtonOptions};
 
 use self::card_view_tab::CardViewTab;
 use self::common::StableKeys;
-use self::convert_to_webp_dialog::{apply_webp_conversion, summary_message};
+use self::convert_to_webp_dialog::apply_webp_conversion;
 use self::dialogs::ToolDialog;
 use self::game_board_tab::GameBoardTab;
 use self::save_to_zip_dialog::SaveToZipFlow;
@@ -397,7 +397,7 @@ impl GameDefinitionEditor {
         for original in &converted.originals {
             frame.images.invalidate(original);
         }
-        self.cards_tab.show_webp_conversion_summary(summary_message(&converted, &applied));
+        self.cards_tab.finish_webp_conversion(converted, applied);
     }
 
     fn write(&mut self, frame: &mut Frame) {

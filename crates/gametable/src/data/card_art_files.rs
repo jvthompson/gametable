@@ -155,20 +155,24 @@ pub fn point_cards_at_webp(
     changed_cards
 }
 
-/// Whether anything in the game still shows `path`: a card front, a card's unique back or a card
-/// back definition.
-pub fn game_uses_image(game: &GameDefinition, folder_path: &str, path: &str) -> bool {
-    let used_by_card = game.cards().iter().any(|card| {
-        let Some(bare_image_path) = &card.image_path else { return false };
+/// Every image file the game shows (full paths): card fronts, cards' unique backs and card back
+/// definitions. Built once so checking many files against it stays quick on big games.
+pub fn images_used_by_game(game: &GameDefinition, folder_path: &str) -> HashSet<String> {
+    let mut used = HashSet::new();
+    for card in game.cards() {
+        let Some(bare_image_path) = &card.image_path else { continue };
         let front_path = resolve_bare_image_path(folder_path, bare_image_path, card.set_id.as_deref());
-        front_path == path
-            || (card.card_back_id.as_deref() == Some(UNIQUE_CARD_BACK_ID)
-                && unique_card_back_path_for(&front_path) == path)
-    });
-    let used_by_card_back = game.card_backs.iter().any(|back| {
-        back.image_path.as_deref().is_some_and(|bare| resolve_bare_image_path(folder_path, bare, None) == path)
-    });
-    used_by_card || used_by_card_back
+        if card.card_back_id.as_deref() == Some(UNIQUE_CARD_BACK_ID) {
+            used.insert(unique_card_back_path_for(&front_path));
+        }
+        used.insert(front_path);
+    }
+    for back in &game.card_backs {
+        if let Some(bare_image_path) = &back.image_path {
+            used.insert(resolve_bare_image_path(folder_path, bare_image_path, None));
+        }
+    }
+    used
 }
 
 #[cfg(test)]
@@ -271,8 +275,9 @@ mod tests {
         assert_eq!(game.cards()[0].image_path.as_deref(), Some("dragon.webp"));
         // The unique back now resolves to the converted back, and the originals are unused.
         assert_eq!(card_art_groups(&folder_path, &game)[0].unique_back_path, Some(with_webp_extension(&originals[0])));
-        assert!(originals.iter().all(|original| !game_uses_image(&game, &folder_path, original)));
-        assert!(game_uses_image(&game, &folder_path, &with_webp_extension(&originals[1])));
+        let used = images_used_by_game(&game, &folder_path);
+        assert!(originals.iter().all(|original| !used.contains(original)));
+        assert!(used.contains(&with_webp_extension(&originals[1])));
 
         // Converting again finds nothing to do.
         let groups_after = card_art_groups(&folder_path, &game);

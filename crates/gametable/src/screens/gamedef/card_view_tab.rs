@@ -27,7 +27,7 @@ use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::{
     FileImport, GAP, ImportResponse, display_card, display_card_backs, orientation_choices,
 };
-use crate::screens::gamedef::convert_to_webp_dialog::{ConvertToWebpFlow, ConvertedCardArt};
+use crate::screens::gamedef::convert_to_webp_dialog::{AppliedConversion, ConvertToWebpFlow, ConvertedCardArt};
 use crate::screens::gamedef::extra_data_suggestion_dialogs::SuggestExtraDataFlow;
 use crate::screens::gamedef::shrink_card_art_dialog::ShrinkCardArtFlow;
 use crate::screens::gamedef::title_suggestion_dialogs::SuggestTitleFlow;
@@ -1347,9 +1347,11 @@ impl CardViewTab {
         self.convert_to_webp.as_mut()?.take_conversion_to_apply()
     }
 
-    pub fn show_webp_conversion_summary(&mut self, message: String) {
+    /// After the editor has applied the conversion: deletes the unused originals with a progress
+    /// dialog, then shows the summary.
+    pub fn finish_webp_conversion(&mut self, converted: ConvertedCardArt, applied: AppliedConversion) {
         if let Some(flow) = &mut self.convert_to_webp {
-            flow.show_summary(message);
+            flow.finish(converted, applied);
         }
     }
 
