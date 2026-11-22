@@ -1056,3 +1056,10 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   set once, and the originals are deleted on a background thread behind a "Removing the original files: n of m"
   progress dialog (`ConvertToWebpFlow::finish`). Checked on a scratch copy of On The Edge (409 PNGs in four new
   sets, added to the real game's gamedef.json at the user's request; backup kept in the session scratchpad).
+- 2026-11-21: **Release `v0.2.0+45`** (`.gamedef` packages and drag-to-install, Save to Zip, Add Set import
+  options, Shrink Card Art, Convert to WebP and its responsive finish, image size labels). `v0.2.0+44` was tagged
+  but never released: its Linux CI run caught a real server bug (a folder's `GameDef.json` is listed as
+  `gamedef.json`, which Linux can't open by that name), now served from the bytes read while scanning. The `+45`
+  run passed on all three platforms and attached the Windows (18.3 MB), Linux (19.7 MB) and macOS (33.2 MB) zips.
+  The live server was redeployed (dry run first: all six games loaded, no errors; backup
+  `~/backups/20261122-004558`), so it can now serve `.gamedef` packages.
