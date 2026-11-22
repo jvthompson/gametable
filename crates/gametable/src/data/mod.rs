@@ -14,6 +14,7 @@ pub mod gamedef_ops;
 pub mod image_dimensions;
 pub mod image_resolver;
 pub mod image_utils;
+pub mod legacy_migration;
 pub mod paths;
 pub mod pdf_doc_cache;
 pub mod pdf_render;

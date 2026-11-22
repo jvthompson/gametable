@@ -1120,3 +1120,17 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   board borders, red/green/blue practice seats). CI passed on all three platforms and attached the Windows (18.3 MB),
   Linux (19.7 MB) and macOS (33.3 MB) zips. Client only; the server didn't change. The older GitHub releases
   (`v0.2.0+39` to `v0.2.0+48`) were deleted at the user's request so only `+49` is offered; their git tags were kept.
+- 2026-11-22: **First-launch migration no longer holds up the window.** Copying the old CardTable/CardFlux save
+  folder (settings, decks, avatar and every game downloaded from servers, often gigabytes) ran before the window
+  was created, so the first launch on a machine with the old app looked hung for ~20 s. Now the window opens to Home
+  and the copy runs on a background thread (`data/legacy_migration.rs`) behind a "Migrating Old Data..." dialog with
+  a progress bar and "x of y copied". It copies into a staging folder (`gametable-migrating`) and moves it into the
+  save folder only when complete; a leftover staging folder means the copy is redone next launch, since the app may
+  write its own `settings.json` meanwhile. When done the app reloads settings, profile, theme and scale in place
+  and shows a toast; a failure shows an alert and carries on with fresh settings. `AppPaths::migrate_legacy_identity`
+  is gone. Dev hook: `GAMETABLE_MIGRATE_FROM=<folder name>` migrates from that sibling of the save folder (any
+  `--identity`). Tests: `the_old_folder_is_copied_once_with_progress`,
+  `an_unfinished_copy_is_redone_and_replaces_what_the_app_wrote_meanwhile`,
+  `the_newest_legacy_identity_wins_and_the_avatar_path_moves`, `nothing_is_due_without_an_old_folder`,
+  `sizes_read_in_megabytes_or_gigabytes`. Checked with a 1.1 GB throwaway folder: the dialog over Home with
+  progress, an interrupted copy redone, and Home switching to the migrated name and dark mode when it finished.

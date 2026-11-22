@@ -22,6 +22,7 @@ use sdl3::mouse::{Cursor, SystemCursor};
 use sdl3::video::Window;
 
 use crate::data::display_settings::HandSettings;
+use crate::data::legacy_migration::{LegacyMigrationJob, plan_legacy_migration, size_text};
 use crate::data::paths::{AppPaths, DEFAULT_IDENTITY, LEGACY_IDENTITIES};
 use crate::data::profile;
 use crate::data::settings::{Settings, keys};
@@ -33,8 +34,8 @@ use crate::platform::discord;
 use crate::sound::SoundPlayer;
 use crate::ui::context::Ui;
 use crate::ui::draw::TextOptions;
-use crate::ui::overlays::AppDialogSpec;
-use crate::ui::theme::{Theme, fixed};
+use crate::ui::overlays::{AppDialogSpec, DialogSpec};
+use crate::ui::theme::{Theme, Weight, fixed};
 use crate::ui::widgets::IconButtonOptions;
 pub use clipboard::{Clipboard, MemoryClipboard, SdlClipboard};
 use input::{KeyboardState, key_name, love_mouse_button};
@@ -328,6 +329,36 @@ pub struct App {
     /// Development hook (`GAMETABLE_CAPTURE=<file.png>`): save frame 30 and exit, like the
     /// original's `--shot`.
     capture_path: Option<PathBuf>,
+    /// The first launch's copy of the old app's save folder, running behind its progress dialog.
+    legacy_migration: Option<LegacyMigrationJob>,
+}
+
+/// The "Migrating Old Data..." dialog over whatever screen is open: what is happening, a progress
+/// bar, and how much has been copied.
+fn draw_legacy_migration_dialog(frame: &mut Frame, job: &LegacyMigrationJob) {
+    use std::sync::atomic::Ordering;
+    let fraction = job.progress.fraction();
+    let status = match fraction {
+        None => "Measuring your old data...".to_string(),
+        Some(_) => format!(
+            "{} of {} copied",
+            size_text(job.progress.bytes_copied.load(Ordering::Relaxed)),
+            size_text(job.progress.bytes_total.load(Ordering::Relaxed))
+        ),
+    };
+    let spec =
+        DialogSpec { title: Some("Migrating Old Data..."), width: 460.0, dismissible: false, ..DialogSpec::default() };
+    let message = "Bringing over your settings, decks and downloaded games from the previous version. \
+                   This only happens once.";
+    frame.dialog("legacy-migration", &spec, |frame, x, y, width| {
+        let message_height = frame.text_height(message, width, 14.0, Weight::Regular);
+        frame.text(message, x, y, TextOptions::new().width(width).size(14.0));
+        let bar_y = y + message_height + 16.0;
+        frame.progress_bar(x, bar_y, width, 6.0, fraction, None);
+        let status_options = TextOptions::new().width(width).size(12.0).color(frame.palette().on_surface_variant);
+        frame.text(&status, x, bar_y + 14.0, status_options);
+        message_height + 16.0 + 14.0 + 20.0
+    });
 }
 
 impl App {
@@ -337,13 +368,14 @@ impl App {
         sdl3::hint::set("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2");
         // Key names must not change with Shift (LÖVE reported "1", not "!").
         sdl3::hint::set("SDL_KEYCODE_OPTIONS", "unmodified,latin_letters");
-        let paths = match &options.identity {
-            Some(identity) => AppPaths::for_identity(identity)?,
-            None => {
-                let paths = AppPaths::for_identity(DEFAULT_IDENTITY)?;
-                paths.migrate_legacy_identity(&LEGACY_IDENTITIES);
-                paths
-            }
+        let paths = AppPaths::for_identity(options.identity.as_deref().unwrap_or(DEFAULT_IDENTITY))?;
+        // The old app's data is copied in the background once the window is up (only for the
+        // default identity, as before). Development hook: `GAMETABLE_MIGRATE_FROM=<folder name>`
+        // migrates from that sibling of the save folder instead, for any identity.
+        let legacy_migration_plan = match std::env::var("GAMETABLE_MIGRATE_FROM") {
+            Ok(old_identity) => plan_legacy_migration(&paths, &[old_identity.as_str()]),
+            Err(_) if options.identity.is_none() => plan_legacy_migration(&paths, &LEGACY_IDENTITIES),
+            Err(_) => None,
         };
         let settings = Settings::load_from_folder(paths.save_folder());
         let assets_folder = find_assets_folder();
@@ -412,6 +444,7 @@ impl App {
             started_at: Instant::now(),
             frame_count: 0,
             capture_path: std::env::var_os("GAMETABLE_CAPTURE").map(PathBuf::from),
+            legacy_migration: legacy_migration_plan.map(LegacyMigrationJob::start),
         };
         if !options.no_discord {
             discord::init();
@@ -421,6 +454,26 @@ impl App {
         let home = home();
         app.run_commands(vec![ScreenCommand::Push(home)]);
         Ok(app)
+    }
+
+    /// The old app's data is in place: picks up its settings, profile, theme and scale, as if the
+    /// app had started with them. A failed copy says so and carries on with fresh settings.
+    fn finish_legacy_migration(&mut self, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.settings = Settings::load_from_folder(self.paths.save_folder());
+                self.profile = PlayerProfile::load(&self.settings);
+                self.theme.is_dark = profile::dark_mode(&self.settings);
+                self.apply_scale(true);
+                self.ui.toast("Your data from the previous version is ready.", None);
+            }
+            Err(error) => self.ui.alert(
+                "Couldn't Migrate Old Data",
+                &format!(
+                    "Your data from the previous version couldn't be copied, so GameTable started fresh.\n\n{error}"
+                ),
+            ),
+        }
     }
 
     fn elapsed(&self) -> f64 {
@@ -745,6 +798,8 @@ impl App {
 
         let framed = self.framed;
         let maximized = self.window.is_maximized();
+        let legacy_migration = self.legacy_migration.take();
+        let mut legacy_migration_result = None;
         let ((title_bar, list), mut commands) = self.with_frame(|frame, screens| {
             pump_discord(frame, dt);
             for screen in screens.iter_mut() {
@@ -776,12 +831,22 @@ impl App {
                 let shows_back = screen.is_some_and(|screen| screen.shows_back()) && stack_depth > 1;
                 Some(draw_title_bar(frame, &title, shows_back, maximized, width))
             };
+            if let Some(job) = &legacy_migration {
+                match job.poll() {
+                    Some(result) => legacy_migration_result = Some(result),
+                    None => draw_legacy_migration_dialog(frame, job),
+                }
+            }
             frame.draw_app_overlays();
             frame.draw_tooltip();
             frame.theme.force_light = false;
             let list = frame.ui.end_frame();
             (title_bar, list)
         });
+        match legacy_migration_result {
+            Some(result) => self.finish_legacy_migration(result),
+            None => self.legacy_migration = legacy_migration,
+        }
         self.apply_cursor(self.ui.cursor());
         let mut keep_running = true;
         if let Some(title_bar) = title_bar {
