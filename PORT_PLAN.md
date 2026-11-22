@@ -1116,3 +1116,7 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   own colour, instead of the palette's first unused swatches (blue grey, white, black), which were hard to tell apart
   as board borders (`PRACTICE_SEAT_COLORS` in `screens/practice_select.rs`). Test:
   `practice_seats_are_red_green_and_blue_skipping_your_colour`.
+- 2026-11-22: **Release `v0.2.0+49`** (whole-table editor previews, Set Scale for placed widgets, player-coloured
+  board borders, red/green/blue practice seats). CI passed on all three platforms and attached the Windows (18.3 MB),
+  Linux (19.7 MB) and macOS (33.3 MB) zips. Client only; the server didn't change. The older GitHub releases
+  (`v0.2.0+39` to `v0.2.0+48`) were deleted at the user's request so only `+49` is offered; their git tags were kept.
