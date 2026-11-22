@@ -607,12 +607,12 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - [x] Card View **Shrink Card Art...** (2026-11-21; `screens/gamedef/shrink_card_art_dialog.rs`). A button beside
   Add Card rewrites every card's art (and each existing unique `_BACK` image) so none is taller than 1024 px. Each
   image's width follows from its own aspect ratio (area-average downscale, `RgbaImage::downscaled_to_max_height`);
-  images already short enough are untouched. PNG and JPEG keep their format (JPEG re-encoded at quality 90);
-  other formats (WebP, GIF, BMP) are skipped and counted. A confirmation first, then worker threads with a
+  images already short enough are untouched. PNG, JPEG and WebP keep their format (JPEG re-encoded at quality 90,
+  WebP lossy at Convert to WebP's quality 90); other formats (GIF, BMP) are skipped and counted. A confirmation first, then worker threads with a
   progress dialog and Cancel, then a summary; files are written to a temporary file and renamed over the original
   (`image_utils::shrink_image_to_max_height`). Cached textures reload as each file changes. The game definition
   itself doesn't change. Dev hook: `GAMETABLE_GAMEDEF_TAB=cards,shrinkart`. Tests:
-  `downscale_to_max_height_keeps_the_aspect_ratio`, `tall_png_and_jpeg_shrink_to_the_maximum_height`,
+  `downscale_to_max_height_keeps_the_aspect_ratio`, `tall_png_jpeg_and_webp_shrink_to_the_maximum_height`,
   `art_paths_cover_fronts_and_existing_unique_backs_once`, `summary_counts_each_kind_of_result`.
 - [x] Card View preview shows the selected card's **image resolution** (2026-11-21), e.g. "750 × 1050 px" under the
   image, or "Front · …" / "Back · …" when the back is shown too. Sizes come from the file headers without decoding
@@ -1074,3 +1074,6 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - 2026-11-21: **Release `v0.2.0+46`** (`.gamedef` admin uploads, last-seen times). The tag's CI run passed on all
   three platforms and attached the Windows (18.3 MB), Linux (19.7 MB) and macOS (33.2 MB) zips. The live server was
   redeployed (dry run first: all six games loaded, no errors; backup `~/backups/20261122-014612`).
+- 2026-11-21: **Shrink Card Art** now shrinks WebP art too, re-encoding it lossy at quality 90 (it was written
+  before the app had a WebP encoder, so WebP files were skipped). The summary's skip line reads "not PNG, JPEG or
+  WebP".

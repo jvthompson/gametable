@@ -84,7 +84,7 @@ impl ShrinkSummary {
         }
         if self.unsupported_format > 0 {
             lines.push(format!(
-                "Skipped {} image{} that {} not PNG or JPEG.",
+                "Skipped {} image{} that {} not PNG, JPEG or WebP.",
                 self.unsupported_format,
                 plural(self.unsupported_format),
                 if self.unsupported_format == 1 { "is" } else { "are" }
@@ -212,7 +212,7 @@ mod tests {
                 FileResult::Processed(ShrinkOutcome::Shrunk { original_size: (1, 2), new_size: (1, 1) }),
             ),
             ("b.png".to_string(), FileResult::Processed(ShrinkOutcome::AlreadySmallEnough)),
-            ("c.webp".to_string(), FileResult::Processed(ShrinkOutcome::UnsupportedFormat)),
+            ("c.tiff".to_string(), FileResult::Processed(ShrinkOutcome::UnsupportedFormat)),
             ("d.png".to_string(), FileResult::Missing),
             ("e.png".to_string(), FileResult::Failed("bad data".to_string())),
         ];

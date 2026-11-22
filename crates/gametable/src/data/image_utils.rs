@@ -10,8 +10,10 @@
 
 use std::path::Path;
 
+use crate::data::card_art_files::WEBP_QUALITY;
 use crate::data::file_system::lowercase_extension;
 use crate::graphics::image_data::RgbaImage;
+use crate::graphics::webp;
 
 /// JPEG quality for rotated art (System.Drawing's default encoder quality was 75).
 const JPEG_QUALITY: i32 = 90;
@@ -30,15 +32,17 @@ pub fn rotate_landscape_image(path: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Writes an image over `path` in the format its extension names (`.png`, `.jpg` or `.jpeg`).
+/// Writes an image over `path` in the format its extension names (`.png`, `.jpg`, `.jpeg` or
+/// `.webp`; WebP is written lossy at the same quality as Convert to WebP).
 /// The new image goes to a temporary file first and then replaces the original, so a failed
 /// write never leaves a half-written card image behind.
 pub(crate) fn replace_image_file(path: &str, image: &RgbaImage) -> Result<(), String> {
     let temporary_path = format!("{path}.gametable-tmp");
-    let written = if lowercase_extension(path) == ".png" {
-        image.encode_png().and_then(|bytes| std::fs::write(&temporary_path, bytes).map_err(|error| error.to_string()))
-    } else {
-        image.save_jpeg(Path::new(&temporary_path), JPEG_QUALITY)
+    let write_bytes = |bytes: Vec<u8>| std::fs::write(&temporary_path, bytes).map_err(|error| error.to_string());
+    let written = match lowercase_extension(path).as_str() {
+        ".png" => image.encode_png().and_then(write_bytes),
+        ".webp" => webp::encode_lossy(image, WEBP_QUALITY).and_then(write_bytes),
+        _ => image.save_jpeg(Path::new(&temporary_path), JPEG_QUALITY),
     };
     if let Err(error) = written {
         let _ = std::fs::remove_file(&temporary_path);
@@ -57,14 +61,14 @@ pub enum ShrinkOutcome {
     Shrunk { original_size: (u32, u32), new_size: (u32, u32) },
     /// Already no taller than the limit; the file is untouched.
     AlreadySmallEnough,
-    /// Not a PNG or JPEG, which are the formats that can be written back; the file is untouched.
+    /// Not a PNG, JPEG or WebP, which are the formats that can be written back; the file is untouched.
     UnsupportedFormat,
 }
 
 /// Scales one image file down in place so it is no taller than `max_height`, keeping its aspect
 /// ratio (the width follows from the image's own proportions) and its format.
 pub fn shrink_image_to_max_height(path: &str, max_height: u32) -> Result<ShrinkOutcome, String> {
-    if !matches!(lowercase_extension(path).as_str(), ".png" | ".jpg" | ".jpeg") {
+    if !matches!(lowercase_extension(path).as_str(), ".png" | ".jpg" | ".jpeg" | ".webp") {
         return Ok(ShrinkOutcome::UnsupportedFormat);
     }
     let image = RgbaImage::load(Path::new(path))?;
@@ -120,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn tall_png_and_jpeg_shrink_to_the_maximum_height() {
+    fn tall_png_jpeg_and_webp_shrink_to_the_maximum_height() {
         let folder = std::env::temp_dir().join(format!("gametable_shrink_{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let tall_png = folder.join("tall.png");
@@ -129,6 +133,8 @@ mod tests {
         image(500, 250).save_jpeg(&wide_jpeg, 90).unwrap();
         let short_png = folder.join("short.png");
         image(50, 70).save_png(&short_png).unwrap();
+        let tall_webp = folder.join("tall.webp");
+        std::fs::write(&tall_webp, webp::encode_lossy(&image(200, 400), WEBP_QUALITY).unwrap()).unwrap();
         let path_of = |path: &std::path::PathBuf| path.to_string_lossy().into_owned();
 
         assert_eq!(
@@ -143,12 +149,20 @@ mod tests {
         );
         assert_eq!(shrink_image_to_max_height(&path_of(&short_png), 100), Ok(ShrinkOutcome::AlreadySmallEnough));
         assert_eq!(
-            shrink_image_to_max_height(folder.join("x.webp").to_str().unwrap(), 100),
+            shrink_image_to_max_height(&path_of(&tall_webp), 100),
+            Ok(ShrinkOutcome::Shrunk { original_size: (200, 400), new_size: (50, 100) })
+        );
+        let reloaded_webp_bytes = std::fs::read(&tall_webp).unwrap();
+        assert!(webp::is_webp(&reloaded_webp_bytes), "a shrunk WebP stays WebP");
+        let reloaded_webp = RgbaImage::decode(&reloaded_webp_bytes).unwrap();
+        assert_eq!((reloaded_webp.width, reloaded_webp.height), (50, 100));
+        assert_eq!(
+            shrink_image_to_max_height(folder.join("x.tiff").to_str().unwrap(), 100),
             Ok(ShrinkOutcome::UnsupportedFormat)
         );
         assert!(shrink_image_to_max_height(folder.join("missing.png").to_str().unwrap(), 100).is_err());
         // No temporary files are left behind.
-        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 3);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 4);
         std::fs::remove_dir_all(&folder).unwrap();
     }
 }
