@@ -612,7 +612,8 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   progress dialog and Cancel, then a summary; files are written to a temporary file and renamed over the original
   (`image_utils::shrink_image_to_max_height`). Cached textures reload as each file changes. The game definition
   itself doesn't change. Dev hook: `GAMETABLE_GAMEDEF_TAB=cards,shrinkart`. Tests:
-  `downscale_to_max_height_keeps_the_aspect_ratio`, `tall_png_jpeg_and_webp_shrink_to_the_maximum_height`,
+  `downscale_to_max_height_keeps_the_aspect_ratio`, `tall_png_and_jpeg_shrink_to_the_maximum_height`,
+  `tall_webp_shrinks_and_stays_webp` (skipped without libwebp),
   `art_paths_cover_fronts_and_existing_unique_backs_once`, `summary_counts_each_kind_of_result`.
 - [x] Card View preview shows the selected card's **image resolution** (2026-11-21), e.g. "750 × 1050 px" under the
   image, or "Front · …" / "Back · …" when the back is shown too. Sizes come from the file headers without decoding
@@ -1077,3 +1078,6 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - 2026-11-21: **Shrink Card Art** now shrinks WebP art too, re-encoding it lossy at quality 90 (it was written
   before the app had a WebP encoder, so WebP files were skipped). The summary's skip line reads "not PNG, JPEG or
   WebP".
+- 2026-11-21: `v0.2.0+47` was tagged but its CI failed on macOS: the new WebP shrink test needed libwebp, which the
+  test runner doesn't have. The WebP check moved to its own test that skips without libwebp, like the other WebP
+  tests; released as `v0.2.0+48` (the +47 tag is left without a release).
