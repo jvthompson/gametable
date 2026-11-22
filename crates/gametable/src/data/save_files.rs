@@ -132,6 +132,39 @@ pub fn local_now() -> LocalDateTime {
     }
 }
 
+/// A unix time (seconds) as local date and time, in the computer's time zone.
+pub fn local_date_time_from_unix(unix_seconds: i64) -> Option<LocalDateTime> {
+    use sdl3::sys::time::{SDL_DateTime, SDL_TimeToDateTime};
+    let mut date_time = SDL_DateTime::default();
+    let ticks = unix_seconds.checked_mul(1_000_000_000)?;
+    // SAFETY: the pointer refers to a valid local variable for the duration of the call.
+    if !unsafe { SDL_TimeToDateTime(ticks, &mut date_time, true) } {
+        return None;
+    }
+    Some(LocalDateTime {
+        year: date_time.year,
+        month: date_time.month as u32,
+        day: date_time.day as u32,
+        hour: date_time.hour as u32,
+        minute: date_time.minute as u32,
+        second: date_time.second as u32,
+        millisecond: 0,
+    })
+}
+
+/// "Last seen 2026-11-21 15:45" (local time) for a unix time, or "Never signed in" for 0.
+pub fn last_seen_text(unix_seconds: i64) -> String {
+    if unix_seconds <= 0 {
+        return "Never signed in".to_string();
+    }
+    match local_date_time_from_unix(unix_seconds) {
+        Some(time) => {
+            format!("Last seen {:04}-{:02}-{:02} {:02}:{:02}", time.year, time.month, time.day, time.hour, time.minute)
+        }
+        None => "Last seen: unknown".to_string(),
+    }
+}
+
 /// The name the in-game Save Log button gives a log: `gamelog_YYYY-MM-DD_HHMMSS.txt`.
 pub fn log_file_name(time: &LocalDateTime) -> String {
     format!(
@@ -201,5 +234,14 @@ mod tests {
     fn local_time_is_plausible() {
         let now = local_now();
         assert!(now.year >= 2024 && (1..=12).contains(&now.month));
+    }
+
+    #[test]
+    fn last_seen_reads_as_a_local_date_and_time() {
+        assert_eq!(last_seen_text(0), "Never signed in");
+        // 2026-11-21 12:00 UTC is still the 21st in every time zone from UTC-11 to UTC+11.
+        let text = last_seen_text(1_795_262_400);
+        assert!(text.starts_with("Last seen 2026-11-21 "), "{text}");
+        assert_eq!(text.len(), "Last seen 2026-11-21 12:00".len());
     }
 }

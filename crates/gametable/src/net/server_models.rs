@@ -74,6 +74,8 @@ pub struct ServerUser {
     /// Admin listing only.
     pub disabled: bool,
     pub online: bool,
+    /// Admin listing only: when they were last signed in, in unix seconds (0 = never).
+    pub last_seen_at: i64,
 }
 
 impl ServerUser {
@@ -90,6 +92,7 @@ impl ServerUser {
             spectating: flag(value, "spectating"),
             disabled: flag(value, "disabled"),
             online: flag(value, "online"),
+            last_seen_at: number(value, "lastSeenAt") as i64,
         }
     }
 }

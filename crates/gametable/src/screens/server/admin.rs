@@ -10,6 +10,7 @@ use gametable_core::util::trim_lua_whitespace;
 
 use crate::app::{Frame, Screen};
 use crate::data::file_system::list_files_recursive;
+use crate::data::save_files::last_seen_text;
 use crate::net::admin_files::{FileUpload, UploadProgress, validate_game_zip};
 use crate::net::server_client::{SharedServer, password_error, password_hash, response_message, response_ok};
 use crate::net::server_models::{ServerGameInfo, ServerUser};
@@ -23,9 +24,12 @@ use crate::ui::overlays::{ConfirmResponse, DialogAction, DialogResponse, DialogS
 use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::{Weight, fixed, with_alpha};
 use crate::ui::widgets::{ButtonOptions, ButtonVariant, Choice, IconButtonOptions, ScrollbarStyle, ToggleOptions};
+use gametable_core::game_archive::{GAME_PACKAGE_EXTENSION, is_game_package_path};
 
 const TABS: [&str; 4] = ["Users", "Server", "Games", "Files"];
-const ZIP_FILTERS: &[FileFilter] = &[FileFilter { name: "Zip archive", extensions: &["zip"] }];
+/// Games upload as a `.gamedef` package (kept as one on the server) or a `.zip` (unzipped there).
+const GAME_UPLOAD_FILTERS: &[FileFilter] =
+    &[FileFilter { name: "Game package or zip", extensions: &[GAME_PACKAGE_EXTENSION, "zip"] }];
 
 fn only_digits(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|character| character.is_ascii_digit())
@@ -695,11 +699,14 @@ impl AdminScreen {
             if user.disabled {
                 tags.push("Disabled");
             }
+            let last_seen = (!user.online).then(|| last_seen_text(user.last_seen_at));
             if user.online {
                 tags.push("Online");
+            } else if let Some(last_seen) = &last_seen {
+                tags.push(last_seen);
             }
             let color = if user.disabled { fixed::RED } else { palette.on_surface_variant };
-            let options = TextOptions::new().middle_of(52.0).size(13.0).width(inner * 0.2).color(color);
+            let options = TextOptions::new().middle_of(52.0).size(13.0).width(inner * 0.2).color(color).ellipsis();
             frame.text(&tags.join(" · "), column_x, user_y, options);
             if region.clicked {
                 clicked = Some(user.clone());
@@ -974,7 +981,9 @@ impl AdminScreen {
             return;
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_secs());
-        let upload_name = format!("install_{id}_{now}.zip");
+        // The server keeps a `.gamedef` as a package and unzips a `.zip`, by the upload's name.
+        let extension = if is_game_package_path(zip_path) { GAME_PACKAGE_EXTENSION } else { "zip" };
+        let upload_name = format!("install_{id}_{now}.{extension}");
         let (host, port, token) = self.upload_token();
         let upload = FileUpload::start(&host, port, token, "", &upload_name, zip_path);
         self.install = Some(GameInstall::Uploading { upload, upload_name });
@@ -1029,8 +1038,8 @@ impl AdminScreen {
         let options =
             ButtonOptions::variant(ButtonVariant::Outlined).icon("upload_file").id("ag:upload").disabled(installing);
         if frame.button(upload_label, upload_x, row_y - 6.0, Some(upload_width), Some(40.0), &options) && !installing {
-            let picker =
-                FilePicker::new(frame, PickerMode::File, Some("Choose a game .zip file"), Some(ZIP_FILTERS), None);
+            let title = "Choose a game .gamedef or .zip file";
+            let picker = FilePicker::new(frame, PickerMode::File, Some(title), Some(GAME_UPLOAD_FILTERS), None);
             self.picker = Some((picker, PickerPurpose::GameZip));
         }
         let options =

@@ -251,11 +251,12 @@ impl Server {
                 && state.client_by_user_id.get(&user.id) == Some(&client_id)
             {
                 state.client_by_user_id.remove(&user.id);
-                was_online_as = Some(user.name);
+                was_online_as = Some((user.id, user.name));
             }
             (was_online_as, room_id)
         };
-        if let Some(name) = &was_online_as {
+        if let Some((user_id, name)) = &was_online_as {
+            let _ = self.store().record_user_seen(user_id, crate::store::unix_now());
             log!(self, "{name} disconnected");
         }
         if let Some(room_id) = room_id {

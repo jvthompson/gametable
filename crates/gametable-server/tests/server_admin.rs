@@ -70,6 +70,17 @@ async fn admin() {
     assert!(logged_in.ok(), "login with reset password: {:?}", logged_in.0);
 
     assert_eq!(a.request("adminUserDelete", object([("id", a_id.as_str().into())])).await.error(), "self");
+    // Everyone who has signed in has a last-seen time.
+    let users = a.request("adminUsers", empty()).await;
+    let last_seen: Vec<f64> = users
+        .get("users")
+        .and_then(JsonValue::as_array)
+        .unwrap()
+        .iter()
+        .map(|user| user.get("lastSeenAt").and_then(JsonValue::as_f64).unwrap_or(0.0))
+        .collect();
+    assert!(last_seen.iter().all(|seen| *seen > 0.0), "{last_seen:?}");
+
     assert!(a.request("adminUserDelete", object([("id", b_id.as_str().into())])).await.ok());
     let users = a.request("adminUsers", empty()).await;
     assert_eq!(users.get("users").and_then(JsonValue::as_array).map(Vec::len), Some(1), "user not deleted");
@@ -263,6 +274,25 @@ async fn admin_games() {
     upload_staged(&server.address, &token, "install3.zip", &slip).await;
     assert_eq!(a.request("adminGameInstall", install("install3.zip")).await.error(), "badZip");
     assert!(!server.data_folder.join("evil.txt").exists());
+
+    // A .gamedef upload is kept as a package, not unzipped, and is served like any game.
+    let package = build_zip(&[
+        ("packed/gamedef.json", br#"{"id": "packed", "name": "Packed Game"}"#),
+        ("packed/s1/c1.png", b"packed-image-bytes"),
+    ]);
+    upload_staged(&server.address, &token, "install6.gamedef", &package).await;
+    let installed_package = a.request("adminGameInstall", install("install6.gamedef")).await;
+    assert!(installed_package.ok() && installed_package.text("gameId") == "packed", "{:?}", installed_package.0);
+    let games_folder = server.data_folder.join("games");
+    assert!(games_folder.join("packed.gamedef").is_file());
+    assert!(!games_folder.join("packed").exists(), "a package is not unzipped");
+    assert!(a.request("gameManifest", object([("gameId", "packed".into())])).await.ok());
+    upload_staged(&server.address, &token, "install7.gamedef", &package).await;
+    assert_eq!(a.request("adminGameInstall", install("install7.gamedef")).await.error(), "exists");
+    let files = a.request("adminFileList", object([("gameId", "packed".into()), ("path", "".into())])).await;
+    assert_eq!(files.error(), "packaged");
+    assert!(a.request("adminGameDelete", object([("gameId", "packed".into())])).await.ok());
+    assert!(!games_folder.join("packed.gamedef").exists());
 
     let two_roots = build_zip(&[("one/gamedef.json", br#"{"id": "one"}"#), ("two/x.png", b"x")]);
     upload_staged(&server.address, &token, "install5.zip", &two_roots).await;

@@ -247,6 +247,7 @@ impl Request<'_> {
         {
             user.tokens = balance;
         }
+        let _ = server.store().record_user_seen(&user.id, crate::store::unix_now());
         let replaced_client = {
             let mut state = server.state();
             if state.user_of(self.client_id).is_some() {

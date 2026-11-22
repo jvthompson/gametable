@@ -3,7 +3,7 @@
 //! The schema is identical to the Go server's, so the Rust server can open an existing
 //! `cardflux.db`. Booleans are stored as 0/1 integers and timestamps as unix seconds, as before.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::Path;
 
@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS chat (
   name TEXT NOT NULL,
   text TEXT NOT NULL,
   at INTEGER NOT NULL
+);
+-- GameTable addition: when each user last signed in or disconnected (a table of its own, so the
+-- users table keeps the Go server's columns).
+CREATE TABLE IF NOT EXISTS user_last_seen (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  last_seen_at INTEGER NOT NULL
 );
 ";
 
@@ -502,6 +508,35 @@ impl Store {
             self.connection.prepare(&format!("SELECT {USER_COLUMNS} FROM users ORDER BY name COLLATE NOCASE"))?;
         let users = statement.query_map([], user_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(users)
+    }
+
+    /// Records that a user was online at `unix_seconds` (on signing in and on disconnecting).
+    pub fn record_user_seen(&self, user_id: &str, unix_seconds: i64) -> StoreResult<()> {
+        self.connection.execute(
+            "INSERT INTO user_last_seen (user_id, last_seen_at) VALUES (?1, ?2)
+             ON CONFLICT(user_id) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at)",
+            params![user_id, unix_seconds],
+        )?;
+        Ok(())
+    }
+
+    /// When each user was last seen, in unix seconds. Users seen before this was recorded fall
+    /// back to their sessions' last use; users never seen are left out.
+    pub fn last_seen_times(&self) -> StoreResult<HashMap<String, i64>> {
+        let mut statement = self.connection.prepare(
+            "SELECT users.id, MAX(COALESCE(user_last_seen.last_seen_at, 0),
+                                 COALESCE((SELECT MAX(last_used_at) FROM sessions WHERE sessions.user_id = users.id), 0))
+             FROM users LEFT JOIN user_last_seen ON user_last_seen.user_id = users.id",
+        )?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+        let mut times = HashMap::new();
+        for row in rows {
+            let (user_id, last_seen_at) = row?;
+            if last_seen_at > 0 {
+                times.insert(user_id, last_seen_at);
+            }
+        }
+        Ok(times)
     }
 
     /// Admins that are not disabled.

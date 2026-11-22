@@ -1063,3 +1063,11 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   run passed on all three platforms and attached the Windows (18.3 MB), Linux (19.7 MB) and macOS (33.2 MB) zips.
   The live server was redeployed (dry run first: all six games loaded, no errors; backup
   `~/backups/20261122-004558`), so it can now serve `.gamedef` packages.
+- 2026-11-21: Server Administration **Upload New Game** accepts `.gamedef` packages as well as `.zip`: the picker
+  shows both, the upload keeps the file's kind in its name (`install_<id>_<time>.gamedef`), and the server keeps a
+  `.gamedef` as `<games>/<id>.gamedef` (same checks as a zip: one root folder, id match, safe paths, size limit, no
+  existing game) instead of unzipping it. Older servers still unzip it. Tested in `tests/server_admin.rs`.
+- 2026-11-21: The admin Users list shows **"Last seen <local date time>"** in Status for users who aren't online
+  ("Never signed in" when unknown). The server records sign-ins and disconnects in a new `user_last_seen` table
+  (its own table, so the users table keeps the Go server's columns and a rollback still works); users seen before
+  it existed fall back to their sessions' last use. `adminUsers` sends `lastSeenAt` (unix seconds).

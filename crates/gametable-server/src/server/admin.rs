@@ -1,6 +1,7 @@
 //! Admin tools: accounts, server settings, rescans, collections, game files and game installs.
 //! Port of `admin.go`, `admin_files.go` and `admin_games.go`.
 
+use gametable_core::game_archive::{GAME_PACKAGE_EXTENSION, is_game_package_path};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,10 @@ use crate::store::{ServerSettings, StoreError, UserUpdate};
 impl Server {
     /// Every account, with whether it is online (the Go server's `adminUserList`).
     fn admin_user_list(&self) -> Option<JsonValue> {
-        let users = self.store().users().ok()?;
+        let (users, last_seen_times) = {
+            let store = self.store();
+            (store.users().ok()?, store.last_seen_times().unwrap_or_default())
+        };
         let state = self.state();
         let users = users.into_iter().map(|user| {
             sorted_object([
@@ -30,6 +34,8 @@ impl Server {
                 ("tokens", user.tokens.into()),
                 ("createdAt", user.created_at.into()),
                 ("online", state.client_by_user_id.contains_key(&user.id).into()),
+                // Unix seconds; 0 when the user has never been seen.
+                ("lastSeenAt", last_seen_times.get(&user.id).copied().unwrap_or(0).into()),
             ])
         });
         Some(JsonValue::Array(users.collect()))
@@ -583,6 +589,20 @@ impl Request<'_> {
             return Err(("exists", "A game with this id already exists. Remove it first to replace it.".to_string()));
         }
 
+        // A `.gamedef` upload is kept as it is, as a package the library plays in place.
+        if is_game_package_path(&zip_path.to_string_lossy()) {
+            let package_path = games_folder.join(format!("{game_id}.{GAME_PACKAGE_EXTENSION}"));
+            if package_path.exists() || games_folder.join(&game_id).exists() {
+                return Err((
+                    "exists",
+                    "A game with this id already exists. Remove it first to replace it.".to_string(),
+                ));
+            }
+            drop(archive);
+            return std::fs::rename(zip_path, &package_path)
+                .map(|()| game_id)
+                .map_err(|_| ("internal", "Could not move the package into the games folder.".to_string()));
+        }
         let target = games_folder.join(&game_id);
         std::fs::create_dir_all(&target)
             .map_err(|_| ("internal", "Could not create the game's folder.".to_string()))?;
