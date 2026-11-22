@@ -1081,3 +1081,5 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
 - 2026-11-21: `v0.2.0+47` was tagged but its CI failed on macOS: the new WebP shrink test needed libwebp, which the
   test runner doesn't have. The WebP check moved to its own test that skips without libwebp, like the other WebP
   tests; released as `v0.2.0+48` (the +47 tag is left without a release).
+- 2026-11-21: **Release `v0.2.0+48`** (Shrink Card Art shrinks WebP). CI passed on all three platforms and attached
+  the Windows (18.3 MB), Linux (19.7 MB) and macOS (33.2 MB) zips. Client only; the server didn't change.
