@@ -135,21 +135,18 @@ impl ServerGame {
         if self.manifest_file(path).is_none() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
         }
+        // The definition is listed as `gamedef.json` whatever its file's case (`GameDef.json` can't
+        // be opened by that name on Linux), so it is served from the bytes read when scanning,
+        // which are also what its manifest hash was computed from.
+        if path == "gamedef.json" {
+            return Ok(self.definition_bytes.clone());
+        }
         if let Some(package) = &self.package {
-            return package.read(&self.package_entry_path(package, path));
+            return package.read(path);
         }
         match &self.folder {
             None => Ok(self.definition_bytes.clone()), // embedded games only have gamedef.json
             Some(folder) => std::fs::read(folder.join(path)),
-        }
-    }
-
-    /// Where a manifest path is inside the package: the definition is listed as `gamedef.json`
-    /// whatever its case in the package.
-    fn package_entry_path(&self, package: &GameArchive, manifest_path: &str) -> String {
-        match package.game_definition_path() {
-            Some(definition_path) if manifest_path == "gamedef.json" => definition_path.to_string(),
-            _ => manifest_path.to_string(),
         }
     }
 
@@ -163,8 +160,11 @@ impl ServerGame {
         if self.manifest_file(path).is_none() {
             return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
         }
+        if path == "gamedef.json" {
+            return Ok(Box::new(std::io::Cursor::new(self.definition_bytes.clone())));
+        }
         if let Some(package) = &self.package {
-            return Ok(Box::new(std::io::Cursor::new(package.read(&self.package_entry_path(package, path))?)));
+            return Ok(Box::new(std::io::Cursor::new(package.read(path)?)));
         }
         match &self.folder {
             None => Ok(Box::new(std::io::Cursor::new(self.definition_bytes.clone()))),
