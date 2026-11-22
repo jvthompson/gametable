@@ -607,7 +607,7 @@ impl TableScreen {
     // -----------------------------------------------------------------------
 
     /// One board on the table: its image cover-fit (at half opacity) inside the rounded marker,
-    /// turned as the board is, and the border.
+    /// turned as the board is, and the border (its owner's colour for a player board).
     fn draw_board(&self, frame: &mut Frame, board: &BoardOnTable) {
         let rect = board.world_rect;
         let (x, y) = self.world_to_screen(rect.x, rect.y);
@@ -646,7 +646,7 @@ impl TableScreen {
             }
             list.set_stencil_test(None);
         }
-        let border = Color { alpha: 1.0, ..self.playmat_border_color(frame) };
+        let border = Color { alpha: 1.0, ..self.board_border_color(&board.owner_key) };
         let list = frame.ui.list();
         list.set_color(border);
         list.set_line_width(4.0 * self.zoom);

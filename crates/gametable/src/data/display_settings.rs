@@ -175,14 +175,15 @@ pub const DEFAULT_SELECTION_COLOR: ArgbColor = 0xFFFF_EB3B; // Material yellow 5
 // current-turn highlight (the original CardTable used greens: 0xFF0B6E4F, 0xFF063D2A, 0xFF00C853).
 // A game's own colours, and anything a player picked in Settings > Table, still win.
 pub const DEFAULT_FELT_COLOR: ArgbColor = 0xFF19_1970;
-pub const DEFAULT_PLAYMAT_BORDER_COLOR: ArgbColor = 0xFF0A_0A4A;
+/// Shared game boards' border (a player's own boards are bordered in their player colour), also
+/// the outline of the table in the editor previews.
+pub const SHARED_BOARD_BORDER_COLOR: ArgbColor = 0xFF0A_0A4A;
 pub const DEFAULT_CURRENT_TURN_COLOR: ArgbColor = 0xFF00_E5FF;
 
 /// A colour that resolves player override → the current game's own colour → a default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableColor {
     Felt,
-    PlaymatBorder,
     CurrentTurn,
 }
 
@@ -190,7 +191,6 @@ impl TableColor {
     fn storage_key(self) -> &'static str {
         match self {
             TableColor::Felt => keys::FELT_COLOR,
-            TableColor::PlaymatBorder => keys::PLAYMAT_BORDER_COLOR,
             TableColor::CurrentTurn => keys::CURRENT_TURN_COLOR,
         }
     }
@@ -198,7 +198,6 @@ impl TableColor {
     pub fn default_color(self) -> ArgbColor {
         match self {
             TableColor::Felt => DEFAULT_FELT_COLOR,
-            TableColor::PlaymatBorder => DEFAULT_PLAYMAT_BORDER_COLOR,
             TableColor::CurrentTurn => DEFAULT_CURRENT_TURN_COLOR,
         }
     }

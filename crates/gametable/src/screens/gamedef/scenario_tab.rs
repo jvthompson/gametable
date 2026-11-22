@@ -17,7 +17,7 @@ use gametable_core::models::{
 use gametable_core::uuid::new_v4_uuid;
 
 use crate::app::Frame;
-use crate::data::display_settings::TableColor;
+use crate::data::display_settings::{SHARED_BOARD_BORDER_COLOR, TableColor};
 use crate::data::file_system::join_path;
 use crate::graphics::draw_list::Color;
 use crate::graphics::tessellation::DrawMode;
@@ -25,15 +25,15 @@ use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::board_zone_placement::{
     draw_zone_label, draw_zone_stand_in, placed_zone_label, zone_world_size,
 };
-use crate::screens::gamedef::widget_scale_dialog::{WidgetScaleDialog, WidgetScaleResponse};
 use crate::screens::gamedef::common::{
     FIELD_HEIGHT, FileImport, GAP, ImportResponse, PAD, SectionAction, StableKeys, ToggleRow, column, display_card,
     display_card_backs, orientation_choices,
 };
 use crate::screens::gamedef::table_board_placement::{
-    MAXIMUM_PREVIEW_PLAYERS, PreviewCamera, ZOOM_STEP, clamp_to_reachable_table, draw_placed_boards,
-    draw_preview_felt, draw_zoom_controls, is_on_reachable_table,
+    MAXIMUM_PREVIEW_PLAYERS, PreviewCamera, ZOOM_STEP, clamp_to_reachable_table, draw_placed_boards, draw_preview_felt,
+    draw_zoom_controls, is_on_reachable_table,
 };
+use crate::screens::gamedef::widget_scale_dialog::{WidgetScaleDialog, WidgetScaleResponse};
 use crate::screens::gamedef::zones_tab::{
     ZonePick, bag_token_images, deck_type_field, draw_card_entries, draw_counter_fields, draw_token_bag_fields,
     kind_choices, side_choices, widget_kind_choices,
@@ -1640,9 +1640,7 @@ impl ScenarioTab {
         frame.fill_rect(area_x, area_y, area_width, area_height, 8.0, palette.surface_container_highest);
         frame.ui.push_clip(area_x, area_y, area_width, area_height);
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
-        let border =
-            argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
-        draw_preview_felt(frame, &view, felt, border);
+        draw_preview_felt(frame, &view, felt, argb_color(SHARED_BOARD_BORDER_COLOR));
         draw_placed_boards(frame, &folder, &game, &view, self.board_preview_players);
         let canvas =
             frame.ui.region("scen:place:canvas", area_x, area_y, area_width, area_height, RegionOptions::default());
@@ -1718,8 +1716,12 @@ impl ScenarioTab {
             }
             if region.held {
                 let target = self.drag_target(false, placement_index);
-                let (fraction_x, fraction_y) =
-                    reachable_table_fraction((mouse_x, mouse_y), (canvas_x, canvas_y), scale, (half_width, half_height));
+                let (fraction_x, fraction_y) = reachable_table_fraction(
+                    (mouse_x, mouse_y),
+                    (canvas_x, canvas_y),
+                    scale,
+                    (half_width, half_height),
+                );
                 let placements = &mut model.game.scenarios[index].placements;
                 if let Some(target) = placements.get_mut(target) {
                     target.x = fraction_x;

@@ -1104,3 +1104,15 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   `scales_snap_to_five_percent_steps_within_range`, `only_widgets_offer_set_scale_and_labels_show_a_changed_scale`,
   `a_token_scale_is_its_size_against_the_default_and_back`. Checked on a scratch ahlcg copy (both editors and a
   practice table: counters at 175% and 60%, the Chaos Bag at 200%).
+- 2026-11-22: **Player boards are bordered in their owner's player colour** (so everyone can tell whose board is
+  whose); shared boards keep a fixed dark border (`SHARED_BOARD_BORDER_COLOR`, the old default). The **Board Border
+  Color** setting is gone from Settings > Table and from the editor's Game Settings tab (`TableColor::PlaymatBorder`
+  and the `playmat_border_color` settings key removed). A game's `playmatBorderColor` is still read and written so
+  saving doesn't drop it, but nothing uses it. The editor previews colour each seat's boards in a distinct seat colour
+  (red, green, blue, orange, purple, yellow); the Board Preview shows a player board in player 1's red. Test:
+  `player_boards_are_bordered_in_their_seats_colour_and_shared_boards_in_one_colour`. Checked on a scratch ahlcg copy
+  (practice table: your board in your colour; Table Preview and Card Placement canvas).
+- 2026-11-22: **Practice seats** after yours are now red, green and blue (then orange, purple, yellow), skipping your
+  own colour, instead of the palette's first unused swatches (blue grey, white, black), which were hard to tell apart
+  as board borders (`PRACTICE_SEAT_COLORS` in `screens/practice_select.rs`). Test:
+  `practice_seats_are_red_green_and_blue_skipping_your_colour`.

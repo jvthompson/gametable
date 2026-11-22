@@ -27,7 +27,6 @@ fn percent(value: f32) -> String {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GameColors {
     pub table_color: Option<String>,
-    pub playmat_border_color: Option<String>,
     pub current_turn_color: Option<String>,
 }
 
@@ -279,17 +278,6 @@ impl SettingsDialog {
                 "Tabletop Color",
                 "Reset table color",
                 colors.table_color.as_deref(),
-                x,
-                row_y,
-                width,
-            );
-            row_y += Self::table_color_row(
-                frame,
-                TableColor::PlaymatBorder,
-                "settings:playmatBorderColor",
-                "Board Border Color",
-                "Reset board border color",
-                colors.playmat_border_color.as_deref(),
                 x,
                 row_y,
                 width,

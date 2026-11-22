@@ -11,7 +11,7 @@ use gametable_core::geometry::{WORLD_HEIGHT, WORLD_WIDTH};
 use gametable_core::models::{BoardKind, CardDefinition, GameBoardDefinition};
 
 use crate::app::Frame;
-use crate::data::display_settings::TableColor;
+use crate::data::display_settings::{SHARED_BOARD_BORDER_COLOR, TableColor};
 use crate::data::file_system::join_path;
 use crate::graphics::draw_list::{Color, StencilCompare};
 use crate::graphics::tessellation::DrawMode;
@@ -19,7 +19,8 @@ use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::board_zone_placement::{BoardScreenRect, ZonePlacementEditor};
 use crate::screens::gamedef::common::{PAD, SectionAction, StableKeys, column};
 use crate::screens::gamedef::table_board_placement::{
-    PreviewCamera, TableBoardEditor, board_display_name, board_kind_label, canvas_rect, draw_center_marker,
+    PreviewCamera, TableBoardEditor, board_display_name, board_kind_label, board_preview_border, canvas_rect,
+    draw_center_marker,
 };
 use crate::screens::token_choosers::{ChooserResponse, TokenChooser};
 use crate::table::board_layout::board_size;
@@ -206,10 +207,18 @@ impl GameBoardTab {
         let game = &model.game;
         let (canvas_x, canvas_y, canvas_width, canvas_height, scale) = canvas_rect(x, y, width, height);
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
-        let border =
-            argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
+        let table_outline = argb_color(SHARED_BOARD_BORDER_COLOR);
+        let border = board_preview_border(board.kind);
         frame.fill_rect(canvas_x, canvas_y, canvas_width, canvas_height, 0.0, felt);
-        frame.outline_rect(canvas_x + 1.0, canvas_y + 1.0, canvas_width - 2.0, canvas_height - 2.0, 0.0, border, 1.0);
+        frame.outline_rect(
+            canvas_x + 1.0,
+            canvas_y + 1.0,
+            canvas_width - 2.0,
+            canvas_height - 2.0,
+            0.0,
+            table_outline,
+            1.0,
+        );
         let canvas = frame.ui.region(
             "gb:preview:canvas",
             canvas_x,

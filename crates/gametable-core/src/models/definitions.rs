@@ -1089,6 +1089,9 @@ pub struct GameDefinition {
     pub sets: Vec<GameSet>,
     /// Optional `"#RRGGBB"`; absent defers to the player's or app's default.
     pub table_color: Option<String>,
+    /// The original's board border colour. GameTable no longer uses it (player boards are
+    /// bordered in their owner's colour, shared boards in a fixed colour) but keeps it, so saving a
+    /// game doesn't drop it from the file.
     pub playmat_border_color: Option<String>,
     pub current_turn_color: Option<String>,
     /// The game's boards (the original's `playmats`; GameTable writes them as `gameBoards`).

@@ -18,6 +18,7 @@
 
 use std::f32::consts::PI;
 
+use gametable_core::color::BOARD_WIDGET_COLOR_PALETTE;
 use gametable_core::geometry::{TABLE_PAN_MARGIN_FRACTION, WORLD_HEIGHT, WORLD_WIDTH};
 use gametable_core::models::{
     BoardKind, BoardPlayerPlacement, BoardTablePlacement, GameBoardDefinition, GameDefinition, PlayerInfo, PlayerRole,
@@ -26,7 +27,7 @@ use gametable_core::models::{
 use gametable_core::seat_utils::compute_hand_row_layout;
 
 use crate::app::Frame;
-use crate::data::display_settings::TableColor;
+use crate::data::display_settings::{SHARED_BOARD_BORDER_COLOR, TableColor};
 use crate::data::file_system::join_path;
 use crate::graphics::draw_list::{Color, StencilCompare};
 use crate::graphics::tessellation::DrawMode;
@@ -53,12 +54,8 @@ const WORLD_H: f32 = WORLD_HEIGHT as f32;
 const REACHABLE_MARGIN_X: f32 = WORLD_W * TABLE_PAN_MARGIN_FRACTION as f32;
 const REACHABLE_MARGIN_Y: f32 = WORLD_H * TABLE_PAN_MARGIN_FRACTION as f32;
 /// The whole reachable table, in world units: (left, top, width, height).
-pub const REACHABLE_WORLD_RECT: (f32, f32, f32, f32) = (
-    -REACHABLE_MARGIN_X,
-    -REACHABLE_MARGIN_Y,
-    WORLD_W + 2.0 * REACHABLE_MARGIN_X,
-    WORLD_H + 2.0 * REACHABLE_MARGIN_Y,
-);
+pub const REACHABLE_WORLD_RECT: (f32, f32, f32, f32) =
+    (-REACHABLE_MARGIN_X, -REACHABLE_MARGIN_Y, WORLD_W + 2.0 * REACHABLE_MARGIN_X, WORLD_H + 2.0 * REACHABLE_MARGIN_Y);
 /// How much darker the reachable margin's felt is than the table's.
 const MARGIN_FELT_BRIGHTNESS: f32 = 0.7;
 /// The seat the preview is seen from.
@@ -153,12 +150,46 @@ fn seat_number_of(owner_key: &str) -> Option<i64> {
     owner_key.strip_prefix("seat").and_then(|number| number.parse().ok())
 }
 
+/// The preview seats' player colours, one per seat up to the most seats the preview offers:
+/// clearly different palette colours (red, green, blue, orange, purple, yellow, as practice games
+/// colour their seats), skipping the palette's neutrals so every seat's boards stand out.
+const PREVIEW_SEAT_COLORS: [u32; MAXIMUM_PREVIEW_PLAYERS] = [
+    BOARD_WIDGET_COLOR_PALETTE[3],
+    BOARD_WIDGET_COLOR_PALETTE[6],
+    BOARD_WIDGET_COLOR_PALETTE[7],
+    BOARD_WIDGET_COLOR_PALETTE[4],
+    BOARD_WIDGET_COLOR_PALETTE[8],
+    BOARD_WIDGET_COLOR_PALETTE[5],
+];
+
+/// A preview seat's player colour (1-based seat).
+fn preview_seat_color(seat: usize) -> u32 {
+    PREVIEW_SEAT_COLORS[(seat.max(1) - 1) % PREVIEW_SEAT_COLORS.len()]
+}
+
+/// A board's border in the previews: its seat's colour for a player's board, a fixed colour for
+/// shared boards (as on the table).
+fn preview_board_border(owner_key: &str) -> Color {
+    let seat = seat_number_of(owner_key).and_then(|seat| usize::try_from(seat).ok());
+    argb_color(seat.map_or(SHARED_BOARD_BORDER_COLOR, preview_seat_color))
+}
+
+/// The border of a board of this kind shown on its own (the Board Preview): player 1's colour for
+/// a player board, the shared colour for a shared board.
+pub fn board_preview_border(kind: BoardKind) -> Color {
+    match kind {
+        BoardKind::Player => argb_color(preview_seat_color(1)),
+        BoardKind::Shared => argb_color(SHARED_BOARD_BORDER_COLOR),
+    }
+}
+
 /// Seats for previewing `count` players, the viewer first, every board shown.
 fn preview_state(count: usize) -> TableState {
     let mut state = TableState::new("preview");
     state.players = (1..=count)
         .map(|seat| {
-            let mut player = PlayerInfo::new(seat_id(seat as i64), format!("Player {seat}"), PlayerRole::Client, 0);
+            let color = preview_seat_color(seat);
+            let mut player = PlayerInfo::new(seat_id(seat as i64), format!("Player {seat}"), PlayerRole::Client, color);
             player.player_boards_shown = true;
             player
         })
@@ -235,7 +266,6 @@ pub fn draw_placed_boards(
     let (state, top_row, bottom_row) = preview_seat_rows(player_count);
     let sizes = board_sizes(frame, folder_path, game);
     let boards = preview_boards(game, &state, &top_row, &bottom_row, &sizes);
-    let border = argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
     let display_backs = display_card_backs(folder_path, &game.card_backs);
     for board in &boards {
         let Some(definition) =
@@ -253,7 +283,7 @@ pub fn draw_placed_boards(
             board.rotation,
             12.0 * view.scale.max(0.2),
             1.0,
-            with_alpha(border, 1.0),
+            preview_board_border(&board.owner_key),
             2.0,
         );
         draw_zones_on_board(frame, folder_path, game, definition, board, rect, view, 1.0, &display_backs);
@@ -879,9 +909,7 @@ impl TableBoardEditor {
         let canvas = frame.ui.region("gb:table:canvas", x, y, width, height, RegionOptions::default());
         let game = &model.game;
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
-        let border =
-            argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
-        draw_preview_felt(frame, &view, felt, border);
+        draw_preview_felt(frame, &view, felt, argb_color(SHARED_BOARD_BORDER_COLOR));
 
         // The seats, viewer at the bottom middle, as the table lays them out.
         let (state, top_row, bottom_row) = preview_seat_rows(self.player_count);
@@ -980,9 +1008,10 @@ impl TableBoardEditor {
             }
             let image_path = join_path(&[&model.folder_path, "_playmats", &definition.image_path]);
             let is_selected = editable && selected == Some(index);
+            let border = preview_board_border(&board.owner_key);
             let (image_alpha, outline, outline_width) = match (editable, is_selected) {
                 (_, true) => (0.6, SELECTED_OUTLINE, 3.0),
-                (true, false) => (0.5, with_alpha(border, 1.0), 2.0),
+                (true, false) => (0.5, border, 2.0),
                 (false, _) => (0.22, with_alpha(border, 0.45), 1.0),
             };
             draw_board_image(
@@ -1199,6 +1228,20 @@ mod tests {
         let (x, y) = clamp_to_reachable_table(-5000.0, 9000.0, 100.0, 50.0);
         assert!(x > -1280.0 + 100.0 - 1.0 && x < 0.0);
         assert!(y > WORLD_H && y < 2160.0 - 50.0 + 1.0);
+    }
+
+    #[test]
+    fn player_boards_are_bordered_in_their_seats_colour_and_shared_boards_in_one_colour() {
+        let state = preview_state(3);
+        let colors: Vec<u32> = state.players.iter().map(|player| player.color).collect();
+        assert_eq!(colors, PREVIEW_SEAT_COLORS[..3].to_vec(), "each seat gets its own colour");
+        assert_eq!(preview_board_border("seat2"), argb_color(PREVIEW_SEAT_COLORS[1]));
+        assert_eq!(
+            preview_board_border(crate::table::board_layout::SHARED_OWNER_KEY),
+            argb_color(SHARED_BOARD_BORDER_COLOR)
+        );
+        assert_eq!(board_preview_border(BoardKind::Player), argb_color(PREVIEW_SEAT_COLORS[0]));
+        assert_eq!(board_preview_border(BoardKind::Shared), argb_color(SHARED_BOARD_BORDER_COLOR));
     }
 
     #[test]

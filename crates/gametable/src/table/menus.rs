@@ -805,7 +805,6 @@ impl TableScreen {
         dialog.in_game = true;
         dialog.game_colors = GameColors {
             table_color: self.game.table_color.clone(),
-            playmat_border_color: self.game.playmat_border_color.clone(),
             current_turn_color: self.game.current_turn_color.clone(),
         };
         TableDialog::Settings(dialog)

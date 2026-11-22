@@ -222,7 +222,9 @@ impl ZonePlacementEditor {
                 }
                 MenuResponse::Selected(ZoneMenuAction::TakeOff(zone_id)) => {
                     self.menu = None;
-                    model.game.game_boards[board_index].zone_placements.retain(|placement| placement.zone_id != zone_id);
+                    model.game.game_boards[board_index]
+                        .zone_placements
+                        .retain(|placement| placement.zone_id != zone_id);
                 }
             }
         }

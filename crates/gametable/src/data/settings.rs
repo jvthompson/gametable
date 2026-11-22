@@ -33,7 +33,6 @@ pub mod keys {
     pub const RECENT_SERVERS: &str = "recent_servers";
     pub const SELECTION_COLOR: &str = "selection_color";
     pub const FELT_COLOR: &str = "felt_color";
-    pub const PLAYMAT_BORDER_COLOR: &str = "playmat_border_color";
     pub const CURRENT_TURN_COLOR: &str = "current_turn_color";
     pub const FELT_TEXTURE: &str = "felt_texture_enabled";
     // Added by GameTable:

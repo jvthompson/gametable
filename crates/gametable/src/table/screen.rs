@@ -740,8 +740,12 @@ impl TableScreen {
         argb_color(TableColor::Felt.resolve(frame.settings, self.game.table_color.as_deref()))
     }
 
-    pub(super) fn playmat_border_color(&self, frame: &Frame) -> Color {
-        argb_color(TableColor::PlaymatBorder.resolve(frame.settings, self.game.playmat_border_color.as_deref()))
+    /// A board's border: its owner's player colour for a player board (so everyone can tell whose
+    /// it is), a fixed colour for shared boards.
+    pub(super) fn board_border_color(&self, owner_key: &str) -> Color {
+        let owner_color =
+            (owner_key != SHARED_OWNER_KEY).then(|| self.player_by_id(owner_key)).flatten().map(|player| player.color);
+        argb_color(owner_color.unwrap_or(display_settings::SHARED_BOARD_BORDER_COLOR))
     }
 
     pub(super) fn current_turn_color(&self, frame: &Frame) -> Color {

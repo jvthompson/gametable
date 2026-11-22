@@ -10,7 +10,7 @@ use gametable_core::util::trim_lua_whitespace;
 use gametable_core::uuid::new_v4_uuid;
 
 use crate::app::Frame;
-use crate::data::display_settings::{DEFAULT_CURRENT_TURN_COLOR, DEFAULT_FELT_COLOR, DEFAULT_PLAYMAT_BORDER_COLOR};
+use crate::data::display_settings::{DEFAULT_CURRENT_TURN_COLOR, DEFAULT_FELT_COLOR};
 use crate::data::file_system::strip_extension;
 use crate::data::gamedef_ops::rename_tag_group_in_cards;
 use crate::data::image_resolver::resolve_bare_image_path;
@@ -623,17 +623,6 @@ impl SettingsTab {
             "Clear table color",
             &mut game.table_color,
             DEFAULT_FELT_COLOR,
-            column_x,
-            row_y,
-            column_width,
-        ) + GAP;
-        row_y += SettingsTab::optional_color(
-            frame,
-            "gs:playmatBorderColor",
-            "Board Border Color",
-            "Clear board border color",
-            &mut game.playmat_border_color,
-            DEFAULT_PLAYMAT_BORDER_COLOR,
             column_x,
             row_y,
             column_width,
