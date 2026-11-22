@@ -22,13 +22,17 @@ use crate::data::file_system::join_path;
 use crate::graphics::draw_list::Color;
 use crate::graphics::tessellation::DrawMode;
 use crate::screens::gamedef::EditorModel;
-use crate::screens::gamedef::board_zone_placement::{draw_zone_label, draw_zone_stand_in, zone_world_size};
+use crate::screens::gamedef::board_zone_placement::{
+    draw_zone_label, draw_zone_stand_in, placed_zone_label, zone_world_size,
+};
+use crate::screens::gamedef::widget_scale_dialog::{WidgetScaleDialog, WidgetScaleResponse};
 use crate::screens::gamedef::common::{
     FIELD_HEIGHT, FileImport, GAP, ImportResponse, PAD, SectionAction, StableKeys, ToggleRow, column, display_card,
     display_card_backs, orientation_choices,
 };
 use crate::screens::gamedef::table_board_placement::{
-    MAXIMUM_PREVIEW_PLAYERS, PreviewCamera, ZOOM_STEP, draw_placed_boards, draw_zoom_controls,
+    MAXIMUM_PREVIEW_PLAYERS, PreviewCamera, ZOOM_STEP, clamp_to_reachable_table, draw_placed_boards,
+    draw_preview_felt, draw_zoom_controls, is_on_reachable_table,
 };
 use crate::screens::gamedef::zones_tab::{
     ZonePick, bag_token_images, deck_type_field, draw_card_entries, draw_counter_fields, draw_token_bag_fields,
@@ -107,6 +111,40 @@ enum AddToCanvas {
     Zone(String),
 }
 
+/// What the image token Size menu sets: one of the preset sizes (`None` is the default), or opens
+/// Set Scale.
+#[derive(Debug, Clone, PartialEq)]
+enum TokenSizeChoice {
+    Preset(Option<f64>),
+    SetScale,
+}
+
+/// Which placed widget the Set Scale dialog is scaling.
+#[derive(Debug, Clone, PartialEq)]
+enum ScaledWidget {
+    /// A scenario zone set on the table, by zone id.
+    Zone(String),
+    /// An image token, by index into the scenario's token placements.
+    Token(usize),
+}
+
+/// An image token's scale: its size against the default token size.
+fn token_scale(size_override: Option<WidgetSizeOverride>) -> f64 {
+    match size_override {
+        Some(WidgetSizeOverride::Multiplier(size)) => size / f64::from(IMAGE_TOKEN_SIZE),
+        _ => 1.0,
+    }
+}
+
+/// The size override that draws an image token at `scale` (none at the usual size).
+fn token_size_override_for_scale(scale: f64) -> Option<WidgetSizeOverride> {
+    if (scale - 1.0).abs() < 1e-6 {
+        None
+    } else {
+        Some(WidgetSizeOverride::Multiplier(f64::from(IMAGE_TOKEN_SIZE) * scale))
+    }
+}
+
 /// What a running file import or token chooser is for.
 enum ChooserTarget {
     Zone { scenario: u64, zone: u64, pick: ZonePick },
@@ -137,7 +175,9 @@ pub struct ScenarioTab {
     hovered_placement_face: Option<(String, bool, CardOrientation)>,
     duplicate_menu: Option<ContextMenu<usize>>,
     placement_menu: Option<ContextMenu<AddToCanvas>>,
-    size_menu: Option<ContextMenu<Option<f64>>>,
+    size_menu: Option<ContextMenu<TokenSizeChoice>>,
+    /// The Set Scale dialog, open for a placed widget.
+    scaling: Option<(ScaledWidget, WidgetScaleDialog)>,
     guide_import: Option<(FileImport, u64)>,
     chooser: Option<(TokenChooser, ChooserTarget)>,
     pending_remove: Option<usize>,
@@ -180,6 +220,7 @@ impl ScenarioTab {
             duplicate_menu: None,
             placement_menu: None,
             size_menu: None,
+            scaling: None,
             guide_import: None,
             chooser: None,
             pending_remove: None,
@@ -1365,6 +1406,8 @@ impl ScenarioTab {
                 continue;
             };
             let (world_width, world_height) = zone_world_size(&zone);
+            let (world_width, world_height) =
+                (world_width * placement.scale as f32, world_height * placement.scale as f32);
             let (box_width, box_height) = (world_width * scale, world_height * scale);
             let mut center =
                 (canvas_x + placement.x as f32 * canvas_width, canvas_y + placement.y as f32 * canvas_height);
@@ -1381,14 +1424,17 @@ impl ScenarioTab {
                 self.selected_zone_placement = Some(placement.zone_id.clone());
             }
             if region.held {
-                // Kept wholly on the table.
-                let (half_width, half_height) = ((box_width / 2.0) / canvas_width, (box_height / 2.0) / canvas_height);
-                let fraction_x = ((mouse_x - canvas_x) / canvas_width).clamp(half_width, 1.0 - half_width);
-                let fraction_y = ((mouse_y - canvas_y) / canvas_height).clamp(half_height, 1.0 - half_height);
-                center = (canvas_x + fraction_x * canvas_width, canvas_y + fraction_y * canvas_height);
+                // Kept wholly on the reachable table.
+                let (fraction_x, fraction_y) = reachable_table_fraction(
+                    (mouse_x, mouse_y),
+                    (canvas_x, canvas_y),
+                    scale,
+                    (world_width / 2.0, world_height / 2.0),
+                );
+                center = (canvas_x + fraction_x as f32 * canvas_width, canvas_y + fraction_y as f32 * canvas_height);
                 let zone_placements = &mut model.game.scenarios[index].zone_placements;
                 if let Some(stored) = zone_placements.iter_mut().find(|stored| stored.zone_id == placement.zone_id) {
-                    (stored.x, stored.y) = (f64::from(fraction_x), f64::from(fraction_y));
+                    (stored.x, stored.y) = (fraction_x, fraction_y);
                 }
             }
             draw_zone_stand_in(
@@ -1397,12 +1443,13 @@ impl ScenarioTab {
                 &zone,
                 true,
                 center,
-                scale,
+                scale * placement.scale as f32,
                 1.0,
                 display_backs,
                 scenario_card_back_id.as_deref(),
             );
-            draw_zone_label(frame, &zone.name, center.0, center.1 - box_height / 2.0, 1.0);
+            let label = placed_zone_label(&zone.name, placement.scale);
+            draw_zone_label(frame, &label, center.0, center.1 - box_height / 2.0, 1.0);
             if self.selected_zone_placement.as_deref() == Some(placement.zone_id.as_str()) {
                 frame.outline_rect(
                     center.0 - box_width / 2.0 - 2.0,
@@ -1451,9 +1498,12 @@ impl ScenarioTab {
         let flip_options = ButtonOptions::variant(ButtonVariant::Outlined)
             .id("scen:place:flip")
             .disabled(self.selected_placement.is_none());
+        let selected_widget_zone = self.selected_zone_placement.clone().filter(|zone_id| {
+            model.game.scenarios[index].zones.iter().any(|zone| &zone.id == zone_id && zone.kind == ZoneKind::Widget)
+        });
         let size_options = ButtonOptions::variant(ButtonVariant::Outlined)
             .id("scen:place:size")
-            .disabled(self.selected_token_placement.is_none());
+            .disabled(self.selected_token_placement.is_none() && selected_widget_zone.is_none());
         let delete_options =
             ButtonOptions::variant(ButtonVariant::Outlined).icon("delete_outline").id("scen:place:delete").disabled(
                 self.selected_placement.is_none()
@@ -1488,23 +1538,32 @@ impl ScenarioTab {
             Some(size_width),
             Some(toolbar_height),
             &size_options,
-        ) && let Some(token) = self.selected_token_placement
-        {
-            let current = model.game.scenarios[index].token_placements[token].size_override;
-            let options = [
-                ("Default", None),
-                ("Medium", Some(IMAGE_TOKEN_SIZE as f64 * 2.0)),
-                ("Large", Some(IMAGE_TOKEN_SIZE as f64 * 4.0)),
-            ];
-            let items = options
-                .into_iter()
-                .map(|(label, size)| {
-                    let checked = current == size.map(WidgetSizeOverride::Multiplier);
-                    MenuItem::new(label, size).checked(checked)
-                })
-                .collect();
-            let (mouse_x, mouse_y) = frame.ui.mouse();
-            self.size_menu = Some(ContextMenu::new("scen:place:sizemenu", mouse_x, mouse_y, items));
+        ) {
+            if let Some(token) = self.selected_token_placement {
+                let current = model.game.scenarios[index].token_placements[token].size_override;
+                let options = [
+                    ("Default", None),
+                    ("Medium", Some(IMAGE_TOKEN_SIZE as f64 * 2.0)),
+                    ("Large", Some(IMAGE_TOKEN_SIZE as f64 * 4.0)),
+                ];
+                let mut items: Vec<MenuItem<TokenSizeChoice>> = options
+                    .into_iter()
+                    .map(|(label, size)| {
+                        let checked = current == size.map(WidgetSizeOverride::Multiplier);
+                        MenuItem::new(label, TokenSizeChoice::Preset(size)).checked(checked)
+                    })
+                    .collect();
+                items.push(MenuItem::new("Set Scale...", TokenSizeChoice::SetScale));
+                let (mouse_x, mouse_y) = frame.ui.mouse();
+                self.size_menu = Some(ContextMenu::new("scen:place:sizemenu", mouse_x, mouse_y, items));
+            } else if let Some(zone_id) = selected_widget_zone {
+                let scenario = &model.game.scenarios[index];
+                if let Some(placement) = scenario.zone_placement_for(&zone_id) {
+                    let name = scenario.zones.iter().find(|zone| zone.id == zone_id).map_or("", |zone| &zone.name);
+                    let dialog = WidgetScaleDialog::new("scen:place:scale", name, placement.scale);
+                    self.scaling = Some((ScaledWidget::Zone(zone_id), dialog));
+                }
+            }
         }
         if frame.button(
             "Delete",
@@ -1583,18 +1642,15 @@ impl ScenarioTab {
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
         let border =
             argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
-        frame.fill_rect(canvas_x, canvas_y, canvas_width, canvas_height, 0.0, felt);
-        frame.outline_rect(canvas_x + 1.0, canvas_y + 1.0, canvas_width - 2.0, canvas_height - 2.0, 0.0, border, 1.0);
+        draw_preview_felt(frame, &view, felt, border);
         draw_placed_boards(frame, &folder, &game, &view, self.board_preview_players);
         let canvas =
             frame.ui.region("scen:place:canvas", area_x, area_y, area_width, area_height, RegionOptions::default());
         let mut placement_pressed = false;
         if canvas.right_clicked {
             let (mouse_x, mouse_y) = frame.ui.mouse();
-            self.placement_click = (
-                ((mouse_x - canvas_x) / canvas_width).clamp(0.0, 1.0) as f64,
-                ((mouse_y - canvas_y) / canvas_height).clamp(0.0, 1.0) as f64,
-            );
+            self.placement_click =
+                reachable_table_fraction((mouse_x, mouse_y), (canvas_x, canvas_y), scale, (0.0, 0.0));
             let scenario = &model.game.scenarios[index];
             let zones_off_the_table: Vec<MenuItem<AddToCanvas>> = scenario
                 .zones
@@ -1661,13 +1717,9 @@ impl ScenarioTab {
                 self.selected_token_placement = None;
             }
             if region.held {
-                let (fraction_width, fraction_height) =
-                    ((box_width / 2.0) / canvas_width, (box_height / 2.0) / canvas_height);
                 let target = self.drag_target(false, placement_index);
-                let fraction_x =
-                    ((mouse_x - canvas_x) / canvas_width).clamp(fraction_width, 1.0 - fraction_width) as f64;
-                let fraction_y =
-                    ((mouse_y - canvas_y) / canvas_height).clamp(fraction_height, 1.0 - fraction_height) as f64;
+                let (fraction_x, fraction_y) =
+                    reachable_table_fraction((mouse_x, mouse_y), (canvas_x, canvas_y), scale, (half_width, half_height));
                 let placements = &mut model.game.scenarios[index].placements;
                 if let Some(target) = placements.get_mut(target) {
                     target.x = fraction_x;
@@ -1736,13 +1788,9 @@ impl ScenarioTab {
                 self.selected_placement = None;
             }
             if region.held {
-                let (fraction_width, fraction_height) =
-                    ((box_width / 2.0) / canvas_width, (box_height / 2.0) / canvas_height);
                 let target = self.drag_target(true, token_index);
-                let fraction_x =
-                    ((mouse_x - canvas_x) / canvas_width).clamp(fraction_width, 1.0 - fraction_width) as f64;
-                let fraction_y =
-                    ((mouse_y - canvas_y) / canvas_height).clamp(fraction_height, 1.0 - fraction_height) as f64;
+                let (fraction_x, fraction_y) =
+                    reachable_table_fraction((mouse_x, mouse_y), (canvas_x, canvas_y), scale, (size / 2.0, size / 2.0));
                 let tokens = &mut model.game.scenarios[index].token_placements;
                 if let Some(target) = tokens.get_mut(target) {
                     target.x = fraction_x;
@@ -1797,27 +1845,20 @@ impl ScenarioTab {
                 .alpha(0.85);
                 frame.draw_card(&draw);
                 if frame.ui.mouse_released(1) {
-                    let inside = view.contains(mouse_x, mouse_y)
-                        && mouse_x >= canvas_x
-                        && mouse_x <= canvas_x + canvas_width
-                        && mouse_y >= canvas_y
-                        && mouse_y <= canvas_y + canvas_height;
+                    let (world_x, world_y) = view.to_world(mouse_x, mouse_y);
+                    let inside = view.contains(mouse_x, mouse_y) && is_on_reachable_table(world_x, world_y);
                     if inside {
                         let turned = definition.orientation != CardOrientation::Portrait;
                         let (card_width, card_height) =
                             if turned { (CARD_HEIGHT, CARD_WIDTH) } else { (CARD_WIDTH, CARD_HEIGHT) };
-                        let (fraction_width, fraction_height) =
-                            ((card_width * scale / 2.0) / canvas_width, (card_height * scale / 2.0) / canvas_height);
-                        let fraction_x =
-                            ((mouse_x - canvas_x) / canvas_width).clamp(fraction_width, 1.0 - fraction_width);
-                        let fraction_y =
-                            ((mouse_y - canvas_y) / canvas_height).clamp(fraction_height, 1.0 - fraction_height);
+                        let (fraction_x, fraction_y) = reachable_table_fraction(
+                            (mouse_x, mouse_y),
+                            (canvas_x, canvas_y),
+                            scale,
+                            (card_width / 2.0, card_height / 2.0),
+                        );
                         let placements = &mut model.game.scenarios[index].placements;
-                        placements.push(ScenarioPlacement::new(
-                            definition_id.clone(),
-                            fraction_x as f64,
-                            fraction_y as f64,
-                        ));
+                        placements.push(ScenarioPlacement::new(definition_id.clone(), fraction_x, fraction_y));
                         self.selected_placement = Some(placements.len() - 1);
                         self.selected_token_placement = None;
                     }
@@ -1870,14 +1911,45 @@ impl ScenarioTab {
             match menu.show(frame) {
                 MenuResponse::Open => {}
                 MenuResponse::Closed => self.size_menu = None,
-                MenuResponse::Selected(size) => {
+                MenuResponse::Selected(choice) => {
                     self.size_menu = None;
                     if let Some(token) = self.selected_token_placement
                         && let Some(placement) = model.game.scenarios[index].token_placements.get_mut(token)
                     {
-                        placement.size_override = size.map(WidgetSizeOverride::Multiplier);
+                        match choice {
+                            TokenSizeChoice::Preset(size) => {
+                                placement.size_override = size.map(WidgetSizeOverride::Multiplier);
+                            }
+                            TokenSizeChoice::SetScale => {
+                                let name = token_display_name(&placement.image_path);
+                                let scale = token_scale(placement.size_override);
+                                let dialog = WidgetScaleDialog::new("scen:place:scale", &name, scale);
+                                self.scaling = Some((ScaledWidget::Token(token), dialog));
+                            }
+                        }
                     }
                 }
+            }
+        }
+        if let Some((widget, dialog)) = &mut self.scaling {
+            let (scale, closed) = match dialog.show(frame) {
+                WidgetScaleResponse::Open(scale) => (scale, false),
+                WidgetScaleResponse::Closed(scale) => (scale, true),
+            };
+            let scenario = &mut model.game.scenarios[index];
+            let still_there = match widget {
+                ScaledWidget::Zone(zone_id) => {
+                    let placement = scenario.zone_placements.iter_mut().find(|placement| &placement.zone_id == zone_id);
+                    placement.map(|placement| placement.scale = scale).is_some()
+                }
+                ScaledWidget::Token(token) => scenario
+                    .token_placements
+                    .get_mut(*token)
+                    .map(|placement| placement.size_override = token_size_override_for_scale(scale))
+                    .is_some(),
+            };
+            if closed || !still_there {
+                self.scaling = None;
             }
         }
     }
@@ -2001,6 +2073,27 @@ impl ScenarioTab {
 }
 
 /// A number as Lua's `tostring` writes it.
+/// The table position (fractions of the table, which may go past 0..1 into the margin players
+/// can reach) under a screen point on the placement canvas, kept so something with these half
+/// extents (world units) stays wholly on the reachable table. `canvas` is where the table's top
+/// left corner is on screen and `scale` is screen pixels per world unit.
+fn reachable_table_fraction(
+    (screen_x, screen_y): (f32, f32),
+    (canvas_x, canvas_y): (f32, f32),
+    scale: f32,
+    (half_width, half_height): (f32, f32),
+) -> (f64, f64) {
+    let (world_x, world_y) = ((screen_x - canvas_x) / scale, (screen_y - canvas_y) / scale);
+    let (center_x, center_y) = clamp_to_reachable_table(world_x, world_y, half_width, half_height);
+    (f64::from(center_x / WORLD_WIDTH as f32), f64::from(center_y / WORLD_HEIGHT as f32))
+}
+
+/// An image token's name for the Set Scale title: its file name without folders or extension.
+fn token_display_name(image_path: &str) -> String {
+    let file_name = image_path.rsplit(['/', '\\']).next().unwrap_or(image_path);
+    file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem).to_string()
+}
+
 fn format_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 { format!("{}", value as i64) } else { value.to_string() }
 }
@@ -2117,5 +2210,15 @@ mod tests {
         assert_eq!(tab.placement_camera, PreviewCamera::default());
         let placed = &model.game.scenarios[0].placements[0];
         assert!(placed.x > 0.5 && (placed.y - 0.5).abs() < 1e-6, "only the card drag moved it: {placed:?}");
+    }
+
+    #[test]
+    fn a_token_scale_is_its_size_against_the_default_and_back() {
+        assert_eq!(token_scale(None), 1.0);
+        assert_eq!(token_size_override_for_scale(1.0), None);
+        let doubled = token_size_override_for_scale(2.0);
+        assert_eq!(doubled, Some(WidgetSizeOverride::Multiplier(f64::from(IMAGE_TOKEN_SIZE) * 2.0)));
+        assert_eq!(token_scale(doubled), 2.0);
+        assert_eq!(token_display_name("bags/Clue Token.png"), "Clue Token");
     }
 }

@@ -4,6 +4,8 @@
 //! board's centre). Placed zones are drawn on the preview (a card back for card
 //! zones, the widget for counters and token bags) with their name as a small label above, and can
 //! be dragged around the board, dragged off it to remove them, or removed with their × button.
+//! Right-clicking a placed zone offers "Set Scale..." for widgets (counters and token bags), so
+//! each can be drawn bigger or smaller than usual, and "Take Off the Board".
 
 use std::f32::consts::PI;
 
@@ -19,6 +21,7 @@ use crate::graphics::tessellation::DrawMode;
 use crate::screens::gamedef::EditorModel;
 use crate::screens::gamedef::common::display_card_backs;
 use crate::screens::gamedef::list_picker_dialog::{ListPickerDialog, PickerEntry, PickerResponse};
+use crate::screens::gamedef::widget_scale_dialog::{WidgetScaleDialog, WidgetScaleResponse, scale_percent_text};
 use crate::table::card_render::{CARD_HEIGHT, CARD_WIDTH, CardDraw, orientation_turns};
 use crate::table::panels::lua_number_text;
 use crate::table::view::COUNTER_SIZE;
@@ -98,6 +101,12 @@ struct DraggedZone {
     grab_offset: (f32, f32),
 }
 
+/// The Set Scale dialog open for one placed zone (by zone id).
+struct ScalingZone {
+    zone_id: String,
+    dialog: WidgetScaleDialog,
+}
+
 #[derive(Default)]
 pub struct ZonePlacementEditor {
     dragged: Option<DraggedZone>,
@@ -105,6 +114,7 @@ pub struct ZonePlacementEditor {
     picker: Option<ListPickerDialog>,
     /// Where on the board (fractions) a zone picked from the open picker goes.
     add_at: (f64, f64),
+    scaling: Option<ScalingZone>,
 }
 
 /// The zones that fit the board and aren't on it yet.
@@ -129,10 +139,28 @@ fn zone_description(candidate: &PlaceableZone) -> String {
     }
 }
 
-/// What the Board Preview's right-click menu does.
+/// What the Board Preview's right-click menus do: the board's own menu adds a zone, a placed
+/// zone's menu scales it or takes it off the board.
 #[derive(Debug, Clone, PartialEq)]
 enum ZoneMenuAction {
     AddZone,
+    SetScale(String),
+    TakeOff(String),
+}
+
+/// A placed zone's right-click menu: Set Scale for widgets, then Take Off the Board.
+fn placed_zone_menu_items(zone_id: &str, is_widget: bool) -> Vec<MenuItem<ZoneMenuAction>> {
+    let mut items = Vec::new();
+    if is_widget {
+        items.push(MenuItem::new("Set Scale...", ZoneMenuAction::SetScale(zone_id.to_string())));
+    }
+    items.push(MenuItem::new("Take Off the Board", ZoneMenuAction::TakeOff(zone_id.to_string())));
+    items
+}
+
+/// The name label of a placed zone, with its scale when that isn't the usual size.
+pub(super) fn placed_zone_label(name: &str, scale: f64) -> String {
+    if (scale - 1.0).abs() < 1e-6 { name.to_string() } else { format!("{name} · {}", scale_percent_text(scale)) }
 }
 
 pub const ADD_ZONE_DIALOG: &str = "gb:zones:add";
@@ -148,6 +176,10 @@ impl ZonePlacementEditor {
         screen_x: f32,
         screen_y: f32,
     ) {
+        // A placed zone's own menu was opened by this right-click.
+        if self.menu.is_some() {
+            return;
+        }
         let (fraction_x, fraction_y) = board_rect.fraction_at(screen_x, screen_y);
         let on_board = (0.0..=1.0).contains(&fraction_x) && (0.0..=1.0).contains(&fraction_y);
         self.add_at = if on_board { (fraction_x, fraction_y) } else { (0.5, 0.5) };
@@ -179,6 +211,33 @@ impl ZonePlacementEditor {
                     };
                     self.picker = Some(ListPickerDialog::new(ADD_ZONE_DIALOG, "Add Zone", empty, entries));
                 }
+                MenuResponse::Selected(ZoneMenuAction::SetScale(zone_id)) => {
+                    self.menu = None;
+                    let board = &model.game.game_boards[board_index];
+                    if let Some(placement) = board.placement_for(&zone_id) {
+                        let name = zone_name(&model.game, &zone_id);
+                        let dialog = WidgetScaleDialog::new("gb:zones:scale", &name, placement.scale);
+                        self.scaling = Some(ScalingZone { zone_id, dialog });
+                    }
+                }
+                MenuResponse::Selected(ZoneMenuAction::TakeOff(zone_id)) => {
+                    self.menu = None;
+                    model.game.game_boards[board_index].zone_placements.retain(|placement| placement.zone_id != zone_id);
+                }
+            }
+        }
+        if let Some(scaling) = &mut self.scaling {
+            let (scale, closed) = match scaling.dialog.show(frame) {
+                WidgetScaleResponse::Open(scale) => (scale, false),
+                WidgetScaleResponse::Closed(scale) => (scale, true),
+            };
+            let placements = &mut model.game.game_boards[board_index].zone_placements;
+            match placements.iter_mut().find(|placement| placement.zone_id == scaling.zone_id) {
+                Some(placement) => placement.scale = scale,
+                None => self.scaling = None,
+            }
+            if closed {
+                self.scaling = None;
             }
         }
         if let Some(picker) = &mut self.picker {
@@ -223,7 +282,8 @@ impl ZonePlacementEditor {
                     .cloned()
             });
             let (world_width, world_height) = known_zone.as_ref().map_or((CARD_WIDTH, CARD_HEIGHT), zone_world_size);
-            let (zone_width, zone_height) = (world_width * mat.preview_scale, world_height * mat.preview_scale);
+            let zone_scale = mat.preview_scale * placement.scale as f32;
+            let (zone_width, zone_height) = (world_width * zone_scale, world_height * zone_scale);
             let is_dragged = self.dragged.as_ref().is_some_and(|dragged| dragged.zone_id == placement.zone_id);
             let mut center = mat.point_at(placement.x, placement.y);
             if is_dragged && let Some(dragged) = &self.dragged {
@@ -244,6 +304,12 @@ impl ZonePlacementEditor {
                     zone_id: placement.zone_id.clone(),
                     grab_offset: (mouse_x - center.0, mouse_y - center.1),
                 });
+            }
+            if region.right_clicked {
+                let (mouse_x, mouse_y) = frame.ui.mouse();
+                let is_widget = known_zone.as_ref().is_some_and(|zone| zone.kind == ZoneKind::Widget);
+                let items = placed_zone_menu_items(&placement.zone_id, is_widget);
+                self.menu = Some(ContextMenu::new("gb:zone:menu", mouse_x, mouse_y, items));
             }
             let off_the_board =
                 !(mat.x..=mat.x + mat.width).contains(&center.0) || !(mat.y..=mat.y + mat.height).contains(&center.1);
@@ -277,7 +343,7 @@ impl ZonePlacementEditor {
                         zone,
                         is_scenario_zone,
                         center,
-                        mat.preview_scale,
+                        zone_scale,
                         alpha,
                         &display_backs,
                         scenario_card_back_id.as_deref(),
@@ -306,7 +372,7 @@ impl ZonePlacementEditor {
                 );
             }
             let label = match (&known_zone, fitting.is_some()) {
-                (Some(zone), true) => zone.name.clone(),
+                (Some(zone), true) => placed_zone_label(&zone.name, placement.scale),
                 (Some(zone), false) => format!("{} (doesn't fit this kind of board)", zone.name),
                 (None, _) => "Deleted zone".to_string(),
             };
@@ -336,6 +402,15 @@ impl ZonePlacementEditor {
             model.game.game_boards[board_index].zone_placements.retain(|placement| placement.zone_id != zone_id);
         }
     }
+}
+
+/// A zone's name by id, from the game's zones or any scenario's.
+fn zone_name(game: &GameDefinition, zone_id: &str) -> String {
+    game.zones
+        .iter()
+        .chain(game.scenarios.iter().flat_map(|scenario| &scenario.zones))
+        .find(|zone| zone.id == zone_id)
+        .map_or_else(|| zone_id.to_string(), |zone| zone.name.clone())
 }
 
 /// What a placed zone looks like in the editor: a card back for card zones (the scenario back
@@ -462,6 +537,18 @@ mod tests {
         scenario.zones.push(ZoneDefinition { shared: true, ..ZoneDefinition::new("walls", "Walls") });
         game.scenarios.push(scenario);
         game
+    }
+
+    #[test]
+    fn only_widgets_offer_set_scale_and_labels_show_a_changed_scale() {
+        let widget_items = placed_zone_menu_items("clues", true);
+        assert_eq!(widget_items[0].action, Some(ZoneMenuAction::SetScale("clues".to_string())));
+        assert_eq!(widget_items.len(), 2);
+        let card_items = placed_zone_menu_items("deck", false);
+        assert_eq!(card_items.len(), 1);
+        assert_eq!(card_items[0].action, Some(ZoneMenuAction::TakeOff("deck".to_string())));
+        assert_eq!(placed_zone_label("Clues", 1.0), "Clues");
+        assert_eq!(placed_zone_label("Clues", 1.5), "Clues · 150%");
     }
 
     #[test]

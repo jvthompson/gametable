@@ -696,19 +696,24 @@ impl ScenarioTokenPlacement {
     }
 }
 
+/// The scale a placed zone is drawn at when the designer hasn't set one.
+pub const DEFAULT_PLACED_ZONE_SCALE: f64 = 1.0;
+
 /// One of a scenario's own zones set at a fixed spot on the table (a GameTable addition): once the
 /// scenario loads, the zone is drawn there, centred on the table fractions `x`, `y` as the first
-/// seat sees them, instead of in a sidebar. Players can't move it.
+/// seat sees them, instead of in a sidebar. Players can't move it. `scale` multiplies its size
+/// (the designer's "Set Scale", for widgets; 1 is the usual size).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScenarioZonePlacement {
     pub zone_id: String,
     pub x: f64,
     pub y: f64,
+    pub scale: f64,
 }
 
 impl ScenarioZonePlacement {
     pub fn new(zone_id: impl Into<String>, x: f64, y: f64) -> Self {
-        Self { zone_id: zone_id.into(), x, y }
+        Self { zone_id: zone_id.into(), x, y, scale: DEFAULT_PLACED_ZONE_SCALE }
     }
 
     pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
@@ -717,11 +722,17 @@ impl ScenarioZonePlacement {
             zone_id: fields.required_string("zoneId")?,
             x: fields.required_number("x")?,
             y: fields.required_number("y")?,
+            scale: fields.optional_number("scale")?.unwrap_or(DEFAULT_PLACED_ZONE_SCALE),
         })
     }
 
     pub fn to_json(&self) -> JsonValue {
-        SparseObjectWriter::new().field("zoneId", &self.zone_id).field("x", self.x).field("y", self.y).finish_value()
+        SparseObjectWriter::new()
+            .field("zoneId", &self.zone_id)
+            .field("x", self.x)
+            .field("y", self.y)
+            .unless_default("scale", self.scale, DEFAULT_PLACED_ZONE_SCALE)
+            .finish_value()
     }
 }
 
@@ -792,17 +803,19 @@ impl Scenario {
 
 /// A zone drawn on a game board instead of in the player area or a sidebar (a GameTable
 /// addition). `x` and `y` are the zone's centre as fractions (0..1) of the board, seen the right
-/// way up by the board's owner (before any rotation on the table).
+/// way up by the board's owner (before any rotation on the table). `scale` multiplies its size
+/// (the designer's "Set Scale", for widgets; 1 is the usual size).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoardZonePlacement {
     pub zone_id: String,
     pub x: f64,
     pub y: f64,
+    pub scale: f64,
 }
 
 impl BoardZonePlacement {
     pub fn new(zone_id: impl Into<String>, x: f64, y: f64) -> Self {
-        Self { zone_id: zone_id.into(), x, y }
+        Self { zone_id: zone_id.into(), x, y, scale: DEFAULT_PLACED_ZONE_SCALE }
     }
 
     pub fn from_json(value: &JsonValue) -> Result<Self, ModelError> {
@@ -811,11 +824,17 @@ impl BoardZonePlacement {
             zone_id: fields.required_string("zoneId")?,
             x: fields.required_number("x")?,
             y: fields.required_number("y")?,
+            scale: fields.optional_number("scale")?.unwrap_or(DEFAULT_PLACED_ZONE_SCALE),
         })
     }
 
     pub fn to_json(&self) -> JsonValue {
-        SparseObjectWriter::new().field("zoneId", &self.zone_id).field("x", self.x).field("y", self.y).finish_value()
+        SparseObjectWriter::new()
+            .field("zoneId", &self.zone_id)
+            .field("x", self.x)
+            .field("y", self.y)
+            .unless_default("scale", self.scale, DEFAULT_PLACED_ZONE_SCALE)
+            .finish_value()
     }
 }
 

@@ -1083,3 +1083,24 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   tests; released as `v0.2.0+48` (the +47 tag is left without a release).
 - 2026-11-21: **Release `v0.2.0+48`** (Shrink Card Art shrinks WebP). CI passed on all three platforms and attached
   the Windows (18.3 MB), Linux (19.7 MB) and macOS (33.2 MB) zips. Client only; the server didn't change.
+- 2026-11-22: The Game Boards **Table Preview** and the Scenarios **Card Placement** canvas now show and accept the
+  whole reachable table, not just its 2560x1440 middle: players can pan and drag half a table past every edge
+  (`TABLE_PAN_MARGIN_FRACTION`), so the previews fit that whole area (`REACHABLE_WORLD_RECT`, 5120x2880) at 100%,
+  draw the margin in a darker felt around the outlined table, pan anywhere over it, and zoom 0.75x-12x. Boards,
+  cards, tokens and scenario zones are kept on it with the table's own `clamp_world_center` (positions may now go
+  past 0..1, which the table already handled). Tests: `the_reachable_table_reaches_half_a_table_past_each_edge`,
+  the updated `zooming_keeps_the_point_under_the_mouse_still_and_panning_stays_on_the_table`. Checked on a scratch
+  copy of ahlcg (both previews).
+- 2026-11-22: **Set Scale** for placed widgets (a GameTable addition). Each placement keeps its own scale, so
+  widgets can differ in size: `BoardZonePlacement.scale` and `ScenarioZonePlacement.scale` (JSON `"scale"`, left out
+  at 1). In the Game Boards Board Preview, right-click a placed zone for **Set Scale...** (counters and token bags)
+  and **Take Off the Board**; in the Scenarios Card Placement view, the **Size** button opens Set Scale for a
+  selected widget zone, and an image token's Size menu gains **Set Scale...** (stored as its size override,
+  `IMAGE_TOKEN_SIZE` x scale). The dialog (`screens/gamedef/widget_scale_dialog.rs`) is a 25%-400% slider in 5% steps
+  that previews live, with Reset to 100%, Cancel (restores) and Done. A scaled zone's editor label shows its
+  percentage. The table draws placed zones and scenario zones at zoom x scale (`PlacedZone.scale`,
+  `ZoneOnTable.scale`), and the Table Preview and Card Placement canvas do too. Older clients ignore the field.
+  Tests: `placed_zones_keep_their_own_scale_and_leave_it_out_at_the_usual_size`,
+  `scales_snap_to_five_percent_steps_within_range`, `only_widgets_offer_set_scale_and_labels_show_a_changed_scale`,
+  `a_token_scale_is_its_size_against_the_default_and_back`. Checked on a scratch ahlcg copy (both editors and a
+  practice table: counters at 175% and 60%, the Chaos Bag at 200%).

@@ -26,6 +26,7 @@ pub mod suggestion_review;
 pub mod table_board_placement;
 pub mod title_area_picker;
 pub mod title_suggestion_dialogs;
+pub mod widget_scale_dialog;
 pub mod tokens_tab;
 pub mod zones_tab;
 

@@ -12,7 +12,8 @@ use gametable_core::models::{BoardZonePosition, GameDefinition, TableState, Zone
 use crate::table::board_layout::{SHARED_OWNER_KEY, board_at, shown_boards};
 use crate::ui::context::Rect;
 
-/// A zone on a board, with its centre as fractions of the board seen the right way up.
+/// A zone on a board, with its centre as fractions of the board seen the right way up, and the
+/// scale the designer set for it (1 is the usual size).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedZone {
     pub zone: ZoneDefinition,
@@ -20,6 +21,7 @@ pub struct PlacedZone {
     pub board_index: i64,
     pub fraction_x: f32,
     pub fraction_y: f32,
+    pub scale: f32,
 }
 
 /// The zones on one board (1-based `board_index`), in placement order, each where it was moved
@@ -47,18 +49,21 @@ pub fn zones_on_board<'a>(
                 board_index,
                 fraction_x: x as f32,
                 fraction_y: y as f32,
+                scale: placement.scale as f32,
             })
         })
         .collect()
 }
 
 /// A loaded scenario's zone that the scenario sets at a fixed spot on the table, centred on table
-/// fractions as the first seat sees them. Nobody can move it during the game.
+/// fractions as the first seat sees them, at the scale the designer set (1 is the usual size).
+/// Nobody can move it during the game.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZoneOnTable {
     pub zone: ZoneDefinition,
     pub fraction_x: f64,
     pub fraction_y: f64,
+    pub scale: f64,
 }
 
 /// The zones the loaded scenarios set on the table, each once (the first scenario to set it wins).
@@ -76,6 +81,7 @@ pub fn scenario_zones_on_table(game: &GameDefinition, state: &TableState) -> Vec
                     zone: zone.clone(),
                     fraction_x: placement.x,
                     fraction_y: placement.y,
+                    scale: placement.scale,
                 });
             }
         }

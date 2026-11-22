@@ -12,11 +12,13 @@
 //! placed board to another player, lock or unlock a shared board from the middle, or take it off
 //! the table. The wheel zooms, dragging the felt pans, and the percentage fits the whole table
 //! again. The geometry is the table's own (`table::board_layout`), so what you see here is what
-//! players get.
+//! players get. "The whole table" is everything players can reach: the table's 2560x1440 middle
+//! (outlined) plus the margin around it that the table lets players pan and drag into
+//! (`TABLE_PAN_MARGIN_FRACTION`), drawn in a darker felt.
 
 use std::f32::consts::PI;
 
-use gametable_core::geometry::{WORLD_HEIGHT, WORLD_WIDTH};
+use gametable_core::geometry::{TABLE_PAN_MARGIN_FRACTION, WORLD_HEIGHT, WORLD_WIDTH};
 use gametable_core::models::{
     BoardKind, BoardPlayerPlacement, BoardTablePlacement, GameBoardDefinition, GameDefinition, PlayerInfo, PlayerRole,
     TableState,
@@ -37,6 +39,7 @@ use crate::table::board_layout::{
     turned_size,
 };
 use crate::table::board_zones::placed_zone_world_center;
+use crate::table::selection::clamp_world_center;
 use crate::ui::components::argb_color;
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
@@ -46,6 +49,18 @@ use crate::ui::widgets::{Choice, IconButtonOptions};
 
 const WORLD_W: f32 = WORLD_WIDTH as f32;
 const WORLD_H: f32 = WORLD_HEIGHT as f32;
+/// How far past each edge of the table players can reach, in world units.
+const REACHABLE_MARGIN_X: f32 = WORLD_W * TABLE_PAN_MARGIN_FRACTION as f32;
+const REACHABLE_MARGIN_Y: f32 = WORLD_H * TABLE_PAN_MARGIN_FRACTION as f32;
+/// The whole reachable table, in world units: (left, top, width, height).
+pub const REACHABLE_WORLD_RECT: (f32, f32, f32, f32) = (
+    -REACHABLE_MARGIN_X,
+    -REACHABLE_MARGIN_Y,
+    WORLD_W + 2.0 * REACHABLE_MARGIN_X,
+    WORLD_H + 2.0 * REACHABLE_MARGIN_Y,
+);
+/// How much darker the reachable margin's felt is than the table's.
+const MARGIN_FELT_BRIGHTNESS: f32 = 0.7;
 /// The seat the preview is seen from.
 const VIEWER_SEAT_ID: &str = "seat1";
 /// The most seats the preview offers.
@@ -199,7 +214,7 @@ fn draw_zones_on_board(
             &candidate.zone,
             candidate.is_scenario_zone,
             view.to_screen(world_x, world_y),
-            view.scale,
+            view.scale * placement.scale as f32,
             alpha,
             display_backs,
             game.scenario_card_back_id.as_deref(),
@@ -360,8 +375,9 @@ pub fn draw_board_image(
     list.set_line_width(1.0);
 }
 
-/// The zoom and pan of a whole-table preview: `zoom` 1 fits the whole table in the viewport,
-/// and `center` is the world point in the viewport's middle.
+/// The zoom and pan of a whole-table preview: `zoom` 1 fits the whole reachable table
+/// ([`REACHABLE_WORLD_RECT`]) in the viewport, and `center` is the world point in the viewport's
+/// middle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PreviewCamera {
     pub zoom: f32,
@@ -374,9 +390,9 @@ impl Default for PreviewCamera {
     }
 }
 
-/// How far the preview zooms out (half the fitted size) and in.
-pub const PREVIEW_MIN_ZOOM: f32 = 0.5;
-pub const PREVIEW_MAX_ZOOM: f32 = 6.0;
+/// How far the preview zooms out (a little past the fitted size) and in.
+pub const PREVIEW_MIN_ZOOM: f32 = 0.75;
+pub const PREVIEW_MAX_ZOOM: f32 = 12.0;
 /// Each wheel notch or zoom button press zooms by this much.
 pub const ZOOM_STEP: f32 = 1.2;
 
@@ -410,7 +426,8 @@ impl PreviewView {
 impl PreviewCamera {
     /// The camera applied to a viewport.
     pub fn view(&self, x: f32, y: f32, width: f32, height: f32) -> PreviewView {
-        let fit = (width / WORLD_W).min(height / WORLD_H);
+        let (_, _, reachable_width, reachable_height) = REACHABLE_WORLD_RECT;
+        let fit = (width / reachable_width).min(height / reachable_height);
         let scale = fit * self.zoom;
         PreviewView {
             x,
@@ -440,14 +457,45 @@ impl PreviewCamera {
         self.keep_table_in_view();
     }
 
-    /// The middle of the view stays over the table.
+    /// The middle of the view stays over the reachable table.
     fn keep_table_in_view(&mut self) {
-        self.center = (self.center.0.clamp(0.0, WORLD_W), self.center.1.clamp(0.0, WORLD_H));
+        let (left, top, width, height) = REACHABLE_WORLD_RECT;
+        self.center = (self.center.0.clamp(left, left + width), self.center.1.clamp(top, top + height));
     }
 
     pub fn fit(&mut self) {
         *self = PreviewCamera::default();
     }
+}
+
+/// The felt under a preview: the reachable margin in a darker felt, then the table's own
+/// 2560x1440 middle in the felt colour with a border.
+pub fn draw_preview_felt(frame: &mut Frame, view: &PreviewView, felt: Color, border: Color) {
+    let (left, top, width, height) = REACHABLE_WORLD_RECT;
+    let (margin_x, margin_y) = view.to_screen(left, top);
+    let margin_felt = Color {
+        red: felt.red * MARGIN_FELT_BRIGHTNESS,
+        green: felt.green * MARGIN_FELT_BRIGHTNESS,
+        blue: felt.blue * MARGIN_FELT_BRIGHTNESS,
+        alpha: felt.alpha,
+    };
+    frame.fill_rect(margin_x, margin_y, width * view.scale, height * view.scale, 0.0, margin_felt);
+    let (table_x, table_y) = view.to_screen(0.0, 0.0);
+    let (table_width, table_height) = (WORLD_W * view.scale, WORLD_H * view.scale);
+    frame.fill_rect(table_x, table_y, table_width, table_height, 0.0, felt);
+    frame.outline_rect(table_x + 1.0, table_y + 1.0, table_width - 2.0, table_height - 2.0, 0.0, border, 1.0);
+}
+
+/// Whether a world point is on the reachable table.
+pub fn is_on_reachable_table(world_x: f32, world_y: f32) -> bool {
+    let (left, top, width, height) = REACHABLE_WORLD_RECT;
+    (left..=left + width).contains(&world_x) && (top..=top + height).contains(&world_y)
+}
+
+/// Keeps something with these half extents (world units) wholly on the reachable table, as the
+/// table does when players drag things.
+pub fn clamp_to_reachable_table(center_x: f32, center_y: f32, half_width: f32, half_height: f32) -> (f32, f32) {
+    clamp_world_center(center_x, center_y, half_width, half_height)
 }
 
 /// A small white + on the middle of the table.
@@ -833,10 +881,7 @@ impl TableBoardEditor {
         let felt = argb_color(TableColor::Felt.resolve(frame.settings, game.table_color.as_deref()));
         let border =
             argb_color(TableColor::PlaymatBorder.resolve(frame.settings, game.playmat_border_color.as_deref()));
-        let (table_x, table_y) = view.to_screen(0.0, 0.0);
-        let (table_width, table_height) = (WORLD_W * view.scale, WORLD_H * view.scale);
-        frame.fill_rect(table_x, table_y, table_width, table_height, 0.0, felt);
-        frame.outline_rect(table_x + 1.0, table_y + 1.0, table_width - 2.0, table_height - 2.0, 0.0, border, 1.0);
+        draw_preview_felt(frame, &view, felt, border);
 
         // The seats, viewer at the bottom middle, as the table lays them out.
         let (state, top_row, bottom_row) = preview_seat_rows(self.player_count);
@@ -923,11 +968,9 @@ impl TableBoardEditor {
             }
             if let Some((grab_offset, _)) = dragged {
                 let (center_x, center_y) = view.to_world(mouse_x - grab_offset.0, mouse_y - grab_offset.1);
-                // Kept on the table.
-                let (half_width, half_height) = (rect.width / 2.0, rect.height / 2.0);
-                let center_x = center_x.clamp(half_width.min(WORLD_W / 2.0), (WORLD_W - half_width).max(WORLD_W / 2.0));
-                let center_y =
-                    center_y.clamp(half_height.min(WORLD_H / 2.0), (WORLD_H - half_height).max(WORLD_H / 2.0));
+                // Kept on the reachable table.
+                let (center_x, center_y) =
+                    clamp_to_reachable_table(center_x, center_y, rect.width / 2.0, rect.height / 2.0);
                 rect = rect_around((center_x, center_y), (rect.width, rect.height));
                 (screen_x, screen_y) = view.to_screen(rect.x, rect.y);
                 moved = Some((placement_ref, center_x, center_y));
@@ -1128,7 +1171,11 @@ mod tests {
     fn zooming_keeps_the_point_under_the_mouse_still_and_panning_stays_on_the_table() {
         let mut camera = PreviewCamera::default();
         let view = camera.view(0.0, 0.0, 1280.0, 720.0);
-        assert_eq!(view.to_screen(0.0, 0.0), (0.0, 0.0));
+        // Fitted, the whole reachable table fills the viewport and the table sits in its middle.
+        let (left, top, width, height) = REACHABLE_WORLD_RECT;
+        assert_eq!(view.to_screen(left, top), (0.0, 0.0));
+        assert_eq!(view.to_screen(left + width, top + height), (1280.0, 720.0));
+        assert_eq!(view.to_screen(WORLD_W / 2.0, WORLD_H / 2.0), (640.0, 360.0));
         let mouse = (320.0, 180.0);
         let under_mouse = view.to_world(mouse.0, mouse.1);
         camera.zoom_at(&view, mouse.0, mouse.1, 2.0);
@@ -1138,9 +1185,20 @@ mod tests {
         camera.zoom_at(&zoomed, mouse.0, mouse.1, 100.0);
         assert_eq!(camera.zoom, PREVIEW_MAX_ZOOM);
         camera.pan_by(&zoomed, 1e6, 1e6);
-        assert_eq!(camera.center, (0.0, 0.0));
+        assert_eq!(camera.center, (left, top));
         camera.fit();
         assert_eq!(camera, PreviewCamera::default());
+    }
+
+    #[test]
+    fn the_reachable_table_reaches_half_a_table_past_each_edge() {
+        assert_eq!(REACHABLE_WORLD_RECT, (-1280.0, -720.0, 5120.0, 2880.0));
+        assert!(is_on_reachable_table(-1200.0, 2100.0));
+        assert!(!is_on_reachable_table(-1300.0, 720.0));
+        // A board dragged far off the table stops at the reachable edge, as on the table.
+        let (x, y) = clamp_to_reachable_table(-5000.0, 9000.0, 100.0, 50.0);
+        assert!(x > -1280.0 + 100.0 - 1.0 && x < 0.0);
+        assert!(y > WORLD_H && y < 2160.0 - 50.0 + 1.0);
     }
 
     #[test]

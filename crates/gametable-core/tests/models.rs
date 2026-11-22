@@ -382,3 +382,16 @@ fn standard_deck_cards() {
     assert_eq!(cards[51].types, vec!["Spades"]);
     assert_eq!(cards[26].color_hex.as_deref(), Some("#212121"));
 }
+
+#[test]
+fn placed_zones_keep_their_own_scale_and_leave_it_out_at_the_usual_size() {
+    let board_text = r#"{"imagePath":"mat.png","zonePlacements":[{"zoneId":"clues","x":0.25,"y":0.75,"scale":1.5},{"zoneId":"doom","x":0.5,"y":0.5}]}"#;
+    let board = GameBoardDefinition::from_json(&decode(board_text)).unwrap();
+    assert_eq!(board.zone_placements[0].scale, 1.5);
+    assert_eq!(board.zone_placements[1].scale, DEFAULT_PLACED_ZONE_SCALE);
+    assert_eq!(compact(&board.to_json()), board_text);
+
+    let scaled = ScenarioZonePlacement { scale: 0.5, ..ScenarioZonePlacement::new("bag", 0.5, 0.25) };
+    assert_eq!(compact(&scaled.to_json()), r#"{"zoneId":"bag","x":0.5,"y":0.25,"scale":0.5}"#);
+    assert_eq!(ScenarioZonePlacement::from_json(&scaled.to_json()).unwrap(), scaled);
+}

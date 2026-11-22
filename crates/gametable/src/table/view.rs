@@ -676,8 +676,8 @@ impl TableScreen {
             let Some(placed_zones) = self.derived.placed_zones.get(&board.owner_key).cloned() else { continue };
             let owner_id = (board.owner_key != SHARED_OWNER_KEY).then(|| board.owner_key.clone());
             let is_local = owner_id.as_deref().is_none_or(|owner_id| owner_id == self.acting_player_id);
-            let scale = self.zoom;
             for placed in placed_zones.iter().filter(|placed| placed.board_index == board.board_index) {
+                let scale = self.zoom * placed.scale;
                 let (world_x, world_y) =
                     placed_zone_world_center(board.world_rect, board.rotation, placed.fraction_x, placed.fraction_y);
                 let mut center = self.world_to_screen(world_x, world_y);
@@ -715,8 +715,8 @@ impl TableScreen {
     /// The loaded scenarios' zones set at fixed spots on the table, at the table's zoom. They take
     /// drops and clicks like any shared zone, but can't be moved (they sit on no board).
     fn draw_zones_set_on_table(&mut self, frame: &mut Frame) {
-        let scale = self.zoom;
         for on_table in self.derived.zones_on_table.clone() {
+            let scale = self.zoom * on_table.scale as f32;
             let center = self.to_screen(on_table.fraction_x, on_table.fraction_y);
             self.draw_zone_pile(frame, &on_table.zone, None, true, center, scale, ZoneSurface::Board);
         }
