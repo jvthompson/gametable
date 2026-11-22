@@ -3,7 +3,7 @@
 //! its own release download and executable name.
 
 pub const VERSION_NAME: &str = "0.2.0";
-pub const BUILD: u32 = 47;
+pub const BUILD: u32 = 48;
 /// The Rust build's own repository (the LÖVE app's releases are on `jvthompson/cardtable`).
 pub const RELEASE_REPOSITORY: &str = "jvthompson/gametable";
 
