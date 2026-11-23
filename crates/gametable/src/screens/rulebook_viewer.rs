@@ -10,6 +10,10 @@
 //!
 //! Markdown images go through the shared image cache (loaded off the main thread) instead of the
 //! original's one-off synchronous decode -- the alternative its own comments describe.
+//!
+//! Links in Markdown documents work (a GameTable addition): `#anchor` links scroll to their
+//! heading or `<a name>`, web links ask before opening the browser, and a link to another file in
+//! `_documents` (optionally with `#anchor`) switches to that document.
 
 use gametable_core::models::{GameDefinition, Scenario};
 
@@ -22,7 +26,7 @@ use crate::graphics::draw_list::Color;
 use crate::ui::context::RegionOptions;
 use crate::ui::draw::TextOptions;
 use crate::ui::dropdown::DropdownOptions;
-use crate::ui::markdown::{MarkdownBlock, MarkdownOptions, parse_markdown};
+use crate::ui::markdown::{MarkdownBlock, MarkdownDocument, MarkdownOptions, follow_link};
 use crate::ui::panel::{PANEL_TITLE_BAR_HEIGHT, PanelLeading};
 use crate::ui::theme::{Weight, with_alpha};
 use crate::ui::widgets::{Choice, ScrollbarStyle};
@@ -130,7 +134,7 @@ struct LoadedDocument {
     path: Option<String>,
     kind: DocumentKind,
     has_content: bool,
-    blocks: Vec<MarkdownBlock>,
+    markdown: MarkdownDocument,
     pdf: Option<PdfDocCache>,
     pdf_layout: Option<(f32, PdfLayout)>,
     scroll_id: String,
@@ -150,6 +154,8 @@ pub struct RulebookViewer {
     zoom_level: u8,
     selected_document: Option<String>,
     available_documents: Vec<String>,
+    /// An anchor to jump to once the document a link switched to has been laid out.
+    pending_anchor: Option<String>,
 }
 
 impl RulebookViewer {
@@ -165,6 +171,7 @@ impl RulebookViewer {
             zoom_level: 1,
             selected_document: None,
             available_documents: Vec::new(),
+            pending_anchor: None,
         }
     }
 
@@ -220,7 +227,7 @@ impl RulebookViewer {
             path: path.clone(),
             kind,
             has_content: false,
-            blocks: Vec::new(),
+            markdown: MarkdownDocument::default(),
             pdf: None,
             pdf_layout: None,
             scroll_id: format!("rulebook:{}:{game_id}", slot.key()),
@@ -233,8 +240,8 @@ impl RulebookViewer {
                 document.pdf = Some(PdfDocCache::new(path));
             } else if let Ok(bytes) = game_files::read(path) {
                 document.has_content = true;
-                document.blocks = parse_markdown(&String::from_utf8_lossy(&bytes));
-                for block in &mut document.blocks {
+                document.markdown = MarkdownDocument::parse(&String::from_utf8_lossy(&bytes));
+                for block in document.markdown.blocks_mut() {
                     if let (MarkdownBlock::Image { path: image, resolved_path, .. }, Some(base)) =
                         (block, base_folder.as_deref())
                     {
@@ -276,6 +283,21 @@ impl RulebookViewer {
             base,
             scroll_key,
         );
+    }
+
+    /// Follows a link to another of the game's documents: switches to it (and to its anchor),
+    /// or says it isn't there.
+    fn open_linked_document(&mut self, frame: &mut Frame, file: &str, anchor: Option<String>) {
+        let wanted = file.to_lowercase();
+        match self.available_documents.iter().find(|name| name.to_lowercase() == wanted).cloned() {
+            Some(name) => {
+                self.active = DocumentSlot::Documents;
+                self.selected_document = Some(name);
+                self.ensure_documents_loaded(frame);
+                self.pending_anchor = anchor;
+            }
+            None => frame.ui.toast("That document isn't in this game's documents.", None),
+        }
     }
 
     /// `RV:ensureGuideLoaded(scenario)`: the scenario's guide, or none.
@@ -494,6 +516,7 @@ impl RulebookViewer {
 
         let active = self.active;
         let table_of_contents_visible = self.table_of_contents_visible;
+        let pending_anchor = self.pending_anchor.take();
         let document = match active {
             DocumentSlot::Documents => self.documents.as_mut(),
             DocumentSlot::ScenarioGuide => self.guide.as_mut(),
@@ -547,15 +570,28 @@ impl RulebookViewer {
         };
         let scroll_id = document.scroll_id.clone();
         let offset = frame.begin_scroll(&scroll_id, document_x, y, document_width, height);
-        let mut table_of_contents: Vec<(u8, String, f32)> = Vec::new();
-        let mut on_heading =
-            |level: u8, text: &str, offset_y: f32| table_of_contents.push((level, text.to_string(), offset_y));
-        let mut options = MarkdownOptions { show_title_heading: true, on_heading: Some(&mut on_heading) };
-        let content_height = frame.markdown(&document.blocks, document_x, y - offset, document_width, &mut options);
+        let mut options = MarkdownOptions {
+            show_title_heading: true,
+            id: &scroll_id,
+            visible: Some((y, y + height)),
+            clicked_link: None,
+        };
+        let content_height =
+            frame.markdown(&mut document.markdown, document_x, y - offset, document_width, &mut options);
+        let clicked_link = options.clicked_link.take();
         frame.end_scroll(&scroll_id, content_height, &SCROLL_THUMB_STYLE);
         if let Some(restore) = document.pending_restore.take() {
             frame.ui.scroll_to(&scroll_id, restore);
         }
+        if let Some(anchor) = pending_anchor {
+            match document.markdown.anchor_offset(&anchor) {
+                Some(target) => frame.ui.scroll_to(&scroll_id, (target - 8.0).max(0.0)),
+                None => frame.ui.toast("That section isn't in this document.", None),
+            }
+        }
+        let linked_document =
+            clicked_link.and_then(|target| follow_link(frame, &document.markdown, Some(&scroll_id), &target));
+        let table_of_contents: Vec<(u8, String, f32)> = document.markdown.headings().to_vec();
         if table_of_contents_visible {
             let id = format!("rulebook:toc:{}:{}", active.key(), self.game_id);
             RulebookViewer::draw_table_of_contents(
@@ -568,6 +604,9 @@ impl RulebookViewer {
                 TABLE_OF_CONTENTS_WIDTH,
                 height,
             );
+        }
+        if let Some((file, anchor)) = linked_document {
+            self.open_linked_document(frame, &file, anchor);
         }
         response.close_requested
     }

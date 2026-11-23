@@ -29,7 +29,7 @@ use crate::data::settings::{Settings, keys};
 use crate::graphics::gpu_renderer::GpuRenderer;
 use crate::graphics::image_cache::ImageCache;
 use crate::graphics::image_data::RgbaImage;
-use crate::graphics::text::FontLibrary;
+use crate::graphics::text::{FontFamily, FontLibrary};
 use crate::platform::discord;
 use crate::sound::SoundPlayer;
 use crate::ui::context::Ui;
@@ -239,6 +239,20 @@ fn whole_percent(value: f32) -> f64 {
 pub fn text_scale_setting(settings: &Settings) -> f32 {
     let (minimum, maximum) = TEXT_SCALE_RANGE;
     (settings.number(keys::TEXT_SCALE).unwrap_or(1.0) as f32).clamp(minimum, maximum)
+}
+
+/// The Font setting (GameTable addition): the family all text is drawn in; Roboto by default.
+pub fn font_family_setting(settings: &Settings) -> FontFamily {
+    settings.text(keys::FONT_FAMILY).and_then(FontFamily::from_setting_value).unwrap_or_default()
+}
+
+/// Roboto is the default and isn't stored.
+pub fn set_font_family_setting(settings: &mut Settings, family: FontFamily) {
+    if family == FontFamily::default() {
+        settings.remove(keys::FONT_FAMILY);
+    } else {
+        settings.set(keys::FONT_FAMILY, family.setting_value());
+    }
 }
 
 /// 1 is the default and isn't stored.
@@ -504,6 +518,7 @@ impl App {
     /// `applyScale`: updates fonts, the hit test and the minimum window size when the scale moves.
     fn apply_scale(&mut self, force: bool) {
         self.fonts.set_text_scale(text_scale_setting(&self.settings));
+        self.fonts.set_family(font_family_setting(&self.settings));
         let scale = effective_scale(self.dpi_scale(), ui_scale_setting(&self.settings), self.desktop_size());
         if scale == self.applied_scale && !force {
             return;

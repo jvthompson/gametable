@@ -64,6 +64,8 @@ pub struct ClaudeCardRequest {
     /// Only this part of the image is sent, when set.
     pub title_area: Option<TitleArea>,
     pub title_style: TitleStyle,
+    /// The user's own guidance for Claude (possibly empty), added to the prompt.
+    pub custom_instructions: String,
 }
 
 /// Reads one card's title from its picture. `Ok(None)` when Claude finds no title (or declines).
@@ -77,6 +79,7 @@ pub fn suggest_title_with_claude(request: &ClaudeCardRequest) -> Result<Option<S
         &request.card_id,
         request.title_area.is_some(),
         &request.title_style,
+        &request.custom_instructions,
     );
     let body_text = encode_compact(&body).map_err(|_| "Could not build the request.".to_string())?;
     let response = post_with_retries(&request.api_key, request.model, &body_text)?;
@@ -86,6 +89,7 @@ pub fn suggest_title_with_claude(request: &ClaudeCardRequest) -> Result<Option<S
 
 /// The Messages API request body for one card. `title_area_only`: the picture is just the part
 /// of the card where the user said the title is. `style`: how the game writes its titles.
+/// `custom_instructions`: the user's own guidance, added last (nothing when empty).
 pub fn build_request_body(
     model: ClaudeModel,
     png_base64: &str,
@@ -93,6 +97,7 @@ pub fn build_request_body(
     card_id: &str,
     title_area_only: bool,
     style: &TitleStyle,
+    custom_instructions: &str,
 ) -> JsonValue {
     let mut instructions = if title_area_only {
         format!(
@@ -105,6 +110,10 @@ pub fn build_request_body(
         whole_card_instructions(game_name, card_id)
     };
     instructions.push_str(&style_instructions(style));
+    let custom_instructions = custom_instructions.trim();
+    if !custom_instructions.is_empty() {
+        instructions.push_str(&format!(" Additional instructions for the title: {custom_instructions}"));
+    }
     build_body_with_instructions(model, png_base64, instructions, "title")
 }
 
@@ -322,6 +331,7 @@ mod tests {
             "booster_9_13245",
             false,
             &TitleStyle::default(),
+            "",
         );
         assert_eq!(body.get("model").and_then(JsonValue::as_str), Some("claude-haiku-5-5"));
         assert!(body.get("fallbacks").is_none());
@@ -332,13 +342,30 @@ mod tests {
         assert!(text.contains("Spellfire") && text.contains("booster_9_13245"));
         let format = body.get("output_config").and_then(|config| config.get("format")).unwrap();
         assert_eq!(format.get("type").and_then(JsonValue::as_str), Some("json_schema"));
-        let opus = build_request_body(ClaudeModel::Opus, "AAAA", "g", "c", false, &TitleStyle::default());
+        let opus = build_request_body(ClaudeModel::Opus, "AAAA", "g", "c", false, &TitleStyle::default(), "");
         assert_eq!(opus.get("model").and_then(JsonValue::as_str), Some("claude-opus-5-5"));
         assert_eq!(opus.get("fallbacks").and_then(JsonValue::as_str), Some("default"));
-        let area = build_request_body(ClaudeModel::Haiku, "AAAA", "g", "c", true, &TitleStyle::default());
+        let area = build_request_body(ClaudeModel::Haiku, "AAAA", "g", "c", true, &TitleStyle::default(), "");
         let content = area.get("messages").and_then(JsonValue::as_array).unwrap()[0].get("content").unwrap();
         let text = content.as_array().unwrap()[1].get("text").and_then(JsonValue::as_str).unwrap();
         assert!(text.contains("title area cut from a card"), "{text}");
+        assert!(!text.contains("Additional instructions"), "{text}");
+    }
+
+    #[test]
+    fn the_users_instructions_go_at_the_end_of_the_title_prompt() {
+        let body = build_request_body(
+            ClaudeModel::Haiku,
+            "AAAA",
+            "g",
+            "c",
+            false,
+            &TitleStyle::default(),
+            "  Leave out the set symbol. ",
+        );
+        let content = body.get("messages").and_then(JsonValue::as_array).unwrap()[0].get("content").unwrap();
+        let text = content.as_array().unwrap()[1].get("text").and_then(JsonValue::as_str).unwrap();
+        assert!(text.ends_with("Additional instructions for the title: Leave out the set symbol."), "{text}");
     }
 
     #[test]

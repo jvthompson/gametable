@@ -1,6 +1,8 @@
 //! Card View's "Suggest Title" dialogs: choose the source and which cards (and, for the image
 //! engines, optionally box the title on the first card), watch the progress, then review the
-//! suggestions before any title changes (one card's title is filled in directly).
+//! suggestions before any title changes (one card's title is filled in directly). With Claude,
+//! an optional "Instructions for Claude" box adds the user's own guidance to the prompt; it is
+//! remembered per game.
 
 use crate::app::Frame;
 use crate::data::image_resolver::resolve_bare_image_path;
@@ -19,6 +21,7 @@ use crate::screens::gamedef::suggestion_review::{ReviewCards, ReviewRow, draw_re
 use crate::screens::gamedef::title_area_picker::{AreaLabels, TitleAreaPicker};
 use crate::ui::draw::TextOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
+use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::Weight;
 use crate::ui::widgets::Choice;
 
@@ -85,6 +88,8 @@ pub struct SuggestTitleFlow {
     title_area: TitleAreaPicker,
     /// What joins a name and its subtitle; learned from the game's titles when first shown.
     line_separator: Option<LineSeparator>,
+    /// The user's own instructions for Claude (optional), loaded from what this game remembers.
+    custom_instructions: Option<String>,
 }
 
 /// The saved Claude key: settings first, then the `ANTHROPIC_API_KEY` environment variable.
@@ -112,6 +117,7 @@ impl SuggestTitleFlow {
             selected_cards,
             title_area: TitleAreaPicker::default(),
             line_separator: None,
+            custom_instructions: None,
         }
     }
 
@@ -147,6 +153,10 @@ impl SuggestTitleFlow {
         let remembered_separator =
             frame.settings.text(&separator_setting_key(&model.game.id)).and_then(LineSeparator::from_setting_value);
         let line_separator = self.line_separator.get_or_insert(remembered_separator.unwrap_or(learned_separator));
+        let remembered_instructions =
+            frame.settings.text(&instructions_setting_key(&model.game.id)).unwrap_or_default().to_string();
+        let custom_instructions = self.custom_instructions.get_or_insert(remembered_instructions);
+        let instructions_height = frame.text_area_height(3, None);
         let (current_card, selected_cards) = (self.current_card, &self.selected_cards);
         let start_label = if card_count == 1 { "Suggest".to_string() } else { format!("Suggest {card_count} Titles") };
         let actions = [DialogAction::text("Cancel"), DialogAction::filled(&start_label).disabled(card_count == 0)];
@@ -199,6 +209,25 @@ impl SuggestTitleFlow {
             let note_options = TextOptions::new().width(width).size(12.0).color(palette.on_surface_variant);
             frame.text(&note, x, row_y, note_options);
             row_y += frame.text_height(&note, width, 12.0, Weight::Regular) + 16.0;
+            if *source == SourceChoice::Claude {
+                let instructions_options = TextFieldOptions {
+                    label_background: Some(palette.surface_container_high),
+                    hint: Some("e.g. Leave out the set symbol; write \"&\" as \"and\"."),
+                    ..TextFieldOptions::label("Instructions for Claude (optional)")
+                };
+                frame.text_area(
+                    "suggesttitle:instructions",
+                    x,
+                    row_y,
+                    width,
+                    instructions_height,
+                    custom_instructions,
+                    &instructions_options,
+                );
+                row_y += instructions_height + 4.0;
+                frame.text("Remembered for this game.", x, row_y, note_options);
+                row_y += 18.0 + 12.0;
+            }
 
             frame.text("Cards", x, row_y, label);
             row_y += 24.0;
@@ -268,6 +297,10 @@ impl SuggestTitleFlow {
                     let separator = self.line_separator.unwrap_or_default();
                     frame.settings.set(&separator_setting_key(&model.game.id), separator.setting_value());
                 }
+                if source == SourceChoice::Claude {
+                    let instructions = self.custom_instructions.as_deref().unwrap_or_default().trim().to_string();
+                    frame.settings.set(&instructions_setting_key(&model.game.id), instructions);
+                }
                 self.start(frame, model, source, scope);
                 true
             }
@@ -280,7 +313,13 @@ impl SuggestTitleFlow {
         let cards = cards_in_scope(model, scope, self.current_card, &self.selected_cards);
         let context = SuggestionContext {
             game_name: model.game.name.clone(),
-            target: SuggestionTarget::Title,
+            target: SuggestionTarget::Title {
+                custom_instructions: if source == SourceChoice::Claude {
+                    self.custom_instructions.as_deref().unwrap_or_default().trim().to_string()
+                } else {
+                    String::new()
+                },
+            },
             title_area: if source == SourceChoice::FromId { None } else { self.title_area.area },
             title_style: title_style_for(model, self.line_separator.unwrap_or_default()),
             claude: claude_api_key(frame).map(|api_key| ClaudeAccess {
@@ -423,6 +462,11 @@ impl SuggestTitleFlow {
 /// The titles the game's cards already have (not placeholders like their ID or file name).
 fn real_titles(model: &EditorModel) -> impl Iterator<Item = &str> {
     model.game.cards().iter().filter(|card| !is_untitled(card)).map(|card| card.card_title.as_str())
+}
+
+/// Where a game's Suggest Title instructions for Claude are remembered.
+fn instructions_setting_key(game_id: &str) -> String {
+    format!("{}_{game_id}", keys::SUGGEST_TITLE_INSTRUCTIONS_PREFIX)
 }
 
 fn separator_setting_key(game_id: &str) -> String {

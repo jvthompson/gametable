@@ -120,11 +120,11 @@ pub fn load_card_image(image_path: &str, title_area: Option<TitleArea>) -> Resul
 }
 
 /// What a job reads from each card.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SuggestionTarget {
-    /// The card's title ("Suggest Title").
-    #[default]
-    Title,
+    /// The card's title ("Suggest Title"); `custom_instructions` (the user's own, possibly empty)
+    /// are added to Claude's prompt.
+    Title { custom_instructions: String },
     /// One extra field's value ("Suggest Extra Data"); `example_values` come from other cards and
     /// `custom_instructions` (the user's own, possibly empty) are added to Claude's prompt.
     ExtraField { key: String, example_values: Vec<String>, custom_instructions: String },
@@ -151,7 +151,7 @@ pub fn suggest_card_text(
     context: &SuggestionContext,
 ) -> Result<Option<String>, String> {
     match &context.target {
-        SuggestionTarget::Title => suggest_title(item, source, context),
+        SuggestionTarget::Title { .. } => suggest_title(item, source, context),
         SuggestionTarget::ExtraField { key, example_values, custom_instructions } => {
             suggest_extra_field_value(item, source, context, key, example_values, custom_instructions)
         }
@@ -219,6 +219,10 @@ pub fn suggest_title(
                         image_path: image_path.clone(),
                         title_area: context.title_area,
                         title_style: context.title_style.clone(),
+                        custom_instructions: match &context.target {
+                            SuggestionTarget::Title { custom_instructions } => custom_instructions.clone(),
+                            SuggestionTarget::ExtraField { .. } => String::new(),
+                        },
                     })
                 }
                 ImageEngine::LocalOcr => local_ocr::suggest_title_with_local_ocr(
@@ -337,7 +341,7 @@ mod tests {
             .collect();
         let context = SuggestionContext {
             game_name: "Test".into(),
-            target: SuggestionTarget::Title,
+            target: SuggestionTarget::Title { custom_instructions: String::new() },
             claude: None,
             title_area: None,
             title_style: TitleStyle::default(),
@@ -373,7 +377,7 @@ mod tests {
         let item = CardToSuggest { key: 1, card: CardDefinition::new("a", "a"), image_path: Some("a.png".into()) };
         let context = SuggestionContext {
             game_name: "Test".into(),
-            target: SuggestionTarget::Title,
+            target: SuggestionTarget::Title { custom_instructions: String::new() },
             claude: None,
             title_area: None,
             title_style: TitleStyle::default(),

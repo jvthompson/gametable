@@ -146,6 +146,12 @@ fn face_for(weight: Weight) -> FontFace {
     }
 }
 
+/// Italic interface text (Markdown emphasis): Medium and Bold both use Roboto Bold Italic.
+pub fn italic_font(size: f32, weight: Weight) -> FontKey {
+    let face = if weight == Weight::Regular { FontFace::Italic } else { FontFace::BoldItalic };
+    FontKey::new(face, size)
+}
+
 /// `theme.font(size, weight)`: interface text, enlarged by the Text size setting.
 pub fn font(size: f32, weight: Weight) -> FontKey {
     FontKey::new(face_for(weight), size)

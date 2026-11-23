@@ -2,8 +2,8 @@
 //! `src/ui/screens/settings_dialog.lua`. New settings go here as sections: a heading, then rows.
 
 use crate::app::{
-    Frame, TEXT_SCALE_RANGE, TEXT_SCALE_STEP, UI_SCALE_RANGE, UI_SCALE_STEP, set_text_scale_setting,
-    set_ui_scale_setting, text_scale_setting, ui_scale_setting,
+    Frame, TEXT_SCALE_RANGE, TEXT_SCALE_STEP, UI_SCALE_RANGE, UI_SCALE_STEP, font_family_setting,
+    set_font_family_setting, set_text_scale_setting, set_ui_scale_setting, text_scale_setting, ui_scale_setting,
 };
 use crate::data::display_settings::{
     HAND_SETTINGS, TableColor, felt_texture_enabled, is_selection_color_default, reset_selection_color,
@@ -12,7 +12,9 @@ use crate::data::display_settings::{
 use crate::data::profile;
 use crate::data::settings::keys;
 use crate::data::title_suggestion::claude_vision::ClaudeModel;
+use crate::graphics::text::FontFamily;
 use crate::ui::draw::TextOptions;
+use crate::ui::dropdown::DropdownOptions;
 use crate::ui::overlays::{DialogAction, DialogResponse, DialogSpec};
 use crate::ui::text_field::TextFieldOptions;
 use crate::ui::theme::Weight;
@@ -188,6 +190,21 @@ impl SettingsDialog {
                 set_text_scale_setting(frame.settings, new_text_scale);
             }
             row_y += 64.0;
+
+            // The font family, applied live everywhere (including text on the table).
+            let label_options = TextOptions::new().size(14.0).color(palette.on_surface);
+            frame.text("Font", x, row_y, label_options);
+            row_y += 22.0;
+            let choices: Vec<Choice<FontFamily>> =
+                FontFamily::ALL.iter().map(|&family| Choice::new(family, family.display_name())).collect();
+            let current_family = font_family_setting(frame.settings);
+            let dropdown_options = DropdownOptions { height: Some(40.0), ..DropdownOptions::default() };
+            let picked_family =
+                frame.dropdown("settings:fontFamily", x, row_y, width, &choices, current_family, &dropdown_options);
+            if picked_family != current_family {
+                set_font_family_setting(frame.settings, picked_family);
+            }
+            row_y += 40.0 + 20.0;
             let (dpi, effective) = (frame.dpi_scale, frame.scale);
             let mut note =
                 format!("Windows display scaling: {}. Effective scale: {}.", percent(dpi), percent(effective));

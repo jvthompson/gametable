@@ -1134,3 +1134,38 @@ Every item gets Windows, macOS and Linux code paths (see Phase 10b).
   `the_newest_legacy_identity_wins_and_the_avatar_path_moves`, `nothing_is_due_without_an_old_folder`,
   `sizes_read_in_megabytes_or_gigabytes`. Checked with a 1.1 GB throwaway folder: the dialog over Home with
   progress, an interrupted copy redone, and Home switching to the migrated name and dark mode when it finished.
+- 2026-11-22: **Markdown documents: inline formatting, common HTML and working links.** `ui/markdown.rs` became
+  `ui/markdown/` (`parse.rs` blocks, `inline.rs` styled spans, `html.rs` tags/entities/comments, `layout.rs`
+  rich-text layout and drawing). It now reads `#`-`######` headings (with `{#id}`), setext headings, `**bold**`,
+  `*italic*`, `` `code` ``, `~~struck~~`, links (`[text](url "title")`, `<https://…>`, bare `https://`/`www.`),
+  escapes and hard line breaks, nested bullet and numbered lists (with indented continuation paragraphs), quotes,
+  rules, fenced code, pipe tables and images, plus HTML: `<table>` (cells with inline markup and `<br>`),
+  `<h1>`-`<h6>`, `<p>`/`<div>`/`<center>` (with `align="center"`), `<ul>/<ol>/<li>`, `<img width>`, `<hr>`,
+  `<details>/<summary>`, inline `<b> <strong> <i> <em> <u> <s> <del> <code> <kbd> <sup> <sub> <a href> <a name>
+  <br>`, entities, and `<!-- comments -->` dropped. Text flows word by word in mixed styles; italics use the new
+  bundled **Roboto Italic / Bold Italic** (2.138, from the same `googlefonts/roboto-2` unhinted release as the
+  existing faces; `FontFace::Italic/BoldItalic`, `theme::italic_font`). Table columns are sized by content.
+  Layout is cached per width/text size/loaded images (`MarkdownDocument`) and only visible pieces are drawn.
+  **Links:** `#anchor` scrolls to a heading (explicit id, GitHub slug, or compact letters-and-digits slug) or an
+  `<a name>`/`id`, else toasts "That section isn't in this document."; `http(s)`/`mailto`/`www.` ask "Open Link?"
+  via `frame.ui.confirm` and open with `sdl3::url::open_url`; in the rulebook viewer a link to another file in
+  `_documents` (optionally `#anchor`) switches to it; anything else toasts "Can't open this link." The rulebook
+  TOC now includes level 4-6 headings. Note: most anchors in the Guardians rulebook (73 targets such as `#q33`,
+  `#cce`) have no target in the file (lost in its conversion), so they toast. Tests in each module (18), incl. a
+  harness test that clicks a link. Checked on a scratch copy of the Guardians rulebook and a links test page.
+- 2026-11-22: **Font families** (Settings > Display > Font): Roboto (default), Atkinson Hyperlegible, Open Sans,
+  Lato and Merriweather, applied live to all text including the table's card text, counters and labels
+  (`FontFamily` in `graphics/text.rs`; `FontLibrary::set_family` loads the family's tables and re-rasterizes;
+  `font_family_setting`, settings key `font_family`, absent for Roboto). Files are static TTFs from the official
+  sources, each with its OFL licence beside it in `assets/fonts` (~5.3 MB): Atkinson Hyperlegible and Lato from
+  `google/fonts` (`ofl/…`), Open Sans from `googlefonts/opensans` (`fonts/ttf`), Merriweather from
+  `SorkinType/Merriweather` (`fonts/ttf`). Missing weights borrow: Open Sans medium = SemiBold, Atkinson and
+  Merriweather medium = Bold. LÖVE's Roboto advance overrides apply only while the family is Roboto. The Markdown
+  layout cache keys on the family. Tests: `every_family_has_every_face_as_a_readable_font`,
+  `families_round_trip_through_settings_and_borrow_missing_weights`. Checked: rulebook viewer in each family, the
+  Settings dialog in Lato.
+- 2026-11-22: **Suggest Title** gets the same optional "Instructions for Claude" box as Suggest Extra Data (shown
+  when Image (Claude) is chosen), remembered per game (`suggest_title_instructions_<game id>`, saved when a run
+  starts) and added to the end of the title prompt as "Additional instructions for the title: …"
+  (`SuggestionTarget::Title { custom_instructions }`, `ClaudeCardRequest::custom_instructions`). Test:
+  `the_users_instructions_go_at_the_end_of_the_title_prompt`. Checked: the dialog on a scratch ahlcg copy.

@@ -2,6 +2,10 @@
 //! Roboto (regular/medium/bold) with Noto Sans Symbols 2 as a fallback for symbols such as card
 //! suits, and Material Icons, rasterized by SDL3_ttf at `size × dpi_scale` pixels into glyph
 //! atlas pages, laid out by [`text_layout`](super::text_layout) exactly as LÖVE lays text out.
+//!
+//! GameTable addition: the text faces come from a [`FontFamily`] the player picks in Settings
+//! (Roboto by default; Atkinson Hyperlegible, Open Sans, Lato or Merriweather). Icons and the
+//! symbol fallback are the same in every family.
 
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -23,6 +27,9 @@ pub enum FontFace {
     Regular,
     Medium,
     Bold,
+    /// Roboto Italic and Bold Italic, for emphasis in Markdown documents (GameTable additions).
+    Italic,
+    BoldItalic,
     /// Material Icons (`theme.iconFont`).
     Icons,
     /// Noto Sans Symbols 2, the text faces' fallback.
@@ -30,21 +37,104 @@ pub enum FontFace {
 }
 
 impl FontFace {
-    pub fn file_name(self) -> &'static str {
-        match self {
-            FontFace::Regular => "Roboto-Regular.ttf",
-            FontFace::Medium => "Roboto-Medium.ttf",
-            FontFace::Bold => "Roboto-Bold.ttf",
-            FontFace::Icons => "MaterialIcons-Regular.ttf",
-            FontFace::Symbols => "NotoSansSymbols2-Regular.ttf",
-        }
+    /// The faces that come from the chosen [`FontFamily`].
+    pub const TEXT_FACES: [FontFace; 5] =
+        [FontFace::Regular, FontFace::Medium, FontFace::Bold, FontFace::Italic, FontFace::BoldItalic];
+
+    pub fn is_text(self) -> bool {
+        !matches!(self, FontFace::Icons | FontFace::Symbols)
     }
 
     fn fallback(self) -> Option<FontFace> {
         match self {
-            FontFace::Regular | FontFace::Medium | FontFace::Bold => Some(FontFace::Symbols),
+            FontFace::Regular | FontFace::Medium | FontFace::Bold | FontFace::Italic | FontFace::BoldItalic => {
+                Some(FontFace::Symbols)
+            }
             FontFace::Icons | FontFace::Symbols => None,
         }
+    }
+}
+
+/// The typeface family all text is drawn in (Settings > Display > Font).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontFamily {
+    #[default]
+    Roboto,
+    AtkinsonHyperlegible,
+    OpenSans,
+    Lato,
+    Merriweather,
+}
+
+impl FontFamily {
+    pub const ALL: [FontFamily; 5] = [
+        FontFamily::Roboto,
+        FontFamily::AtkinsonHyperlegible,
+        FontFamily::OpenSans,
+        FontFamily::Lato,
+        FontFamily::Merriweather,
+    ];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            FontFamily::Roboto => "Roboto",
+            FontFamily::AtkinsonHyperlegible => "Atkinson Hyperlegible",
+            FontFamily::OpenSans => "Open Sans",
+            FontFamily::Lato => "Lato",
+            FontFamily::Merriweather => "Merriweather",
+        }
+    }
+
+    /// How the family is stored in the settings.
+    pub fn setting_value(self) -> &'static str {
+        match self {
+            FontFamily::Roboto => "roboto",
+            FontFamily::AtkinsonHyperlegible => "atkinson_hyperlegible",
+            FontFamily::OpenSans => "open_sans",
+            FontFamily::Lato => "lato",
+            FontFamily::Merriweather => "merriweather",
+        }
+    }
+
+    pub fn from_setting_value(value: &str) -> Option<FontFamily> {
+        FontFamily::ALL.into_iter().find(|family| family.setting_value() == value)
+    }
+
+    /// The file a face is drawn from in this family. Families without a medium weight use their
+    /// bold (Open Sans uses its semibold); icons and symbols are shared by every family.
+    pub fn file_name(self, face: FontFace) -> &'static str {
+        match (self, face) {
+            (_, FontFace::Icons) => "MaterialIcons-Regular.ttf",
+            (_, FontFace::Symbols) => "NotoSansSymbols2-Regular.ttf",
+            (FontFamily::Roboto, FontFace::Regular) => "Roboto-Regular.ttf",
+            (FontFamily::Roboto, FontFace::Medium) => "Roboto-Medium.ttf",
+            (FontFamily::Roboto, FontFace::Bold) => "Roboto-Bold.ttf",
+            (FontFamily::Roboto, FontFace::Italic) => "Roboto-Italic.ttf",
+            (FontFamily::Roboto, FontFace::BoldItalic) => "Roboto-BoldItalic.ttf",
+            (FontFamily::AtkinsonHyperlegible, FontFace::Regular) => "AtkinsonHyperlegible-Regular.ttf",
+            (FontFamily::AtkinsonHyperlegible, FontFace::Medium | FontFace::Bold) => "AtkinsonHyperlegible-Bold.ttf",
+            (FontFamily::AtkinsonHyperlegible, FontFace::Italic) => "AtkinsonHyperlegible-Italic.ttf",
+            (FontFamily::AtkinsonHyperlegible, FontFace::BoldItalic) => "AtkinsonHyperlegible-BoldItalic.ttf",
+            (FontFamily::OpenSans, FontFace::Regular) => "OpenSans-Regular.ttf",
+            (FontFamily::OpenSans, FontFace::Medium) => "OpenSans-SemiBold.ttf",
+            (FontFamily::OpenSans, FontFace::Bold) => "OpenSans-Bold.ttf",
+            (FontFamily::OpenSans, FontFace::Italic) => "OpenSans-Italic.ttf",
+            (FontFamily::OpenSans, FontFace::BoldItalic) => "OpenSans-BoldItalic.ttf",
+            (FontFamily::Lato, FontFace::Regular) => "Lato-Regular.ttf",
+            (FontFamily::Lato, FontFace::Medium) => "Lato-Medium.ttf",
+            (FontFamily::Lato, FontFace::Bold) => "Lato-Bold.ttf",
+            (FontFamily::Lato, FontFace::Italic) => "Lato-Italic.ttf",
+            (FontFamily::Lato, FontFace::BoldItalic) => "Lato-BoldItalic.ttf",
+            (FontFamily::Merriweather, FontFace::Regular) => "Merriweather-Regular.ttf",
+            (FontFamily::Merriweather, FontFace::Medium | FontFace::Bold) => "Merriweather-Bold.ttf",
+            (FontFamily::Merriweather, FontFace::Italic) => "Merriweather-Italic.ttf",
+            (FontFamily::Merriweather, FontFace::BoldItalic) => "Merriweather-BoldItalic.ttf",
+        }
+    }
+
+    /// The family a face's metrics and file come from when this family is chosen.
+    fn for_face(self, face: FontFace) -> FontFamily {
+        if face.is_text() { self } else { FontFamily::Roboto }
     }
 }
 
@@ -146,6 +236,8 @@ struct AtlasGlyph {
 /// One font at one size and scale.
 struct LoadedFont {
     face: FontFace,
+    /// Whether LÖVE's Roboto advances apply (only while the family is Roboto).
+    uses_love_advances: bool,
     pixel_size: u32,
     metrics: LineMetrics,
     primary: TtfFont,
@@ -170,7 +262,7 @@ impl LoadedFont {
         if let Some(advance) = self.advances.get(&character) {
             return *advance;
         }
-        let love_advance = (self.fallback.is_none() || self.primary.has_glyph(character))
+        let love_advance = (self.uses_love_advances && (self.fallback.is_none() || self.primary.has_glyph(character)))
             .then(|| love_roboto_advance(self.face, self.pixel_size, character))
             .flatten();
         let physical_advance = love_advance.unwrap_or_else(|| self.font_for(character).glyph_metrics(character).2);
@@ -178,6 +270,13 @@ impl LoadedFont {
         self.advances.insert(character, advance);
         advance
     }
+}
+
+/// Reads a face's metric tables from its file in `fonts_folder`.
+fn read_font_tables(fonts_folder: &Path, family: FontFamily, face: FontFace) -> Result<FontTables, String> {
+    let path = fonts_folder.join(family.file_name(face));
+    let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    FontTables::parse(&bytes).ok_or_else(|| format!("{}: not a TrueType font", path.display()))
 }
 
 /// LÖVE 11.5's own advances for the Roboto faces (`assets/fonts/love_roboto_advances.txt`,
@@ -283,7 +382,9 @@ impl AtlasPage {
 /// Every font the app draws with, plus the glyph atlas.
 pub struct FontLibrary {
     fonts_folder: PathBuf,
-    tables: HashMap<FontFace, FontTables>,
+    /// Each loaded family's faces' tables (icons and symbols under Roboto).
+    tables: HashMap<(FontFamily, FontFace), FontTables>,
+    family: FontFamily,
     dpi_scale: f32,
     /// The Text size setting: multiplies the size of fonts that follow it.
     text_scale: f32,
@@ -298,15 +399,13 @@ impl FontLibrary {
     pub fn new(fonts_folder: &Path) -> Result<FontLibrary, String> {
         let ttf_context = sdl3::ttf::init().map_err(|error| error.to_string())?;
         let mut tables = HashMap::new();
-        for face in [FontFace::Regular, FontFace::Medium, FontFace::Bold, FontFace::Icons, FontFace::Symbols] {
-            let path = fonts_folder.join(face.file_name());
-            let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-            let parsed = FontTables::parse(&bytes).ok_or_else(|| format!("{}: not a TrueType font", path.display()))?;
-            tables.insert(face, parsed);
+        for face in FontFace::TEXT_FACES.into_iter().chain([FontFace::Icons, FontFace::Symbols]) {
+            tables.insert((FontFamily::Roboto, face), read_font_tables(fonts_folder, FontFamily::Roboto, face)?);
         }
         Ok(FontLibrary {
             fonts_folder: fonts_folder.to_path_buf(),
             tables,
+            family: FontFamily::Roboto,
             dpi_scale: 1.0,
             text_scale: 1.0,
             fonts: HashMap::new(),
@@ -317,6 +416,34 @@ impl FontLibrary {
 
     pub fn dpi_scale(&self) -> f32 {
         self.dpi_scale
+    }
+
+    pub fn family(&self) -> FontFamily {
+        self.family
+    }
+
+    /// Switches every text face to `family`, re-rasterizing all text. A family whose files are
+    /// missing or broken is skipped (the current one stays) with a message on the console.
+    pub fn set_family(&mut self, family: FontFamily) {
+        if family == self.family {
+            return;
+        }
+        for face in FontFace::TEXT_FACES {
+            if self.tables.contains_key(&(family, face)) {
+                continue;
+            }
+            match read_font_tables(&self.fonts_folder, family, face) {
+                Ok(parsed) => {
+                    self.tables.insert((family, face), parsed);
+                }
+                Err(error) => {
+                    eprintln!("fonts: can't use {}: {error}", family.display_name());
+                    return;
+                }
+            }
+        }
+        self.family = family;
+        self.drop_rasterized_fonts();
     }
 
     /// Re-rasterizes everything at a new UI scale (`theme.setScale` drops its font cache too).
@@ -359,14 +486,17 @@ impl FontLibrary {
         if !self.fonts.contains_key(&key) {
             let text_scale = if key.follows_text_size { self.text_scale } else { 1.0 };
             let pixel_size = pixel_size_for(key.size as f32 * text_scale, self.dpi_scale);
-            let open = |face: FontFace| TtfFont::open(&self.fonts_folder.join(face.file_name()), pixel_size);
+            let family = self.family;
+            let open = |face: FontFace| TtfFont::open(&self.fonts_folder.join(family.file_name(face)), pixel_size);
             let primary = open(key.face).unwrap_or_else(|error| panic!("{error}"));
             let fallback = key.face.fallback().and_then(|face| open(face).ok());
-            let metrics = LineMetrics::for_size(&self.tables[&key.face], pixel_size, self.dpi_scale);
+            let tables = &self.tables[&(family.for_face(key.face), key.face)];
+            let metrics = LineMetrics::for_size(tables, pixel_size, self.dpi_scale);
             self.fonts.insert(
                 key,
                 LoadedFont {
                     face: key.face,
+                    uses_love_advances: family.for_face(key.face) == FontFamily::Roboto,
                     pixel_size,
                     metrics,
                     primary,
@@ -514,5 +644,39 @@ impl FontLibrary {
 impl LoadedFont {
     fn primary_for_tests(&self) -> &TtfFont {
         &self.primary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fonts_folder() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts")
+    }
+
+    #[test]
+    fn every_family_has_every_face_as_a_readable_font() {
+        for family in FontFamily::ALL {
+            for face in FontFace::TEXT_FACES.into_iter().chain([FontFace::Icons, FontFace::Symbols]) {
+                let tables = read_font_tables(&fonts_folder(), family, face);
+                assert!(tables.is_ok(), "{family:?} {face:?}: {:?}", tables.err());
+            }
+        }
+    }
+
+    #[test]
+    fn families_round_trip_through_settings_and_borrow_missing_weights() {
+        for family in FontFamily::ALL {
+            assert_eq!(FontFamily::from_setting_value(family.setting_value()), Some(family));
+        }
+        assert_eq!(FontFamily::from_setting_value("comic_sans"), None);
+        assert_eq!(FontFamily::default(), FontFamily::Roboto);
+        assert_eq!(FontFamily::Merriweather.file_name(FontFace::Medium), "Merriweather-Bold.ttf");
+        assert_eq!(FontFamily::OpenSans.file_name(FontFace::Medium), "OpenSans-SemiBold.ttf");
+        assert_eq!(FontFamily::Lato.file_name(FontFace::Icons), "MaterialIcons-Regular.ttf");
+        // LÖVE's Roboto advances only ever apply to Roboto faces.
+        assert_eq!(FontFamily::Lato.for_face(FontFace::Regular), FontFamily::Lato);
+        assert_eq!(FontFamily::Lato.for_face(FontFace::Symbols), FontFamily::Roboto);
     }
 }

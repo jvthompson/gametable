@@ -26,6 +26,8 @@ pub mod keys {
     pub const UI_SCALE: &str = "ui_scale";
     /// GameTable addition: multiplies interface text size only (1 = designed size).
     pub const TEXT_SCALE: &str = "text_scale";
+    /// The font family (GameTable addition): `FontFamily::setting_value`, absent for Roboto.
+    pub const FONT_FAMILY: &str = "font_family";
     /// GameTable addition: the card grid zoom in the deck editor and the game definition
     /// editor's Cards tab (1 = the original size).
     pub const DECK_EDITOR_CARD_ZOOM: &str = "deck_editor_card_zoom";
@@ -48,6 +50,8 @@ pub mod keys {
     pub const SUGGEST_EXTRA_DATA_SOURCE: &str = "suggest_extra_data_source";
     /// Followed by `_<game id>_<field key>`: the Claude instructions last used for that field.
     pub const SUGGEST_EXTRA_DATA_INSTRUCTIONS_PREFIX: &str = "suggest_extra_data_instructions";
+    /// Suggest Title's instructions for Claude, per game (`<prefix>_<game id>`).
+    pub const SUGGEST_TITLE_INSTRUCTIONS_PREFIX: &str = "suggest_title_instructions";
 }
 
 /// The settings file, loaded into memory once and rewritten after every change.
