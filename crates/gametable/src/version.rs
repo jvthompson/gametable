@@ -2,7 +2,7 @@
 //! release tags (`+N`); the release details are used by the updater (Phase 11). Each platform has
 //! its own release download and executable name.
 
-pub const VERSION_NAME: &str = "0.2.0";
+pub const VERSION_NAME: &str = "0.5.0";
 pub const BUILD: u32 = 49;
 /// The Rust build's own repository (the LÖVE app's releases are on `jvthompson/cardtable`).
 pub const RELEASE_REPOSITORY: &str = "jvthompson/gametable";
